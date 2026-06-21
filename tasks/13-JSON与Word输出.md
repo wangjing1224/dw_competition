@@ -7,10 +7,26 @@
 ## 2. 建议文件
 
 ```text
-app/reports/json_report.py
-app/reports/word_report.py
-app/reports/templates/
+app/reports/
+├── service.py
+├── json_report.py
+├── word_report.py
+├── styles.py
+└── templates/
 ```
+
+### 2.1 文件职责与伪代码归属
+
+| 文件 | 职责 | 对应伪代码 |
+|---|---|---|
+| `app/reports/service.py` | 输出总流程、任务状态更新和 JSON/Word 错误边界 | 4.1 |
+| `app/reports/json_report.py` | AuditResult 校验和任务级 JSON 原子写入 | 4.2 |
+| `app/reports/word_report.py` | 从已落盘 JSON 生成逐文件 Word、章节和来源索引 | 4.3、4.5 |
+| `app/reports/styles.py` | Finding 分类/风险固定排序和 Word 样式 | 4.4 |
+| `app/reports/templates/` | 可选 docx 模板和静态资源，不放业务判断 | 第 5 节报告章节 |
+| `tests/unit/reports/test_json_report.py` | JSON 校验、原子写入和失败测试 | 第 6 节 |
+| `tests/unit/reports/test_word_report.py` | 字段映射、排序、来源和不适用文件测试 | 第 6 节 |
+| `tests/integration/test_report_service.py` | completed 与 report_error 状态测试 | 第 6 节 |
 
 ## 3. 核心约束
 
@@ -25,17 +41,13 @@ app/reports/templates/
 ### 4.1 输出总流程
 
 ```python
-def finalize_outputs(task_id, raw_audit_result):
+async def finalize_outputs(task_id, raw_audit_result):
     try:
         audit_result = validate_audit_result(raw_audit_result)
         json_path = write_json_result(task_id, audit_result)
     except Exception as exc:
-        task_repository.mark_failed(
-            task_id,
-            error_code="audit_result_validation_failed",
-            error_message=str(exc),
-        )
-        raise
+        # failed 状态统一由后台 Runner 收口，避免重复状态转换。
+        raise AuditResultOutputError(str(exc)) from exc
 
     try:
         word_paths = generate_word_reports(json_path)
@@ -48,9 +60,24 @@ def finalize_outputs(task_id, raw_audit_result):
         task_repository.mark_completed_with_report_error(
             task_id,
             json_path=json_path,
-            word_paths=[],
+            word_paths=list_existing_word_outputs(task_id),
             error_message=str(exc),
         )
+```
+
+独立重试只重新渲染 Word：
+
+```python
+def rerender_word_reports(task_id):
+    task = task_repository.require(task_id)
+    audit_result = read_and_validate_json(task.json_path)
+    word_paths = generate_word_reports(task.json_path)
+    task_repository.mark_completed(
+        task_id,
+        json_path=task.json_path,
+        word_paths=word_paths,
+    )
+    return word_paths
 ```
 
 ### 4.2 JSON 原子写入
@@ -174,6 +201,7 @@ def collect_source_index(file_result):
 - 来源索引能回到规则、投标响应和证据文件。
 - 中文文件名安全处理，系统文件名仍避免冲突。
 - 重新渲染 Word 不改变 JSON。
+- `completed_with_report_error` 可只调用 `rerender_word_reports` 恢复，不重跑 Agent。
 
 ## 7. 验收标准
 

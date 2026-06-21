@@ -14,8 +14,23 @@ app/models/
 ├── evidence.py
 ├── findings.py
 ├── tasks.py
-└── results.py
+├── results.py
+└── schema_export.py
 ```
+
+### 2.1 文件职责与伪代码归属
+
+| 文件 | 职责 | 对应伪代码/模型 |
+|---|---|---|
+| `app/models/common.py` | `StrictModel`、共享枚举、`ComparisonResult` 和通用校验辅助函数 | 5.1 |
+| `app/models/documents.py` | `DocumentRef`、`SourceRef`、`RetrievedSource`、解析结果模型 | 5.2 |
+| `app/models/rules.py` | `RuleScope`、`RuleItem`、`RuleSet` | 5.3 |
+| `app/models/evidence.py` | `EvidenceClassification`、`Claim`、`EvidenceCandidate`、`EvidenceReviewResult` | 第 3 节证据模型 |
+| `app/models/findings.py` | `Finding` 及其来源、结果、风险字段 | 第 3 节 Finding |
+| `app/models/tasks.py` | `TaskError`、Decision 模型和 `BidAgentDecision` 判别联合 | 5.4 |
+| `app/models/results.py` | `ProjectMatch`、`FileAuditResult`、`AuditResult` 及跨对象归属校验 | 5.5 |
+| `app/models/schema_export.py` | 将指定模型导出到 `schemas/*.schema.json` | 第 6 节导出伪代码 |
+| `tests/unit/models/` | 为模型和交叉校验编写单元测试 | 第 7 节 |
 
 ## 3. 模型范围
 
@@ -32,6 +47,8 @@ app/models/
 - `FindingResult`
 - `EvidenceReviewStatus`
 - `ProjectMatchStatus`
+- `ProjectStatus`
+- `BidderStatus`
 - `OverallConclusion`
 - `TaskStatus`
 
@@ -44,7 +61,10 @@ app/models/
 - `RuleSet`、`RuleItem`
 - `Claim`
 - `EvidenceCandidate`
+- `EvidenceClassification`
 - `EvidenceReviewResult`
+- `ProjectMatch`
+- `ComparisonResult`
 - `Finding`
 - `FileAuditResult`
 - `AuditResult`
@@ -58,7 +78,7 @@ app/models/
 - `SourceRef` 不能只有文件名，必须包含 `file_id` 和 `source_path`。
 - `RuleItem.status != active` 时不能作为普通自动审核规则执行。
 - `Finding.response_status == not_found` 时允许 `bid_source = None`。
-- `record_finding` 与 `record_file_result` 使用判别联合或模型校验保证字段互斥。
+- `record_project_match`、`record_finding` 与 `record_file_result` 使用判别联合保证字段互斥。
 - 证据类型只使用统一 `EvidenceType`。
 
 ## 5. 核心伪代码
@@ -128,22 +148,51 @@ class RecordFindingDecision(StrictModel):
     action: Literal["record_finding"]
     reason: str
     finding: Finding
+    project_match: None = None
+    is_applicable: None = None
+    exclusion_reason: None = None
     file_result: None = None
-    evidence_results: list[EvidenceReviewResult] = []
+    evidence_results: list[EvidenceReviewResult] = Field(default_factory=list)
+
+
+class RecordProjectMatchDecision(StrictModel):
+    action: Literal["record_project_match"]
+    reason: str
+    project_match: ProjectMatch
+    is_applicable: bool
+    exclusion_reason: str | None = None
+    finding: None = None
+    file_result: None = None
+    evidence_results: list[EvidenceReviewResult] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_applicability(self):
+        # uncertain 继续审核并在结果中保留人工复核提示；not_matched 才排除。
+        if self.project_match.status == "not_matched":
+            if self.is_applicable or not self.exclusion_reason:
+                raise ValueError("not_matched file must be excluded with reason")
+        elif not self.is_applicable:
+            raise ValueError("matched or uncertain file continues auditing")
+        return self
 
 
 class RecordFileResultDecision(StrictModel):
     action: Literal["record_file_result"]
     reason: str
+    project_match: None = None
+    is_applicable: None = None
+    exclusion_reason: None = None
     finding: None = None
     file_result: FileAuditResult
-    evidence_results: list[EvidenceReviewResult] = []
+    evidence_results: list[EvidenceReviewResult] = Field(default_factory=list)
 
 
 BidAgentDecision = Annotated[
-    RecordFindingDecision | RecordFileResultDecision,
+    RecordProjectMatchDecision | RecordFindingDecision | RecordFileResultDecision,
     Field(discriminator="action"),
 ]
+
+BidAgentDecisionAdapter = TypeAdapter(BidAgentDecision)
 ```
 
 ### 5.5 最终结果交叉校验
@@ -189,8 +238,9 @@ schemas/audit_result.schema.json
 导出伪代码：
 
 ```python
-for model, output_path in schema_targets:
-    schema = model.model_json_schema()
+for schema_type, output_path in schema_targets:
+    # 判别联合不是 BaseModel 子类，统一通过 TypeAdapter 导出。
+    schema = TypeAdapter(schema_type).json_schema()
     write_json_atomic(output_path, schema)
 ```
 
@@ -199,6 +249,7 @@ for model, output_path in schema_targets:
 - 所有设计文档示例 JSON 均可通过对应模型校验。
 - 未知枚举值、额外字段、空 ID、错误 ID 归属应校验失败。
 - `record_finding` 缺少 Finding 时失败。
+- `record_project_match` 缺少 ProjectMatch 时失败。
 - `not_found` Finding 可无 `bid_source`，`found` Finding 必须有 `bid_source`。
 - 不适用文件不得包含普通审核 Findings。
 - `AuditResult` 内重复文件结果校验失败。
