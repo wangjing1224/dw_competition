@@ -1,0 +1,6 @@
+# 忽略素材
+material/
+# 忽略文档
+documents/
+
+.DS_Store
