@@ -36,9 +36,16 @@ async def build_document_index(
         if document.data_role != scope.data_role:
             raise ValueError("文档角色与索引范围不一致")
         parsed = load_parsed_document(document.file_id)
-        # 解析 JSON 可能早于资料分类完成；索引必须采用调用方传入的最新
-        # evidence_type/classification_status，而不是旧解析快照中的元数据。
-        parsed = parsed.model_copy(update={"document": document})
+        # 解析 JSON 中的 parse_status 是解析完成后的最新值；资料分类则发生在
+        # 解析之后，因此只覆盖分类字段，不能用上传阶段的 pending 状态回退它。
+        indexed_document = parsed.document.model_copy(
+            update={
+                "evidence_type": document.evidence_type,
+                "classification_status": document.classification_status,
+                "classification_confidence": document.classification_confidence,
+            }
+        )
+        parsed = parsed.model_copy(update={"document": indexed_document})
         chunks.extend(
             chunk_parsed_document(
                 parsed,

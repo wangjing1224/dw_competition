@@ -121,6 +121,16 @@ uv run python -m app.models.schema_export
 普通测试全部使用临时数据和 Mock 模型，不请求外部服务。真实比赛数据 E2E：
 
 ```bash
+uv run pytest tests/e2e/test_mock_dataset.py -v -s
+```
+
+上述命令读取根目录 `test-datas/`，执行真实 SQLite、文件解析、索引、后台审核、
+JSON 和 Word 输出，仅将外部模型调用替换为确定性 Mock。适合在上传比赛材料前
+验证本地代码链路。
+
+真实比赛数据 E2E：
+
+```bash
 RUN_MODEL_E2E=1 \
 COMPETITION_DATASET_ROOT=/path/to/招标文件资料 \
 uv run pytest tests/e2e/test_competition_dataset.py -v

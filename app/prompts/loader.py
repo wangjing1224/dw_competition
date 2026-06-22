@@ -1,11 +1,12 @@
 """读取根目录 configs/prompts 下的 Prompt 和工具说明配置。"""
 
+import json
 from functools import lru_cache
-from pathlib import Path
 from string import Template
 from typing import Any
 
 import yaml
+from pydantic import BaseModel
 
 from app.core.config import PROJECT_ROOT
 
@@ -17,13 +18,31 @@ PROMPT_CONFIG_ROOT = PROJECT_ROOT / "configs" / "prompts"
 
 @lru_cache(maxsize=16)
 def load_prompt(name: str) -> str:
+    """读取并缓存固定 Markdown Prompt 正文。"""
+
     path = PROMPT_CONFIG_ROOT / "templates" / f"{name}.md"
+    if not path.is_file():
+        raise FileNotFoundError(f"Prompt 配置不存在: {path}")
     return path.read_text(encoding="utf-8")
 
 
+def _serialize_prompt_value(value: Any) -> str:
+    """把运行时对象转换为模型容易读取的稳定 JSON 或字符串。"""
+
+    if isinstance(value, BaseModel):
+        return value.model_dump_json(indent=2)
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    return str(value)
+
+
 def render_prompt(name: str, **values: Any) -> str:
-    serialized = {key: str(value) for key, value in values.items()}
-    return Template(load_prompt(name)).safe_substitute(serialized)
+    """使用 `$name`/`${name}` 渲染；缺少占位符变量时立即失败。"""
+
+    serialized = {
+        key: _serialize_prompt_value(value) for key, value in values.items()
+    }
+    return Template(load_prompt(name)).substitute(serialized)
 
 
 @lru_cache(maxsize=1)
