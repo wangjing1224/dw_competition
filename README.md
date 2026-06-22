@@ -65,6 +65,7 @@ http://127.0.0.1:8000/web/
 - `configs/model.yaml`：保存模型名、温度、超时、重试、维度和批大小。
 - `configs/retrieval.yaml`：保存分段、候选数量和混合召回权重。
 - `configs/storage.yaml`：保存数据目录、SQLite 路径和上传安全限制。
+- `configs/prompts/`：保存四套 Prompt 模板和五个 Tool 的模型可见说明。
 
 Chat 和 Embedding 使用 LangChain 的 OpenAI 兼容封装。首期可使用阿里百炼；
 后续切换本地服务时，修改对应 URL、Key 和模型名即可。Rerank 使用独立原生

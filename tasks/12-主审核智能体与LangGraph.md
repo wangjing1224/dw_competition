@@ -13,7 +13,7 @@ app/graph/audit_task_graph.py
 app/graph/routing.py
 app/graph/state_updates.py
 app/prompts/loader.py
-app/prompts/templates/bid_agent.md
+configs/prompts/templates/bid_agent.md
 ```
 
 ### 2.1 文件职责与伪代码归属
@@ -25,7 +25,7 @@ app/prompts/templates/bid_agent.md
 | `app/agents/bid_agent.py` | 主 Agent 模型节点和当前工作单元消息构造 | 5.3 |
 | `app/graph/state_updates.py` | 校验 Decision、写入结果、推进游标、汇总 AuditResult | 5.4、5.7 |
 | `app/graph/routing.py` | Agent 工具路由、规则冲突路由和 `check_completion` | 5.5、5.6 |
-| `app/prompts/templates/bid_agent.md` | 主 Agent 固定系统提示词和工具使用约束 | 第 6 节及 5.3 |
+| `configs/prompts/templates/bid_agent.md` | 主 Agent 固定系统提示词和工具使用约束 | 第 6 节及 5.3 |
 | `app/prompts/loader.py` | 读取主 Agent Prompt | 5.3 |
 | `tests/unit/graph/test_state_updates.py` | 重复写入、游标推进和文件汇总测试 | 第 8 节 |
 | `tests/unit/graph/test_routing.py` | 完成条件、规则覆盖和异常降级测试 | 第 8 节 |
@@ -308,7 +308,7 @@ def build_audit_result(state):
 
 ## 6. 适用性判断
 
-主 Agent 固定 Prompt 保存在 `app/prompts/templates/bid_agent.md`。当前文件、当前规则、历史 Finding 和工具定义由 `app/agents/bid_agent.py` 动态组装，不写进静态 Prompt 文件。
+主 Agent 固定 Prompt 保存在 `configs/prompts/templates/bid_agent.md`。当前文件、当前规则、历史 Finding 和工具定义由 `app/agents/bid_agent.py` 动态组装，不写进静态 Prompt 文件。
 
 主 Agent 首先比较：
 
