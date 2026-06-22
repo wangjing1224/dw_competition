@@ -10,7 +10,7 @@ def test_rule_prompt_runtime_values_are_injected():
         "rule_extraction",
         project_id="project-test",
         source_context="技术要求：像素不低于640x480",
-        output_schema={"type": "object"},
+        rule_extraction_schema={"type": "object"},
     )
 
     assert "project-test" in rendered
@@ -32,3 +32,31 @@ def test_all_tool_descriptions_are_available():
         "retrieve_evidence_source",
     ):
         assert load_tool_description(name)
+
+
+@pytest.mark.parametrize(
+    ("name", "schema_variable", "model_name"),
+    [
+        ("bid_agent", "bid_agent_decision_schema", "BidAgentDecision"),
+        (
+            "evidence_subagent",
+            "evidence_review_result_schema",
+            "EvidenceReviewResult",
+        ),
+    ],
+)
+def test_agent_prompt_contains_runtime_output_schema(
+    name, schema_variable, model_name
+):
+    rendered = render_prompt(
+        name,
+        **{
+            schema_variable: {
+                "type": "object",
+                "title": model_name,
+            }
+        },
+    )
+
+    assert model_name in rendered
+    assert f"${{{schema_variable}}}" not in rendered

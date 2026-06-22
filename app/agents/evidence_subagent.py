@@ -1,6 +1,5 @@
 """资料核验 Agent 模型节点、路由和结构化结果收口。"""
 
-import json
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -10,18 +9,21 @@ from langchain_core.tools import BaseTool
 from app.llm.structured_output import validate_structured_content
 from app.models.common import generate_id
 from app.models.evidence import EvidenceReviewResult
-from app.prompts.loader import load_prompt
+from app.prompts.loader import render_prompt
 
 
 def build_evidence_messages(state: dict[str, Any]) -> list[BaseMessage]:
     claim = state["claim"]
-    instruction = (
-        f"当前 Claim：\n{claim.model_dump_json(indent=2)}\n\n"
-        "必要时调用工具。形成结论后仅返回 EvidenceReviewResult JSON：\n"
-        f"{json.dumps(EvidenceReviewResult.model_json_schema(), ensure_ascii=False)}"
-    )
+    instruction = f"当前 Claim：\n{claim.model_dump_json(indent=2)}"
     return [
-        SystemMessage(content=load_prompt("evidence_subagent")),
+        SystemMessage(
+            content=render_prompt(
+                "evidence_subagent",
+                evidence_review_result_schema=(
+                    EvidenceReviewResult.model_json_schema()
+                ),
+            )
+        ),
         HumanMessage(content=instruction),
         *state["messages"],
     ]

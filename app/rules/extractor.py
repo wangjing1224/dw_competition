@@ -85,7 +85,7 @@ async def extract_rule_set(
             "rule_extraction",
             project_id=project_id,
             source_context=context,
-            output_schema=RuleExtractionBatch.model_json_schema(),
+            rule_extraction_schema=RuleExtractionBatch.model_json_schema(),
         )
         batch = await invoke_structured(
             model,

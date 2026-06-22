@@ -53,7 +53,9 @@ async def classify_evidence_document(
         "evidence_classification",
         classification_input=build_classification_input(document, parsed),
         evidence_types=[item.value for item in EvidenceType],
-        output_schema=EvidenceClassification.model_json_schema(),
+        evidence_classification_schema=(
+            EvidenceClassification.model_json_schema()
+        ),
     )
     result = await invoke_structured(
         model,

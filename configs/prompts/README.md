@@ -10,7 +10,7 @@
 |---|---|---|
 | `${project_id}` | `app/rules/extractor.py` | 当前新建项目的 ID |
 | `${source_context}` | `app/rules/extractor.py` | 解析后的章节标题、正文和表格 |
-| `${output_schema}` | `app/rules/extractor.py` | `RuleExtractionBatch` 动态生成的 JSON Schema |
+| `${rule_extraction_schema}` | `app/rules/extractor.py` | `RuleExtractionBatch` 动态生成的 JSON Schema |
 
 ### `templates/evidence_classification.md`
 
@@ -18,25 +18,31 @@
 |---|---|---|
 | `${classification_input}` | `app/evidence/classifier.py` | 文件名、相对目录、章节、首尾正文和解析状态 |
 | `${evidence_types}` | `app/evidence/classifier.py` | `EvidenceType` 枚举的全部可选值 |
-| `${output_schema}` | `app/evidence/classifier.py` | `EvidenceClassification` 动态生成的 JSON Schema |
+| `${evidence_classification_schema}` | `app/evidence/classifier.py` | `EvidenceClassification` 动态生成的 JSON Schema |
 
 ### `templates/bid_agent.md`
 
-当前没有 `$` 占位符。`app/agents/bid_agent.py` 会在运行时追加：
+| 占位符 | 注入位置 | 内容 |
+|---|---|---|
+| `${bid_agent_decision_schema}` | `app/agents/bid_agent.py` | `BidAgentDecision` 判别联合动态生成的 JSON Schema |
+
+`app/agents/bid_agent.py` 还会在运行时追加 HumanMessage：
 
 - `task_id/project_id/bidder_id`
 - 当前投标文件
 - 当前 RuleItem 或项目适用性工作单元
 - 已有相关 Finding
-- `BidAgentDecision` JSON Schema
 - 当前工作单元内的 AIMessage/ToolMessage 历史
 
 ### `templates/evidence_subagent.md`
 
-当前没有 `$` 占位符。`app/agents/evidence_subagent.py` 会在运行时追加：
+| 占位符 | 注入位置 | 内容 |
+|---|---|---|
+| `${evidence_review_result_schema}` | `app/agents/evidence_subagent.py` | `EvidenceReviewResult` 动态生成的 JSON Schema |
+
+`app/agents/evidence_subagent.py` 还会在运行时追加 HumanMessage：
 
 - 当前 Claim
-- `EvidenceReviewResult` JSON Schema
 - 当前 Claim 内的 AIMessage/ToolMessage 历史
 
 ## 修改约束

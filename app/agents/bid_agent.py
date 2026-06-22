@@ -17,7 +17,7 @@ from app.models.tasks import BidAgentDecisionAdapter
 from app.models.common import generate_id
 from app.models.findings import Finding
 from app.models.tasks import RecordFindingDecision
-from app.prompts.loader import load_prompt
+from app.prompts.loader import render_prompt
 
 
 def _work_item(state: AuditState) -> dict[str, Any]:
@@ -58,12 +58,17 @@ def build_bid_agent_messages(state: AuditState) -> list[BaseMessage]:
         "任务身份："
         f"task_id={state['task_id']}, project_id={state['project_id']}, "
         f"bidder_id={state['bidder_id']}\n\n"
-        f"当前工作单元：\n{json.dumps(_work_item(state), ensure_ascii=False)}\n\n"
-        "必要时调用工具。完成当前工作单元后，仅返回 BidAgentDecision JSON：\n"
-        f"{json.dumps(BidAgentDecisionAdapter.json_schema(), ensure_ascii=False)}"
+        f"当前工作单元：\n{json.dumps(_work_item(state), ensure_ascii=False)}"
     )
     return [
-        SystemMessage(content=load_prompt("bid_agent")),
+        SystemMessage(
+            content=render_prompt(
+                "bid_agent",
+                bid_agent_decision_schema=(
+                    BidAgentDecisionAdapter.json_schema()
+                ),
+            )
+        ),
         HumanMessage(content=content),
         *state["messages"],
     ]
