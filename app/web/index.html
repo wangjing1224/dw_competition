@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>电力智能招标审核系统</title>
+    <link rel="stylesheet" href="/web/assets/styles.css" />
+  </head>
+  <body data-page="home">
+    <header class="topbar">
+      <a class="brand" href="/web/">
+        <span class="brand-mark">电</span>
+        <span>
+          <strong>智能招标审核</strong>
+          <small>Electric Tender Review</small>
+        </span>
+      </a>
+      <nav>
+        <a class="active" href="/web/">系统总览</a>
+        <a href="/web/workflow.html">审核操作</a>
+        <a href="/web/monitor.html">任务观测</a>
+        <a href="/docs" target="_blank">API 文档</a>
+      </nav>
+      <div class="health-pill" id="health-pill">
+        <span class="health-dot"></span>
+        <span id="health-text">检测服务</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow">规则驱动 · 证据可追溯 · 双 Agent 协作</div>
+          <h1>从招标规则到审核报告，<br />形成可观测的智能审核闭环。</h1>
+          <p>
+            招标文件生成固定规则集，投标方资料形成证据索引，
+            主审核 Agent 按规则逐项判断，并按需调用资料核验子 Agent。
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="/web/workflow.html">开始审核演示</a>
+            <a class="button ghost" href="/web/monitor.html">查看审核任务</a>
+          </div>
+        </div>
+        <div class="hero-panel">
+          <div class="panel-header">
+            <span>审核运行边界</span>
+            <span class="tag">LangGraph</span>
+          </div>
+          <div class="flow-stack">
+            <div class="flow-item">
+              <span class="flow-index">01</span>
+              <div><strong>确定性预处理</strong><small>解析、分类、Embedding、索引</small></div>
+            </div>
+            <div class="flow-line"></div>
+            <div class="flow-item accent">
+              <span class="flow-index">02</span>
+              <div><strong>智能审核</strong><small>bid_agent → evidence_subagent</small></div>
+            </div>
+            <div class="flow-line"></div>
+            <div class="flow-item">
+              <span class="flow-index">03</span>
+              <div><strong>确定性输出</strong><small>Schema 校验、JSON、Word</small></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="metric-grid">
+        <article class="metric-card">
+          <span class="metric-label">数据隔离</span>
+          <strong>3 层 ID</strong>
+          <p>project_id、bidder_id、task_id 贯穿检索、Agent 和输出。</p>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">审核基点</span>
+          <strong>RuleSet</strong>
+          <p>每条适用规则必须形成 Finding，未找到响应也不会跳过。</p>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">唯一事实源</span>
+          <strong>JSON</strong>
+          <p>Word 只读取已校验 JSON，不重新调用模型或修改结论。</p>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">当前状态</span>
+          <strong id="service-version">等待检测</strong>
+          <p id="service-description">正在读取后端健康状态。</p>
+        </article>
+      </section>
+
+      <section class="section-block">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">WORKFLOW</span>
+            <h2>三个入口，一条审核链路</h2>
+          </div>
+          <a class="text-link" href="/web/workflow.html">进入操作台 →</a>
+        </div>
+        <div class="process-grid">
+          <article class="process-card">
+            <span class="process-number">01</span>
+            <h3>初始化招标项目</h3>
+            <p>上传招标文件，解析正文与表格，抽取并合并 RuleSet，建立规则依据索引。</p>
+            <span class="endpoint">POST /api/projects</span>
+          </article>
+          <article class="process-card">
+            <span class="process-number">02</span>
+            <h3>登记投标方资料</h3>
+            <p>资料分类为合同、发票、证书、参数表等类型，并建立投标方证据索引。</p>
+            <span class="endpoint">POST /api/projects/{id}/bidders</span>
+          </article>
+          <article class="process-card">
+            <span class="process-number">03</span>
+            <h3>执行审核任务</h3>
+            <p>上传测试投标文件，后台运行主/子 Agent，持续查询进度并生成 JSON 与 Word。</p>
+            <span class="endpoint">POST /api/.../audit-tasks</span>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>电力智能招标审核系统 · 本地演示版</span>
+      <span>FastAPI · LangChain · LangGraph · SQLite</span>
+    </footer>
+    <script src="/web/assets/common.js"></script>
+    <script src="/web/assets/home.js"></script>
+  </body>
+</html>

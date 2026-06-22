@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>审核操作台 · 电力智能招标审核系统</title>
+    <link rel="stylesheet" href="/web/assets/styles.css" />
+  </head>
+  <body data-page="workflow">
+    <header class="topbar">
+      <a class="brand" href="/web/">
+        <span class="brand-mark">电</span>
+        <span><strong>智能招标审核</strong><small>Operation Console</small></span>
+      </a>
+      <nav>
+        <a href="/web/">系统总览</a>
+        <a class="active" href="/web/workflow.html">审核操作</a>
+        <a href="/web/monitor.html">任务观测</a>
+        <a href="/docs" target="_blank">API 文档</a>
+      </nav>
+      <div class="health-pill" id="health-pill">
+        <span class="health-dot"></span><span id="health-text">检测服务</span>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="page-title">
+        <div>
+          <span class="eyebrow">OPERATION CONSOLE</span>
+          <h1>审核操作台</h1>
+          <p>依次完成项目规则初始化、投标方资料入库和测试集审核。</p>
+        </div>
+        <button class="button ghost compact" id="reset-workflow">清空本地记录</button>
+      </section>
+
+      <section class="identity-strip">
+        <div><span>Project ID</span><strong id="current-project">未创建</strong></div>
+        <div><span>Bidder ID</span><strong id="current-bidder">未创建</strong></div>
+        <div><span>Task ID</span><strong id="current-task">未创建</strong></div>
+      </section>
+
+      <section class="workflow-layout">
+        <div class="step-list">
+          <article class="step-card" id="project-step">
+            <div class="step-header">
+              <span class="step-badge">01</span>
+              <div><h2>初始化招标项目</h2><p>同步解析、规则抽取与依据索引构建</p></div>
+              <span class="status-badge neutral" id="project-status">待操作</span>
+            </div>
+            <label class="drop-zone" for="project-files">
+              <input id="project-files" type="file" multiple webkitdirectory directory />
+              <span class="drop-icon">＋</span>
+              <strong>选择招标文件夹</strong>
+              <small>支持 DOCX、XLSX、TXT、Markdown</small>
+            </label>
+            <div class="file-summary" id="project-summary">尚未选择文件</div>
+            <button class="button primary full" id="create-project">上传并生成 RuleSet</button>
+          </article>
+
+          <article class="step-card locked" id="bidder-step">
+            <div class="step-header">
+              <span class="step-badge">02</span>
+              <div><h2>登记投标方资料</h2><p>资料分类与 Evidence Index 构建</p></div>
+              <span class="status-badge neutral" id="bidder-status">等待项目</span>
+            </div>
+            <label class="drop-zone" for="bidder-files">
+              <input id="bidder-files" type="file" multiple webkitdirectory directory />
+              <span class="drop-icon">＋</span>
+              <strong>选择投标方资料文件夹</strong>
+              <small>合同、发票、证书、参数表、人员与售后材料</small>
+            </label>
+            <div class="file-summary" id="bidder-summary">尚未选择文件</div>
+            <button class="button primary full" id="create-bidder">上传并建立资料索引</button>
+          </article>
+
+          <article class="step-card locked" id="task-step">
+            <div class="step-header">
+              <span class="step-badge">03</span>
+              <div><h2>创建审核任务</h2><p>后台运行 LangGraph 并生成报告</p></div>
+              <span class="status-badge neutral" id="task-status">等待投标方</span>
+            </div>
+            <label class="drop-zone" for="task-files">
+              <input id="task-files" type="file" multiple webkitdirectory directory />
+              <span class="drop-icon">＋</span>
+              <strong>选择投标文件测试集</strong>
+              <small>可同时包含相关投标文件和异类干扰文件</small>
+            </label>
+            <div class="file-summary" id="task-summary">尚未选择文件</div>
+            <button class="button primary full" id="create-task">创建后台审核任务</button>
+          </article>
+        </div>
+
+        <aside class="activity-panel">
+          <div class="panel-header">
+            <span>操作日志</span>
+            <button class="icon-button" id="clear-log" title="清空日志">清空</button>
+          </div>
+          <div class="activity-log" id="activity-log">
+            <div class="log-empty">操作过程、耗时和错误将在这里显示。</div>
+          </div>
+          <div class="notice">
+            <strong>注意</strong>
+            <p>项目和投标方接口同步调用模型，文件较多时需要等待。审核任务创建后可离开本页，Task ID 会保存在浏览器中。</p>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <div class="toast-container" id="toast-container"></div>
+    <script src="/web/assets/common.js"></script>
+    <script src="/web/assets/workflow.js"></script>
+  </body>
+</html>

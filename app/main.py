@@ -2,8 +2,11 @@
 
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.audit_tasks import router as audit_task_router
 from app.api.bidders import router as bidder_router
@@ -51,6 +54,19 @@ def create_app() -> FastAPI:
             "app": settings.app_name,
             "version": _app_version(),
         }
+
+    # 演示前端使用原生静态文件，不引入 Node 构建链。StaticFiles 必须最后挂载，
+    # 避免 /web 的通配路径影响前面已经注册的 API。
+    web_root = Path(__file__).resolve().parent / "web"
+    application.mount(
+        "/web",
+        StaticFiles(directory=web_root, html=True),
+        name="web",
+    )
+
+    @application.get("/", include_in_schema=False)
+    async def web_home() -> RedirectResponse:
+        return RedirectResponse(url="/web/")
 
     return application
 

@@ -10,6 +10,9 @@ from app.core.config import get_settings
 @pytest.fixture(autouse=True)
 def clear_settings_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("APP_DEBUG", "false")
+    # 单元和集成测试使用 Mock 模型，不应把测试 Trace 上报到开发者的
+    # LangSmith 项目；真实模型 E2E 可在独立进程中显式重新开启。
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

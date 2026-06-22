@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>任务观测 · 电力智能招标审核系统</title>
+    <link rel="stylesheet" href="/web/assets/styles.css" />
+  </head>
+  <body data-page="monitor">
+    <header class="topbar">
+      <a class="brand" href="/web/">
+        <span class="brand-mark">电</span>
+        <span><strong>智能招标审核</strong><small>Task Observatory</small></span>
+      </a>
+      <nav>
+        <a href="/web/">系统总览</a>
+        <a href="/web/workflow.html">审核操作</a>
+        <a class="active" href="/web/monitor.html">任务观测</a>
+        <a href="/docs" target="_blank">API 文档</a>
+      </nav>
+      <div class="health-pill" id="health-pill">
+        <span class="health-dot"></span><span id="health-text">检测服务</span>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="page-title monitor-title">
+        <div>
+          <span class="eyebrow">TASK OBSERVATORY</span>
+          <h1>任务观测</h1>
+          <p>轮询后台阶段，查看文件级结论、风险分布和最终输出。</p>
+        </div>
+        <div class="task-search">
+          <input id="task-id-input" placeholder="输入 audit-... Task ID" />
+          <button class="button primary compact" id="load-task">加载任务</button>
+        </div>
+      </section>
+
+      <section class="observer-empty" id="observer-empty">
+        <div class="radar"><span></span><span></span><span></span></div>
+        <h2>输入 Task ID 开始观测</h2>
+        <p>审核操作台创建的最近一个任务会自动填入。</p>
+      </section>
+
+      <div id="observer-content" class="hidden">
+        <section class="task-overview">
+          <article>
+            <span>任务状态</span>
+            <strong id="overview-status">—</strong>
+          </article>
+          <article>
+            <span>当前阶段</span>
+            <strong id="overview-stage">—</strong>
+          </article>
+          <article>
+            <span>投标文件</span>
+            <strong id="overview-files">—</strong>
+          </article>
+          <article>
+            <span>风险项</span>
+            <strong id="overview-risks">—</strong>
+          </article>
+        </section>
+
+        <section class="observer-grid">
+          <article class="content-card">
+            <div class="card-title">
+              <div><span class="eyebrow">PIPELINE</span><h2>执行阶段</h2></div>
+              <span class="poll-indicator" id="poll-indicator">自动轮询</span>
+            </div>
+            <div class="stage-list" id="stage-list"></div>
+          </article>
+
+          <article class="content-card">
+            <div class="card-title">
+              <div><span class="eyebrow">IDENTITY</span><h2>任务身份</h2></div>
+            </div>
+            <dl class="identity-list">
+              <div><dt>Task ID</dt><dd id="detail-task">—</dd></div>
+              <div><dt>Project ID</dt><dd id="detail-project">—</dd></div>
+              <div><dt>Bidder ID</dt><dd id="detail-bidder">—</dd></div>
+            </dl>
+            <div class="error-box hidden" id="error-box"></div>
+          </article>
+        </section>
+
+        <section class="content-card result-section">
+          <div class="card-title">
+            <div><span class="eyebrow">FILE RESULTS</span><h2>文件审核结果</h2></div>
+            <div class="download-actions" id="download-actions"></div>
+          </div>
+          <div class="result-table-wrap">
+            <table class="result-table">
+              <thead>
+                <tr>
+                  <th>文件</th><th>适用性</th><th>总体结论</th>
+                  <th>Finding</th><th>资料核验</th><th>详情</th>
+                </tr>
+              </thead>
+              <tbody id="result-body">
+                <tr><td colspan="6" class="empty-cell">任务尚未生成审核结果</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="content-card raw-section">
+          <div class="card-title">
+            <div><span class="eyebrow">RAW DATA</span><h2>原始任务响应</h2></div>
+            <button class="icon-button" id="copy-json">复制 JSON</button>
+          </div>
+          <pre id="raw-json">{}</pre>
+        </section>
+      </div>
+    </main>
+
+    <dialog id="detail-dialog">
+      <div class="dialog-header">
+        <h2 id="dialog-title">文件详情</h2>
+        <button class="dialog-close" id="dialog-close">×</button>
+      </div>
+      <div class="dialog-body" id="dialog-body"></div>
+    </dialog>
+
+    <div class="toast-container" id="toast-container"></div>
+    <script src="/web/assets/common.js"></script>
+    <script src="/web/assets/monitor.js"></script>
+  </body>
+</html>
