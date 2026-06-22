@@ -7,6 +7,7 @@ from pydantic import Field, model_validator
 
 from app.core.config import ChatModelSettings
 from app.llm.chat_model import invoke_structured
+from app.llm.errors import InvalidStructuredOutput
 from app.models.common import (
     EvidenceType,
     RuleCategory,
@@ -38,7 +39,7 @@ class ExtractedRule(StrictModel):
 
 class RuleExtractionBatch(StrictModel):
     project_profile: ProjectProfile = Field(default_factory=ProjectProfile)
-    rules: list[ExtractedRule] = Field(default_factory=list)
+    rules: list[ExtractedRule] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="before")
     @classmethod
@@ -66,15 +67,69 @@ class RuleExtractionBatch(StrictModel):
         return normalized
 
 
-def _source_context(parsed: ParsedDocument) -> str:
+def _source_blocks(parsed: ParsedDocument) -> list[str]:
     blocks: list[str] = []
     for section in parsed.sections:
-        body = "\n".join(
+        for unit_index, body in enumerate(
             part for part in [section.content, *section.tables] if part
+        ):
+            blocks.append(
+                f"[章节:{section.section_id}][单元:{unit_index + 1}] "
+                f"{section.title}\n{body}"
+            )
+    return blocks
+
+
+def _split_oversized_block(
+    block: str,
+    *,
+    max_chars: int,
+    overlap_chars: int,
+) -> list[str]:
+    if len(block) <= max_chars:
+        return [block]
+    chunks: list[str] = []
+    step = max_chars - overlap_chars
+    for start in range(0, len(block), step):
+        chunks.append(block[start : start + max_chars])
+        if start + max_chars >= len(block):
+            break
+    return chunks
+
+
+def build_rule_extraction_batches(
+    parsed: ParsedDocument,
+    *,
+    max_chars: int = 12_000,
+    overlap_chars: int = 600,
+) -> list[str]:
+    """按章节单元组批，避免小模型一次处理整份长文件。"""
+
+    if overlap_chars >= max_chars:
+        raise ValueError("overlap_chars 必须小于 max_chars")
+    units = [
+        chunk
+        for block in _source_blocks(parsed)
+        for chunk in _split_oversized_block(
+            block,
+            max_chars=max_chars,
+            overlap_chars=overlap_chars,
         )
-        if body:
-            blocks.append(f"[章节:{section.section_id}] {section.title}\n{body}")
-    return "\n\n".join(blocks)
+    ]
+    batches: list[str] = []
+    current: list[str] = []
+    current_chars = 0
+    for unit in units:
+        additional = len(unit) + (2 if current else 0)
+        if current and current_chars + additional > max_chars:
+            batches.append("\n\n".join(current))
+            current = []
+            current_chars = 0
+        current.append(unit)
+        current_chars += len(unit) + (2 if len(current) > 1 else 0)
+    if current:
+        batches.append("\n\n".join(current))
+    return batches
 
 
 def _source_for_document(parsed: ParsedDocument) -> SourceRef:
@@ -98,39 +153,51 @@ async def extract_rule_set(
     model: object,
     model_settings: ChatModelSettings,
 ) -> RuleSet:
-    """逐文件调用模型，汇总规则；大文件不会一次塞入整个项目上下文。"""
+    """按文件和内容批次调用模型，汇总规则并定位失败批次。"""
 
     rules: list[RuleItem] = []
     profile = ProjectProfile()
     for parsed in parsed_documents:
-        context = _source_context(parsed)
-        if not context:
+        contexts = build_rule_extraction_batches(parsed)
+        if not contexts:
             continue
-        prompt = render_prompt(
-            "rule_extraction",
-            project_id=project_id,
-            source_context=context,
-            rule_extraction_schema=RuleExtractionBatch.model_json_schema(),
-        )
-        batch = await invoke_structured(
-            model,
-            [SystemMessage(content=prompt)],
-            RuleExtractionBatch,
-            model_settings.structured_output_mode,
-        )
-        if not any(profile.model_dump(exclude_none=True).values()):
-            profile = batch.project_profile
         source = _source_for_document(parsed)
-        for extracted in batch.rules:
-            rules.append(
-                RuleItem(
-                    rule_id=next_id("rule"),
-                    status=RuleStatus.ACTIVE,
-                    source=source,
-                    supporting_sources=[],
-                    **extracted.model_dump(),
-                )
+        for batch_index, context in enumerate(contexts, start=1):
+            prompt = render_prompt(
+                "rule_extraction",
+                project_id=project_id,
+                source_file=parsed.document.source_path,
+                batch_index=batch_index,
+                batch_count=len(contexts),
+                max_rules=20,
+                source_context=context,
+                rule_extraction_schema=RuleExtractionBatch.model_json_schema(),
             )
+            try:
+                batch = await invoke_structured(
+                    model,
+                    [SystemMessage(content=prompt)],
+                    RuleExtractionBatch,
+                    model_settings.structured_output_mode,
+                )
+            except InvalidStructuredOutput as exc:
+                raise InvalidStructuredOutput(
+                    "规则抽取失败："
+                    f"file={parsed.document.source_path}，"
+                    f"batch={batch_index}/{len(contexts)}；{exc}"
+                ) from exc
+            if not any(profile.model_dump(exclude_none=True).values()):
+                profile = batch.project_profile
+            for extracted in batch.rules:
+                rules.append(
+                    RuleItem(
+                        rule_id=next_id("rule"),
+                        status=RuleStatus.ACTIVE,
+                        source=source,
+                        supporting_sources=[],
+                        **extracted.model_dump(),
+                    )
+                )
     return RuleSet(
         project_id=project_id,
         project_profile=profile,

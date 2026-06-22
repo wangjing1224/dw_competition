@@ -26,6 +26,9 @@ def build_chat_model(settings: ChatModelSettings) -> ChatOpenAI:
         max_completion_tokens=settings.max_output_tokens,
         timeout=settings.timeout_seconds,
         max_retries=settings.max_retries,
+        # 百炼 Qwen3.7/Qwen3.5 使用该非标准参数控制混合思考模式。
+        # 关闭后直接生成答案，减少规则抽取延迟和 reasoning Token。
+        extra_body={"enable_thinking": settings.enable_thinking},
     )
 
 

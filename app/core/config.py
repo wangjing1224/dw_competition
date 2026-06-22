@@ -33,6 +33,7 @@ class ChatModelSettings(ConfigModel):
     timeout_seconds: float = Field(gt=0)
     max_retries: int = Field(ge=0)
     max_output_tokens: int = Field(gt=0)
+    enable_thinking: bool = False
     structured_output_mode: Literal["json_schema", "json_object", "prompt_only"]
 
 

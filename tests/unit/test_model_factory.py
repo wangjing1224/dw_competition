@@ -1,6 +1,25 @@
 """模型工厂参数契约测试。"""
 
+from pydantic import SecretStr
+
 from app.llm import factory
+
+
+def test_qwen_chat_model_disables_thinking(monkeypatch, temp_settings):
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(factory, "ChatOpenAI", FakeChatOpenAI)
+    settings = temp_settings.rule_extraction_model.model_copy(
+        update={"api_key": SecretStr("test-key")}
+    )
+
+    factory.build_chat_model(settings)
+
+    assert captured["extra_body"] == {"enable_thinking": False}
 
 
 def test_llama_cpp_embedding_does_not_send_dimensions(

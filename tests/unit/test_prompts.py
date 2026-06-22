@@ -9,11 +9,16 @@ def test_rule_prompt_runtime_values_are_injected():
     rendered = render_prompt(
         "rule_extraction",
         project_id="project-test",
+        source_file="规则/技术规范.md",
+        batch_index=1,
+        batch_count=2,
+        max_rules=20,
         source_context="技术要求：像素不低于640x480",
         rule_extraction_schema={"type": "object"},
     )
 
     assert "project-test" in rendered
+    assert "1/2" in rendered
     assert "640x480" in rendered
     assert '"type": "object"' in rendered
 

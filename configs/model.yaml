@@ -8,7 +8,9 @@ rule_extraction_model:
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
-  max_output_tokens: 4096
+  max_output_tokens: 8192
+  # 规则抽取只需要稳定 JSON，不启用思考过程。
+  enable_thinking: false
   # prompt_only 兼容性最好，由 Prompt 约束 JSON 并在本地执行 Pydantic 校验。
   structured_output_mode: prompt_only
 
@@ -21,6 +23,7 @@ evidence_classification_model:
   timeout_seconds: 120
   max_retries: 2
   max_output_tokens: 4096
+  enable_thinking: false
   structured_output_mode: prompt_only
 
 # 主审核 Agent 模型：按 RuleSet 逐项审核投标文件并调用审核工具。
@@ -32,6 +35,7 @@ bid_chat_model:
   timeout_seconds: 120
   max_retries: 2
   max_output_tokens: 4096
+  enable_thinking: false
   structured_output_mode: prompt_only
 
 # 资料核验子 Agent 模型：针对主 Agent 传入的单条 Claim 核验支撑材料。
@@ -43,6 +47,7 @@ evidence_chat_model:
   timeout_seconds: 120
   max_retries: 2
   max_output_tokens: 4096
+  enable_thinking: false
   structured_output_mode: prompt_only
 
 # 文本向量模型：为规则来源、投标文件和投标方资料生成 Embedding。

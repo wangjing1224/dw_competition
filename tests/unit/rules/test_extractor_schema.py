@@ -3,7 +3,11 @@
 import pytest
 from pydantic import ValidationError
 
-from app.rules.extractor import RuleExtractionBatch
+from app.models.documents import DocumentRef, ParsedDocument, ParsedSection
+from app.rules.extractor import (
+    RuleExtractionBatch,
+    build_rule_extraction_batches,
+)
 
 
 def test_flattened_project_profile_is_moved_under_profile():
@@ -32,3 +36,33 @@ def test_unknown_root_field_is_still_rejected():
                 "unexpected": "不能静默忽略",
             }
         )
+
+
+def test_long_parsed_document_is_split_into_bounded_batches():
+    parsed = ParsedDocument(
+        document=DocumentRef(
+            file_id="file-1",
+            file_name="规则.md",
+            source_path="招标文件/规则.md",
+            data_role="rule_source",
+            parse_status="parsed",
+            project_id="project-1",
+        ),
+        parse_status="parsed",
+        sections=[
+            ParsedSection(
+                section_id="section-1",
+                title="技术要求",
+                content="像素不低于640x480。" * 100,
+            )
+        ],
+    )
+
+    batches = build_rule_extraction_batches(
+        parsed,
+        max_chars=300,
+        overlap_chars=30,
+    )
+
+    assert len(batches) > 1
+    assert all(len(batch) <= 300 for batch in batches)
