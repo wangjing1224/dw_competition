@@ -1,0 +1,70 @@
+# 招标规则抽取模型：把招标文件解析结果转换为 RuleSet。
+rule_extraction_model:
+  # URL 和 Key 从根目录 .env 读取；切换服务时只需替换环境变量。
+  base_url: ${RULE_EXTRACTION_MODEL_BASE_URL}
+  api_key: ${RULE_EXTRACTION_MODEL_API_KEY}
+  # 模型名可直接替换为百炼或本地 OpenAI 兼容服务提供的模型。
+  model: qwen-plus
+  temperature: 0.1
+  timeout_seconds: 120
+  max_retries: 2
+  max_output_tokens: 4096
+  # prompt_only 兼容性最好，由 Prompt 约束 JSON 并在本地执行 Pydantic 校验。
+  structured_output_mode: prompt_only
+
+# 投标方资料分类模型：识别合同、发票、证书、技术参数等资料类型。
+evidence_classification_model:
+  base_url: ${EVIDENCE_CLASSIFICATION_MODEL_BASE_URL}
+  api_key: ${EVIDENCE_CLASSIFICATION_MODEL_API_KEY}
+  model: qwen-plus
+  temperature: 0.1
+  timeout_seconds: 120
+  max_retries: 2
+  max_output_tokens: 4096
+  structured_output_mode: prompt_only
+
+# 主审核 Agent 模型：按 RuleSet 逐项审核投标文件并调用审核工具。
+bid_chat_model:
+  base_url: ${BID_CHAT_MODEL_BASE_URL}
+  api_key: ${BID_CHAT_MODEL_API_KEY}
+  model: qwen-plus
+  temperature: 0.2
+  timeout_seconds: 120
+  max_retries: 2
+  max_output_tokens: 4096
+  structured_output_mode: prompt_only
+
+# 资料核验子 Agent 模型：针对主 Agent 传入的单条 Claim 核验支撑材料。
+evidence_chat_model:
+  base_url: ${EVIDENCE_CHAT_MODEL_BASE_URL}
+  api_key: ${EVIDENCE_CHAT_MODEL_API_KEY}
+  model: qwen-plus
+  temperature: 0.1
+  timeout_seconds: 120
+  max_retries: 2
+  max_output_tokens: 4096
+  structured_output_mode: prompt_only
+
+# 文本向量模型：为规则来源、投标文件和投标方资料生成 Embedding。
+embedding_model:
+  base_url: ${EMBEDDING_BASE_URL}
+  api_key: ${EMBEDDING_API_KEY}
+  model: text-embedding-v4
+  # 必须与模型服务实际输出维度一致；修改模型或维度后需要重建索引。
+  dimension: 1024
+  # 单次提交给 Embedding 服务的文本数量。
+  batch_size: 16
+  timeout_seconds: 120
+  max_retries: 2
+
+# 重排序模型：对向量和关键词初召回结果进行相关性重排。
+rerank_model:
+  base_url: ${RERANK_BASE_URL}
+  api_key: ${RERANK_API_KEY}
+  model: local-reranker
+  # 最多保留的重排结果数量。
+  top_n: 10
+  timeout_seconds: 120
+  max_retries: 2
+  # Rerank 不可用时是否退回初召回顺序，避免整个审核任务直接失败。
+  allow_degradation: true

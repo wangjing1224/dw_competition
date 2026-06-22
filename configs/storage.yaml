@@ -1,0 +1,17 @@
+# 所有运行时数据的根目录。相对路径以项目根目录为基准，
+# 不受启动命令当前工作目录影响。
+data_root: data
+
+# SQLite 元数据库路径。
+# 数据库只保存项目、投标方、文件和审核任务元数据，不保存文档正文、
+# Embedding 向量、JSON 结果或 Word 文件。
+database_path: data/app.db
+
+# 单个上传文件最大 100 MiB，流式写入过程中超过限制会立即终止并清理临时文件。
+max_upload_bytes: 104857600
+
+# ZIP 中单个解压条目的最大大小 50 MiB，用于限制异常压缩包。
+max_zip_entry_bytes: 52428800
+
+# 一个 ZIP 解压后全部条目的最大总大小 500 MiB，用于防止 ZIP Bomb。
+max_zip_total_bytes: 524288000

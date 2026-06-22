@@ -1,0 +1,57 @@
+{
+  "$defs": {
+    "ClassificationStatus": {
+      "enum": [
+        "classified",
+        "manual_review"
+      ],
+      "title": "ClassificationStatus",
+      "type": "string"
+    },
+    "EvidenceType": {
+      "enum": [
+        "contract",
+        "invoice",
+        "invoice_verification",
+        "certificate",
+        "business_license",
+        "technical_parameter",
+        "test_report",
+        "performance_table",
+        "production_capacity",
+        "personnel",
+        "after_sales",
+        "other"
+      ],
+      "title": "EvidenceType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "evidence_type": {
+      "$ref": "#/$defs/EvidenceType"
+    },
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "classification_status": {
+      "$ref": "#/$defs/ClassificationStatus"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    }
+  },
+  "required": [
+    "evidence_type",
+    "confidence",
+    "classification_status",
+    "reason"
+  ],
+  "title": "EvidenceClassification",
+  "type": "object"
+}

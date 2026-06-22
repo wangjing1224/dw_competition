@@ -1,0 +1,23 @@
+# 单个索引片段允许的最大近似 token 数。
+# 当前使用轻量本地切分，不依赖具体模型 tokenizer。
+chunk_tokens: 800
+
+# 相邻片段重复保留的 token 数，减少关键信息刚好落在切分边界的问题。
+# 必须小于 chunk_tokens。
+chunk_overlap: 120
+
+# 向量召回和关键词召回各自最多保留的初始候选数量。
+candidate_top_k: 30
+
+# Rerank 后最终返回给 Agent 的片段数量。
+final_top_k: 10
+
+# 合并初召回结果时的向量相似度权重。
+semantic_weight: 0.7
+
+# 合并初召回结果时的关键词权重。
+# 型号、包号、标准号、日期和数值等精确字段主要依赖该召回补充。
+keyword_weight: 0.3
+
+# 单个检索结果最多回传给 Agent 的正文字符数，避免工具一次塞入过长全文。
+max_source_chars: 4000

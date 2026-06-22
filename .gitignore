@@ -11,3 +11,8 @@ documents/
 !.env.example
 __pycache__/
 *.pyc
+
+.uv-cache/
+
+# 运行时上传、解析结果、索引、SQLite 和报告均可重新生成。
+data/

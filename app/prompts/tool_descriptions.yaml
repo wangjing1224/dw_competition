@@ -1,0 +1,10 @@
+search_bid_response: >-
+  根据当前审核规则检索当前任务、当前投标文件中的响应片段；不得用于检索其他任务或其他文件。
+retrieve_rule_source: >-
+  回查当前项目中规则来源的原文或表格；仅在摘要不足以判断时调用。
+request_evidence_review: >-
+  对主审核 Agent 已形成的单条 Claim 启动资料核验；没有投标响应声明时不得调用。
+search_evidence: >-
+  按 Claim 指定的项目、投标方和证据类型检索候选资料；候选摘要不能直接作为最终证据。
+retrieve_evidence_source: >-
+  回查候选资料的原文和表格，用于判断材料是否真正支持当前 Claim。

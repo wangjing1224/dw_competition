@@ -1,0 +1,483 @@
+{
+  "$defs": {
+    "ClassificationStatus": {
+      "enum": [
+        "classified",
+        "manual_review"
+      ],
+      "title": "ClassificationStatus",
+      "type": "string"
+    },
+    "DataRole": {
+      "enum": [
+        "rule_source",
+        "evidence_material",
+        "bid_document"
+      ],
+      "title": "DataRole",
+      "type": "string"
+    },
+    "DocumentRef": {
+      "additionalProperties": false,
+      "properties": {
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        },
+        "file_name": {
+          "title": "File Name",
+          "type": "string"
+        },
+        "source_path": {
+          "title": "Source Path",
+          "type": "string"
+        },
+        "data_role": {
+          "$ref": "#/$defs/DataRole"
+        },
+        "parse_status": {
+          "$ref": "#/$defs/ParseStatus",
+          "default": "pending"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "bidder_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bidder Id"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "evidence_type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "classification_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassificationStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "classification_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Classification Confidence"
+        }
+      },
+      "required": [
+        "file_id",
+        "file_name",
+        "source_path",
+        "data_role",
+        "project_id"
+      ],
+      "title": "DocumentRef",
+      "type": "object"
+    },
+    "EvidenceType": {
+      "enum": [
+        "contract",
+        "invoice",
+        "invoice_verification",
+        "certificate",
+        "business_license",
+        "technical_parameter",
+        "test_report",
+        "performance_table",
+        "production_capacity",
+        "personnel",
+        "after_sales",
+        "other"
+      ],
+      "title": "EvidenceType",
+      "type": "string"
+    },
+    "ParseStatus": {
+      "enum": [
+        "pending",
+        "parsed",
+        "partial",
+        "ocr_required",
+        "unsupported",
+        "manual_review"
+      ],
+      "title": "ParseStatus",
+      "type": "string"
+    },
+    "ProjectProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "project_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Name"
+        },
+        "buyer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Buyer"
+        },
+        "material_category": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material Category"
+        },
+        "bid_deadline": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bid Deadline"
+        },
+        "bid_validity_days": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bid Validity Days"
+        }
+      },
+      "title": "ProjectProfile",
+      "type": "object"
+    },
+    "RuleCategory": {
+      "enum": [
+        "project_match",
+        "format",
+        "commercial",
+        "technical",
+        "qualification",
+        "performance",
+        "capacity",
+        "consistency"
+      ],
+      "title": "RuleCategory",
+      "type": "string"
+    },
+    "RuleItem": {
+      "additionalProperties": false,
+      "properties": {
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/RuleStatus"
+        },
+        "category": {
+          "$ref": "#/$defs/RuleCategory"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "requirement": {
+          "title": "Requirement",
+          "type": "string"
+        },
+        "check_type": {
+          "title": "Check Type",
+          "type": "string"
+        },
+        "target_field": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Field"
+        },
+        "operator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operator"
+        },
+        "expected_value": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Value"
+        },
+        "scope": {
+          "$ref": "#/$defs/RuleScope"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "evidence_required": {
+          "default": false,
+          "title": "Evidence Required",
+          "type": "boolean"
+        },
+        "required_evidence_types": {
+          "items": {
+            "$ref": "#/$defs/EvidenceType"
+          },
+          "title": "Required Evidence Types",
+          "type": "array"
+        },
+        "conflict_note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conflict Note"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "supporting_sources": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Supporting Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "rule_id",
+        "status",
+        "category",
+        "name",
+        "requirement",
+        "check_type",
+        "severity",
+        "source"
+      ],
+      "title": "RuleItem",
+      "type": "object"
+    },
+    "RuleScope": {
+      "additionalProperties": false,
+      "properties": {
+        "package_no": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Package No"
+        },
+        "material_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material Name"
+        }
+      },
+      "title": "RuleScope",
+      "type": "object"
+    },
+    "RuleStatus": {
+      "enum": [
+        "active",
+        "rule_conflict",
+        "manual_review"
+      ],
+      "title": "RuleStatus",
+      "type": "string"
+    },
+    "Severity": {
+      "enum": [
+        "fatal",
+        "major",
+        "minor",
+        "info",
+        "unknown"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        },
+        "chunk_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chunk Id"
+        },
+        "file_name": {
+          "title": "File Name",
+          "type": "string"
+        },
+        "source_path": {
+          "title": "Source Path",
+          "type": "string"
+        },
+        "section": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Section"
+        },
+        "quote": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quote"
+        }
+      },
+      "required": [
+        "file_id",
+        "file_name",
+        "source_path"
+      ],
+      "title": "SourceRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "project_profile": {
+      "$ref": "#/$defs/ProjectProfile"
+    },
+    "rules": {
+      "items": {
+        "$ref": "#/$defs/RuleItem"
+      },
+      "title": "Rules",
+      "type": "array"
+    },
+    "source_files": {
+      "items": {
+        "$ref": "#/$defs/DocumentRef"
+      },
+      "title": "Source Files",
+      "type": "array"
+    }
+  },
+  "required": [
+    "project_id"
+  ],
+  "title": "RuleSet",
+  "type": "object"
+}
