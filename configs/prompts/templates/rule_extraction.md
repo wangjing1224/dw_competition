@@ -113,9 +113,26 @@ ${source_context}
 只返回一个符合下方 Schema 的 JSON 对象：
 
 - 顶层包含 `project_profile` 和 `rules`。
+- 项目基本信息必须放入 `project_profile`，不得把 `project_name`、`buyer`、
+  `material_category`、`bid_deadline` 或 `bid_validity_days` 平铺到顶层。
 - 没有可提取规则时，`rules` 返回空数组。
 - 不输出 Markdown 代码块。
 - 不输出分析过程、解释文字或 Schema 之外的字段。
+
+正确的顶层结构示例：
+
+```json
+{
+  "project_profile": {
+    "project_name": "示例项目",
+    "buyer": "示例采购人",
+    "material_category": "电力物资",
+    "bid_deadline": null,
+    "bid_validity_days": null
+  },
+  "rules": []
+}
+```
 
 `RuleExtractionBatch` JSON Schema：
 

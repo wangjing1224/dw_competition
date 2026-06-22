@@ -3,7 +3,7 @@
 from typing import Any
 
 from langchain_core.messages import SystemMessage
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.core.config import ChatModelSettings
 from app.llm.chat_model import invoke_structured
@@ -39,6 +39,31 @@ class ExtractedRule(StrictModel):
 class RuleExtractionBatch(StrictModel):
     project_profile: ProjectProfile = Field(default_factory=ProjectProfile)
     rules: list[ExtractedRule] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_flattened_project_profile(cls, value: Any) -> Any:
+        """兼容模型将 ProjectProfile 字段误放在顶层的常见格式偏差。"""
+
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        profile_fields = set(ProjectProfile.model_fields)
+        flattened = {
+            field: normalized.pop(field)
+            for field in profile_fields
+            if field in normalized
+        }
+        if not flattened:
+            return normalized
+
+        existing = normalized.get("project_profile")
+        if existing is None:
+            normalized["project_profile"] = flattened
+        elif isinstance(existing, dict):
+            # 正确嵌套字段优先，顶层字段只补充缺失值。
+            normalized["project_profile"] = {**flattened, **existing}
+        return normalized
 
 
 def _source_context(parsed: ParsedDocument) -> str:

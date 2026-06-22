@@ -20,4 +20,4 @@ def test_llama_cpp_embedding_does_not_send_dimensions(
     model = factory.build_embedding_model(temp_settings.embedding_model)
 
     assert "dimensions" not in captured
-    assert model.dimension == 2560
+    assert model.dimension == 1024

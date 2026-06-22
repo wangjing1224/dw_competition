@@ -51,11 +51,11 @@ embedding_model:
   api_key: ${EMBEDDING_API_KEY}
   # 该名称需要与 llama.cpp 启动时暴露的模型名一致。
   model: text-embedding-v4
-  # Qwen3-Embedding-4B 原生输出 2560 维。此处只用于响应校验和索引清单，
+  # Qwen3-Embedding-0.6B 原生输出 1024 维。此处只用于响应校验和索引清单，
   # 不会作为 dimensions 参数发送给不支持该参数的 llama.cpp 服务。
   # 修改模型、URL 或维度后必须删除旧索引并全量重建。
-  dimension: 2560
-  # 单次提交给 Embedding 服务的文本数量。
+  dimension: 1024
+  # 0.6B Q4 模型内存占用较低，先使用 16；服务不稳定时再降为 8 或 4。
   batch_size: 16
   timeout_seconds: 120
   max_retries: 2

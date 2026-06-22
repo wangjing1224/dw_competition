@@ -83,8 +83,8 @@ Rerank 模型固定下载到项目根目录的
 `models/Qwen/Qwen3-Reranker-0.6B`，`models/` 已加入 `.gitignore`，
 不会使用或依赖可能被清理的 `~/.cache`。
 
-当前 Embedding 使用本地 llama.cpp 部署的 `Qwen3-Embedding-4B`，按模型
-原生 2560 维输出进行校验。客户端不会发送 llama.cpp 未支持的
+当前 Embedding 使用本地 llama.cpp 部署的 `Qwen3-Embedding-0.6B`，按模型
+原生 1024 维输出进行校验。客户端不会发送 llama.cpp 未支持的
 `dimensions` 参数。
 
 Embedding 模型、URL 或维度变化后，停止服务并删除 `data/indexes/` 和
