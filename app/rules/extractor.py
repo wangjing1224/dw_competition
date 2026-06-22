@@ -13,11 +13,11 @@ from app.models.common import (
     RuleStatus,
     Severity,
     StrictModel,
-    generate_id,
 )
 from app.models.documents import ParsedDocument, SourceRef
 from app.models.rules import ProjectProfile, RuleItem, RuleScope, RuleSet
 from app.prompts.loader import render_prompt
+from app.storage.ids import next_id
 
 
 class ExtractedRule(StrictModel):
@@ -99,7 +99,7 @@ async def extract_rule_set(
         for extracted in batch.rules:
             rules.append(
                 RuleItem(
-                    rule_id=generate_id("rule"),
+                    rule_id=next_id("rule"),
                     status=RuleStatus.ACTIVE,
                     source=source,
                     supporting_sources=[],

@@ -7,10 +7,10 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.tools import BaseTool
 
 from app.llm.structured_output import validate_structured_content
-from app.models.common import generate_id
 from app.models.evidence import EvidenceReviewResult
 from app.prompts.loader import render_prompt
 from app.storage.repositories import AuditEventRepository
+from app.storage.ids import next_id
 
 
 def build_evidence_messages(state: dict[str, Any]) -> list[BaseMessage]:
@@ -101,7 +101,7 @@ def finalize_evidence_review(
         result = validate_structured_content(last.content, EvidenceReviewResult)
     else:
         result = EvidenceReviewResult(
-            evidence_result_id=generate_id("evidence-result"),
+            evidence_result_id="pending",
             claim_id=claim.claim_id,
             task_id=claim.task_id,
             project_id=claim.project_id,
@@ -133,6 +133,10 @@ def finalize_evidence_review(
     )
     if actual != expected:
         raise ValueError("EvidenceReviewResult 归属与 Claim 不一致")
+    # 结果 ID 由程序统一分配，不信任模型生成的随机长字符串。
+    result = result.model_copy(
+        update={"evidence_result_id": next_id("evidence-result")}
+    )
     event_repository.append(
         state["task_id"],
         actor="evidence_agent",

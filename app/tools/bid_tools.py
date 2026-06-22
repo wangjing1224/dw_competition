@@ -19,6 +19,7 @@ from app.storage.repositories import (
     AuditTaskRepository,
     FileRepository,
 )
+from app.storage.ids import next_id
 
 
 class SearchBidResponseInput(BaseModel):
@@ -166,6 +167,8 @@ class RequestEvidenceReviewTool(BaseTool):
     event_repository: AuditEventRepository
 
     async def _arun(self, claim: Claim) -> dict:
+        # Claim 的业务内容来自主 Agent，但 ID 由程序统一缩短和持久化分配。
+        claim = claim.model_copy(update={"claim_id": next_id("claim")})
         self.event_repository.append(
             claim.task_id,
             actor="tool",

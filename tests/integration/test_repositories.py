@@ -29,6 +29,10 @@ def test_task_cannot_bind_bidder_from_another_project(isolated_database):
     project_b = projects.create()
     bidder_b = bidders.create(project_b.project_id)
 
+    assert project_a.project_id == "project-1"
+    assert project_b.project_id == "project-2"
+    assert bidder_b.bidder_id == "bidder-1"
+
     with pytest.raises(Exception):
         tasks.create(project_a.project_id, bidder_b.bidder_id)
 

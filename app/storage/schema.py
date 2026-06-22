@@ -1,6 +1,12 @@
-"""项目、投标方、文件和审核任务四张业务表 DDL。"""
+"""业务表、观测事件表和短 ID 序列表 DDL。"""
 
 TABLE_DDLS = (
+    """
+    CREATE TABLE IF NOT EXISTS id_sequences (
+        prefix TEXT PRIMARY KEY,
+        current_value INTEGER NOT NULL CHECK (current_value >= 0)
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS projects (
         project_id TEXT PRIMARY KEY,

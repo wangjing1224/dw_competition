@@ -70,6 +70,7 @@
 - `consistency_issues`：列出主体、型号、数量、日期等明确冲突。
 - `manual_review_reason`：仅在 OCR、脱敏、外部核验或自动判断不足时填写。
 - `summary`：简洁说明支持程度、关键证据和主要缺口。
+- `evidence_result_id` 固定填写 `pending`，程序会替换为递增短 ID。
 
 所有身份字段、`claim_id`、`bid_file_id` 和 `rule_id` 必须与输入 Claim 完全一致。
 

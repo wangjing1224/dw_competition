@@ -14,11 +14,11 @@ from app.graph.audit_state import (
     current_rule,
 )
 from app.models.tasks import BidAgentDecisionAdapter
-from app.models.common import generate_id
 from app.models.findings import Finding
 from app.models.tasks import RecordFindingDecision
 from app.prompts.loader import render_prompt
 from app.storage.repositories import AuditEventRepository
+from app.storage.ids import next_id
 
 
 def _work_item(state: AuditState) -> dict[str, Any]:
@@ -111,7 +111,7 @@ async def bid_agent_node(
                     action="record_finding",
                     reason="规则本身存在冲突或需要人工复核，不执行普通响应判断",
                     finding=Finding(
-                        finding_id=generate_id("finding"),
+                        finding_id=next_id("finding"),
                         task_id=state["task_id"],
                         project_id=state["project_id"],
                         bidder_id=state["bidder_id"],

@@ -13,7 +13,6 @@ from app.graph.audit_state import (
 )
 from app.graph.routing import can_parse_decision
 from app.llm.structured_output import extract_json_value
-from app.models.common import generate_id
 from app.models.findings import Finding
 from app.models.results import AuditResult, FileAuditResult, ProjectMatch
 from app.models.tasks import (
@@ -22,6 +21,7 @@ from app.models.tasks import (
     RecordProjectMatchDecision,
 )
 from app.storage.repositories import AuditEventRepository
+from app.storage.ids import next_id
 
 
 CONCLUSION_ORDER = {
@@ -82,7 +82,7 @@ def _fallback_decision(state: AuditState) -> object:
         action="record_finding",
         reason="主 Agent 未在步数上限内形成合法结论",
         finding=Finding(
-            finding_id=generate_id("finding"),
+            finding_id="pending",
             task_id=state["task_id"],
             project_id=state["project_id"],
             bidder_id=state["bidder_id"],
@@ -113,6 +113,16 @@ def apply_bid_agent_output_node(
         )
     else:
         decision = _fallback_decision(state)
+
+    if isinstance(decision, RecordFindingDecision):
+        # Finding ID 由程序分配，避免模型返回 UUID 等冗长且不可控的标识。
+        decision = decision.model_copy(
+            update={
+                "finding": decision.finding.model_copy(
+                    update={"finding_id": next_id("finding")}
+                )
+            }
+        )
 
     bid_file = current_file(state)
     project_matches = dict(state["project_matches"])

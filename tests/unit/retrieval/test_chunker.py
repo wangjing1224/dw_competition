@@ -34,3 +34,4 @@ def test_chunk_id_is_stable():
     second = chunk_parsed_document(parsed, max_tokens=20, overlap_tokens=2)
 
     assert first[0].chunk_id == second[0].chunk_id
+    assert first[0].chunk_id == "chunk-1-1-1-1"

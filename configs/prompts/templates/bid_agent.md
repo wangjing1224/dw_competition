@@ -48,6 +48,7 @@
 
 - 只有当前投标文件已经出现具体声明，并且 RuleItem 要求支撑资料时才调用。
 - Claim 必须绑定当前 task、project、bidder、bid_file 和 rule。
+- Claim 中的 `claim_id` 固定填写 `pending`，程序会替换为递增短 ID。
 - 不得把整份投标文件或模糊问题作为 Claim。
 - 子 Agent 返回 `EvidenceReviewResult` 后，仍需由你形成最终 Finding。
 
@@ -103,6 +104,8 @@ Finding 结果含义：
 
 - 当前文件、当前规则对应的 `finding`
 - 本轮调用资料核验时返回的 `evidence_results`
+
+`finding.finding_id` 固定填写 `pending`，程序会替换为递增短 ID。
 
 不得重复写入同一文件和规则的 Finding。
 

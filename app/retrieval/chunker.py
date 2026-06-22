@@ -1,6 +1,5 @@
 """按章节和表格将统一解析结果切分为稳定索引片段。"""
 
-import hashlib
 import re
 
 from app.models.documents import ParsedDocument
@@ -38,15 +37,17 @@ def split_with_overlap(
 
 def _chunk_id(
     file_id: str,
-    section_id: str,
+    section_index: int,
     unit_index: int,
     chunk_index: int,
-    content: str,
 ) -> str:
-    raw = (
-        f"{file_id}:{section_id}:{unit_index}:{chunk_index}:{content}".encode()
+    """生成紧凑位置 ID，避免每条检索结果携带长哈希占用上下文。"""
+
+    file_number = file_id.removeprefix("file-")
+    return (
+        f"chunk-{file_number}-{section_index + 1}-"
+        f"{unit_index + 1}-{chunk_index + 1}"
     )
-    return f"chunk-{hashlib.sha1(raw).hexdigest()[:24]}"
 
 
 def chunk_parsed_document(
@@ -57,7 +58,7 @@ def chunk_parsed_document(
 ) -> list[IndexChunk]:
     chunks: list[IndexChunk] = []
     document = parsed.document
-    for section in parsed.sections:
+    for section_index, section in enumerate(parsed.sections):
         units = [section.content, *section.tables]
         for unit_index, unit in enumerate(units):
             for chunk_index, text in enumerate(
@@ -69,10 +70,9 @@ def chunk_parsed_document(
                     IndexChunk(
                         chunk_id=_chunk_id(
                             document.file_id,
-                            section.section_id,
+                            section_index,
                             unit_index,
                             chunk_index,
-                            text,
                         ),
                         file_id=document.file_id,
                         project_id=document.project_id,

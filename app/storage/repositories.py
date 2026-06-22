@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.errors import NotFoundError, StateConflict
-from app.models.common import generate_id
+from app.storage.ids import next_id
 from app.storage.database import open_db
 
 
@@ -82,7 +82,7 @@ class FileRecord:
 
 class ProjectRepository:
     def create(self, status: str = "processing_rules") -> ProjectRecord:
-        project_id = generate_id("project")
+        project_id = next_id("project")
         now = utc_now()
         with open_db() as connection:
             connection.execute(
@@ -145,7 +145,7 @@ class BidderRepository:
         self, project_id: str, status: str = "processing_evidence"
     ) -> BidderRecord:
         ProjectRepository().require(project_id)
-        bidder_id = generate_id("bidder")
+        bidder_id = next_id("bidder")
         now = utc_now()
         with open_db() as connection:
             connection.execute(
@@ -219,7 +219,7 @@ class AuditTaskRepository:
         progress: dict[str, Any] | None = None,
     ) -> AuditTaskRecord:
         BidderRepository().require(project_id, bidder_id)
-        task_id = generate_id("audit")
+        task_id = next_id("audit")
         now = utc_now()
         with open_db() as connection:
             connection.execute(

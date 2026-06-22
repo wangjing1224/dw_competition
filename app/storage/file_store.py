@@ -13,8 +13,8 @@ from typing import BinaryIO
 
 from app.core.config import get_settings
 from app.core.errors import BusinessError
-from app.models.common import generate_id
 from app.storage.repositories import FileRecord, FileRepository
+from app.storage.ids import next_id
 
 
 ALLOWED_EXTENSIONS = {".doc", ".docx", ".xlsx", ".txt", ".md", ".zip"}
@@ -71,7 +71,7 @@ class FileStore:
                 f"暂不支持文件格式: {extension or '无扩展名'}",
             )
 
-        file_id = generate_id("file")
+        file_id = next_id("file")
         owner_path = Path(owner.project_id)
         if owner.bidder_id:
             owner_path /= owner.bidder_id
