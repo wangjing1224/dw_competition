@@ -8,7 +8,7 @@ import pytest
 from app.models.results import AuditResult, FileAuditResult, ProjectMatch
 from app.models.rules import RuleSet
 from app.reports.service import ReportService
-from app.services.audit_task_service import AuditTaskService
+from app.services.audit_task_service import AuditTaskService, query_audit_task
 from app.services.background_runner import BackgroundRunner
 from app.storage.database import initialize_database
 from app.storage.file_store import FileStore
@@ -112,3 +112,12 @@ async def test_background_task_reaches_completed(monkeypatch, temp_settings):
     assert completed.json_path
     assert FileStore().resolve_relative(completed.json_path).exists()
     assert completed.word_paths == []
+    response = query_audit_task(task.task_id)
+    assert [event["event_type"] for event in response["events"]] == [
+        "task_created",
+        "stage_changed",
+        "stage_changed",
+        "stage_changed",
+        "stage_changed",
+        "task_completed",
+    ]

@@ -12,6 +12,12 @@ from app.models.results import ProjectMatch
 from app.models.rules import RuleItem, RuleSet
 from app.models.tasks import RecordFindingDecision, RecordProjectMatchDecision
 from app.services.audit_task_service import AuditTaskContext
+from app.storage.repositories import AuditEventRepository
+
+
+class NoopEventRepository(AuditEventRepository):
+    def append(self, *args, **kwargs):
+        return None
 
 
 class SequenceModel:
@@ -99,7 +105,11 @@ async def test_main_graph_builds_audit_result(temp_settings):
         ],
     )
 
-    result = await LangGraphAuditExecutor(temp_settings, models).run(context)
+    result = await LangGraphAuditExecutor(
+        temp_settings,
+        models,
+        NoopEventRepository(),
+    ).run(context)
 
     assert len(result.file_results) == 1
     assert result.file_results[0].overall_conclusion == "non_compliant"

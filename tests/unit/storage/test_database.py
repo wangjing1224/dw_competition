@@ -18,5 +18,11 @@ def test_initialize_database_is_idempotent(tmp_path):
             )
         }
 
-    assert {"projects", "bidders", "files", "audit_tasks"} <= tables
+    assert {
+        "projects",
+        "bidders",
+        "files",
+        "audit_tasks",
+        "audit_events",
+    } <= tables
     assert "schema_migrations" not in tables

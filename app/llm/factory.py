@@ -37,7 +37,9 @@ def build_embedding_model(settings: EmbeddingSettings) -> EmbeddingModel:
         model=settings.model,
         base_url=settings.base_url.rstrip("/"),
         api_key=api_key,
-        dimensions=settings.dimension,
+        # 本地 llama.cpp 的 OpenAI 兼容 Embedding 接口不支持
+        # dimensions 参数。配置中的 dimension 仅用于响应维度校验；
+        # Qwen3-Embedding-4B 直接返回原生 2560 维向量。
         chunk_size=settings.batch_size,
         timeout=settings.timeout_seconds,
         max_retries=settings.max_retries,

@@ -215,7 +215,61 @@ footer {
 .identity-list dt { color: var(--muted); font-size: 10px; }
 .identity-list dd { margin: 5px 0 0; overflow-wrap: anywhere; font: 11px ui-monospace, monospace; }
 .error-box { margin-top: 16px; padding: 13px; border-radius: 9px; color: var(--red); background: #fceaea; font-size: 11px; line-height: 1.6; }
-.result-section, .raw-section { margin-bottom: 16px; }
+.trace-section, .result-section, .raw-section { margin-bottom: 16px; }
+.trace-count { color: var(--muted); font-size: 11px; }
+.trace-note {
+  margin: -8px 0 20px; color: var(--muted); font-size: 11px; line-height: 1.7;
+}
+.agent-trace {
+  max-height: 620px; overflow: auto; padding: 2px 4px 2px 0;
+}
+.trace-empty {
+  padding: 38px; color: var(--muted); background: #f7f9f8;
+  border-radius: 10px; text-align: center; font-size: 12px;
+}
+.trace-event {
+  position: relative; display: grid; grid-template-columns: 28px 1fr;
+  gap: 11px; padding-bottom: 15px;
+}
+.trace-event::before {
+  content: ""; position: absolute; left: 13px; top: 20px; bottom: -1px;
+  width: 1px; background: var(--line);
+}
+.trace-event:last-child::before { display: none; }
+.trace-marker {
+  position: relative; z-index: 1; width: 27px; height: 27px;
+  border: 6px solid white; border-radius: 50%; background: var(--green);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.trace-event.actor-evidence_agent .trace-marker { background: var(--blue); }
+.trace-event.actor-tool .trace-marker { background: var(--gold); }
+.trace-event.actor-pipeline .trace-marker { background: #7d8b83; }
+.trace-event-body {
+  padding: 13px 15px; border: 1px solid var(--line);
+  border-radius: 11px; background: #fbfcfb;
+}
+.trace-event-head {
+  display: flex; align-items: center; justify-content: space-between;
+  color: var(--muted); font-size: 10px;
+}
+.trace-actor {
+  padding: 3px 7px; color: var(--green-dark); background: var(--green-soft);
+  border-radius: 5px; font-weight: 800;
+}
+.actor-evidence_agent .trace-actor { color: var(--blue); background: #e5f0fb; }
+.actor-tool .trace-actor { color: #79590d; background: #fff3d5; }
+.actor-pipeline .trace-actor { color: #536159; background: var(--surface-2); }
+.trace-event h3 { margin: 8px 0 7px; font-size: 13px; }
+.trace-detail { margin: 0; display: grid; gap: 5px; }
+.trace-detail div { display: grid; grid-template-columns: 82px 1fr; gap: 9px; }
+.trace-detail dt { color: var(--muted); font-size: 10px; }
+.trace-detail dd {
+  margin: 0; color: #3d4942; font-size: 11px; line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.trace-results { margin-top: 9px; }
+.trace-results summary { color: var(--green); cursor: pointer; font-size: 10px; }
+.trace-results pre { max-height: 180px; margin-top: 8px; font-size: 9px; }
 .download-actions { display: flex; gap: 8px; }
 .download-link { padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--green); font-size: 10px; font-weight: 700; }
 .result-table-wrap { overflow-x: auto; }

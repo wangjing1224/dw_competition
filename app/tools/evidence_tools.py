@@ -13,6 +13,7 @@ from app.retrieval.service import RetrievalService
 from app.retrieval.store import load_index
 from app.retrieval.index import embedding_config_fingerprint
 from app.core.config import AppSettings
+from app.storage.repositories import AuditEventRepository
 
 
 class SearchEvidenceInput(BaseModel):
@@ -33,6 +34,7 @@ class SearchEvidenceTool(BaseTool):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     retrieval_service: RetrievalService
+    event_repository: AuditEventRepository
 
     async def _arun(self, claim: Claim) -> list[dict]:
         results = await self.retrieval_service.search(
@@ -44,6 +46,26 @@ class SearchEvidenceTool(BaseTool):
                 data_role="evidence_material",
                 evidence_types=claim.required_evidence_types,
             ),
+        )
+        self.event_repository.append(
+            claim.task_id,
+            actor="tool",
+            event_type="tool_result",
+            title="检索投标方支撑资料完成",
+            detail={
+                "tool": self.name,
+                "claim_id": claim.claim_id,
+                "result_count": len(results),
+                "top_results": [
+                    {
+                        "file_id": item.source.file_id,
+                        "section": item.source.section,
+                        "evidence_type": item.evidence_type,
+                        "score": item.score,
+                    }
+                    for item in results[:5]
+                ],
+            },
         )
         return [
             EvidenceCandidate(
@@ -70,6 +92,7 @@ class RetrieveEvidenceSourceTool(BaseTool):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     settings: AppSettings
+    event_repository: AuditEventRepository
 
     def _run(self, claim: Claim, candidate: EvidenceCandidate) -> dict:
         # Claim 受信任，但候选仍必须属于 Claim 指定的投标方和项目。
@@ -95,6 +118,23 @@ class RetrieveEvidenceSourceTool(BaseTool):
         )
         if chunk is None:
             raise ToolException("候选资料片段不存在")
+        self.event_repository.append(
+            claim.task_id,
+            actor="tool",
+            event_type="tool_result",
+            title="读取支撑资料原文片段",
+            detail={
+                "tool": self.name,
+                "claim_id": claim.claim_id,
+                "file_id": candidate.file_id,
+                "chunk_id": candidate.chunk_id,
+                "section": chunk.section,
+                "content_chars": min(
+                    len(chunk.content),
+                    self.settings.retrieval.max_source_chars,
+                ),
+            },
+        )
         return RetrievedSource(
             source=chunk.source_ref(self.settings.retrieval.max_source_chars),
             content=chunk.content[: self.settings.retrieval.max_source_chars],

@@ -72,6 +72,80 @@ document.addEventListener("DOMContentLoaded", () => {
     area.innerHTML = links.join("");
   }
 
+  function actorLabel(actor) {
+    return {
+      pipeline: "流程",
+      main_agent: "主 Agent",
+      evidence_agent: "资料核验 Agent",
+      tool: "工具",
+    }[actor] || actor || "系统";
+  }
+
+  function renderEventDetail(detail) {
+    if (!detail || !Object.keys(detail).length) return "";
+    const preferred = [
+      ["file_name", "文件"],
+      ["rule_name", "规则"],
+      ["statement", "待核验声明"],
+      ["action", "动作"],
+      ["result", "审核结论"],
+      ["status", "核验状态"],
+      ["reason", "原因"],
+      ["summary", "摘要"],
+      ["result_count", "命中数量"],
+      ["file_result_count", "文件结果数"],
+    ];
+    const rows = preferred
+      .filter(([key]) => detail[key] !== undefined && detail[key] !== null)
+      .map(([key, label]) => `
+        <div><dt>${label}</dt><dd>${escapeHtml(detail[key])}</dd></div>
+      `)
+      .join("");
+    const tools = Array.isArray(detail.tools)
+      ? `<div><dt>计划工具</dt><dd>${detail.tools
+          .map((item) => escapeHtml(item.name))
+          .join("、")}</dd></div>`
+      : "";
+    const topResults = Array.isArray(detail.top_results) && detail.top_results.length
+      ? `
+        <details class="trace-results">
+          <summary>查看前 ${detail.top_results.length} 条检索命中</summary>
+          <pre>${escapeHtml(JSON.stringify(detail.top_results, null, 2))}</pre>
+        </details>
+      `
+      : "";
+    return `<dl class="trace-detail">${rows}${tools}</dl>${topResults}`;
+  }
+
+  function renderTrace(payload) {
+    const events = payload.events || [];
+    document.getElementById("trace-count").textContent = `${events.length} 条事件`;
+    const container = document.getElementById("agent-trace");
+    if (!events.length) {
+      container.innerHTML =
+        '<div class="trace-empty">该任务没有轨迹数据；旧任务需要重新执行审核</div>';
+      return;
+    }
+    container.innerHTML = [...events].reverse().map((event) => {
+      const time = event.created_at
+        ? new Date(event.created_at).toLocaleTimeString("zh-CN", { hour12: false })
+        : "—";
+      return `
+        <article class="trace-event actor-${escapeHtml(event.actor)}">
+          <div class="trace-marker"></div>
+          <div class="trace-event-body">
+            <div class="trace-event-head">
+              <span class="trace-actor">${escapeHtml(actorLabel(event.actor))}</span>
+              <time>${escapeHtml(time)}</time>
+            </div>
+            <h3>${escapeHtml(event.title)}</h3>
+            ${renderEventDetail(event.detail)}
+          </div>
+        </article>
+      `;
+    }).join("");
+  }
+
   function showDetail(item) {
     document.getElementById("dialog-title").textContent = item.file.file_name;
     const findings = item.findings.length
@@ -124,6 +198,7 @@ document.addEventListener("DOMContentLoaded", () => {
       errorBox.classList.add("hidden");
     }
     renderStages(payload.progress?.stage, payload.status);
+    renderTrace(payload);
     renderResults(payload);
     renderDownloads(payload);
 

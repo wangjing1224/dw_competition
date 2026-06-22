@@ -21,6 +21,7 @@ from app.models.tasks import (
     RecordFindingDecision,
     RecordProjectMatchDecision,
 )
+from app.storage.repositories import AuditEventRepository
 
 
 CONCLUSION_ORDER = {
@@ -100,7 +101,11 @@ def _fallback_decision(state: AuditState) -> object:
     )
 
 
-def apply_bid_agent_output_node(state: AuditState) -> dict[str, Any]:
+def apply_bid_agent_output_node(
+    state: AuditState,
+    *,
+    event_repository: AuditEventRepository | None = None,
+) -> dict[str, Any]:
     last = state["messages"][-1] if state["messages"] else None
     if last is not None and can_parse_decision(last):
         decision = BidAgentDecisionAdapter.validate_python(
@@ -116,6 +121,31 @@ def apply_bid_agent_output_node(state: AuditState) -> dict[str, Any]:
     file_results = list(state["file_results"])
     bid_index = state["current_bid_index"]
     rule_index = state["current_rule_index"]
+
+    if event_repository is not None:
+        event_repository.append(
+            state["task_id"],
+            actor="main_agent",
+            event_type="agent_decision",
+            title="主 Agent 形成审核决策",
+            detail={
+                "file_id": bid_file.file_id,
+                "file_name": bid_file.file_name,
+                "action": getattr(decision, "action", "no_rule"),
+                "reason": getattr(decision, "reason", None),
+                "rule_id": (
+                    current_rule(state).rule_id
+                    if bid_file.file_id in state["project_matches"]
+                    and applicable_rules_for_file(state["rule_set"], bid_file)
+                    else None
+                ),
+                "result": (
+                    str(decision.finding.result)
+                    if isinstance(decision, RecordFindingDecision)
+                    else None
+                ),
+            },
+        )
 
     if decision is None:
         project_match = project_matches[bid_file.file_id]

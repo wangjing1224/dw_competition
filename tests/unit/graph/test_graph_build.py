@@ -21,7 +21,6 @@ def test_graph_compiles_without_calling_external_models(temp_settings):
             "bid_chat_model": with_key(temp_settings.bid_chat_model),
             "evidence_chat_model": with_key(temp_settings.evidence_chat_model),
             "embedding_model": with_key(temp_settings.embedding_model),
-            "rerank_model": with_key(temp_settings.rerank_model),
         }
     )
 

@@ -61,15 +61,27 @@ http://127.0.0.1:8000/web/
 
 ## 模型配置
 
-- `.env`：保存六类模型连接地址和 Key，不提交 Git。
+- `.env`：保存四类 Chat 模型和 Embedding 的连接地址、Key，不提交 Git。
 - `configs/model.yaml`：保存模型名、温度、超时、重试、维度和批大小。
 - `configs/retrieval.yaml`：保存分段、候选数量和混合召回权重。
 - `configs/storage.yaml`：保存数据目录、SQLite 路径和上传安全限制。
 - `configs/prompts/`：保存四套 Prompt 模板和五个 Tool 的模型可见说明。
 
 Chat 和 Embedding 使用 LangChain 的 OpenAI 兼容封装。首期可使用阿里百炼；
-后续切换本地服务时，修改对应 URL、Key 和模型名即可。Rerank 使用独立原生
-HTTP 适配层，因为 OpenAI API 没有统一 Rerank 协议。
+后续切换本地服务时，修改对应 URL、Key 和模型名即可。Rerank 使用进程内
+`sentence-transformers` CrossEncoder，默认加载 `Qwen3-Reranker-0.6B`：
+Mac 优先使用 MPS，Linux 优先使用可用的 NPU/CUDA，设备加载或推理失败时
+自动回退 CPU。模型在第一次检索时通过魔塔社区下载并复用本地缓存，不影响
+后端启动速度。离线服务器可提前下载模型，并把 `model` 改为本地目录、
+`source` 改为 `local`。
+
+Rerank 模型固定下载到项目根目录的
+`models/Qwen/Qwen3-Reranker-0.6B`，`models/` 已加入 `.gitignore`，
+不会使用或依赖可能被清理的 `~/.cache`。
+
+当前 Embedding 使用本地 llama.cpp 部署的 `Qwen3-Embedding-4B`，按模型
+原生 2560 维输出进行校验。客户端不会发送 llama.cpp 未支持的
+`dimensions` 参数。
 
 Embedding 模型、URL 或维度变化后，停止服务并删除 `data/indexes/` 和
 `data/app.db`，再依次重新调用项目、投标方和审核任务接口。

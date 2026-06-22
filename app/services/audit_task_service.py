@@ -19,6 +19,7 @@ from app.retrieval.models import IndexScope
 from app.services.background_runner import BackgroundRunner
 from app.storage.file_store import FileOwner, FileStore
 from app.storage.repositories import (
+    AuditEventRepository,
     AuditTaskRecord,
     AuditTaskRepository,
     BidderRepository,
@@ -55,6 +56,7 @@ class AuditTaskService:
         task_repository: AuditTaskRepository | None = None,
         file_repository: FileRepository | None = None,
         file_store: FileStore | None = None,
+        event_repository: AuditEventRepository | None = None,
     ) -> None:
         self.settings = settings
         self.embedding_model = embedding_model
@@ -64,6 +66,7 @@ class AuditTaskService:
         self.task_repository = task_repository or AuditTaskRepository()
         self.file_repository = file_repository or FileRepository()
         self.file_store = file_store or FileStore(self.file_repository)
+        self.event_repository = event_repository or AuditEventRepository()
 
     async def create_task(
         self,
@@ -91,6 +94,13 @@ class AuditTaskService:
                 "completed": 0,
                 "total": len(uploads),
             },
+        )
+        self.event_repository.append(
+            task.task_id,
+            actor="pipeline",
+            event_type="task_created",
+            title="审核任务已创建",
+            detail={"file_count": len(uploads)},
         )
         try:
             records = [
@@ -124,6 +134,13 @@ class AuditTaskService:
             self.task_repository.update_progress(
                 task_id, {"stage": "parsing_bid_documents"}
             )
+            self.event_repository.append(
+                task_id,
+                actor="pipeline",
+                event_type="stage_changed",
+                title="开始解析投标文件",
+                detail={"file_count": len(file_ids)},
+            )
             records = [self.file_repository.require(file_id) for file_id in file_ids]
             documents = [document_ref_from_record(record) for record in records]
             [parse_document(document) for document in documents]
@@ -131,6 +148,12 @@ class AuditTaskService:
             task = self.task_repository.require(task_id)
             self.task_repository.update_progress(
                 task_id, {"stage": "building_bid_index"}
+            )
+            self.event_repository.append(
+                task_id,
+                actor="pipeline",
+                event_type="stage_changed",
+                title="开始构建投标文件索引",
             )
             await build_document_index(
                 IndexScope(
@@ -146,12 +169,32 @@ class AuditTaskService:
             )
 
             self.task_repository.update_progress(task_id, {"stage": "auditing"})
+            self.event_repository.append(
+                task_id,
+                actor="pipeline",
+                event_type="stage_changed",
+                title="进入智能审核阶段",
+            )
             result = await self.audit_executor.run(self.build_context(task_id))
 
             self.task_repository.update_progress(
                 task_id, {"stage": "writing_outputs"}
             )
+            self.event_repository.append(
+                task_id,
+                actor="pipeline",
+                event_type="stage_changed",
+                title="智能审核完成，开始生成报告",
+                detail={"file_result_count": len(result.file_results)},
+            )
             await self.output_finalizer.finalize(task_id, result)
+            self.event_repository.append(
+                task_id,
+                actor="pipeline",
+                event_type="task_completed",
+                title="审核任务执行完成",
+                detail={"file_result_count": len(result.file_results)},
+            )
         except Exception as exc:
             current = self.task_repository.require(task_id)
             if current.status == "running":
@@ -204,6 +247,17 @@ def query_audit_task(
         "bidder_id": task.bidder_id,
         "status": task.status,
         "progress": task.progress,
+        "events": [
+            {
+                "event_id": event.event_id,
+                "actor": event.actor,
+                "event_type": event.event_type,
+                "title": event.title,
+                "detail": event.detail,
+                "created_at": event.created_at,
+            }
+            for event in AuditEventRepository().list_by_task(task_id)
+        ],
     }
     if task.status in {"completed", "completed_with_report_error"}:
         response["outputs"] = {

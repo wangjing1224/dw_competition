@@ -18,7 +18,11 @@ from app.graph.state_updates import (
 from app.llm.factory import ModelRegistry
 from app.retrieval.service import RetrievalService
 from app.services.audit_task_service import AuditExecutor, AuditTaskContext
-from app.storage.repositories import AuditTaskRepository, FileRepository
+from app.storage.repositories import (
+    AuditEventRepository,
+    AuditTaskRepository,
+    FileRepository,
+)
 from app.tools.bid_tools import (
     RequestEvidenceReviewTool,
     RetrieveRuleSourceTool,
@@ -30,36 +34,63 @@ from app.tools.evidence_tools import (
 )
 
 
-def build_audit_graph(settings: AppSettings, models: ModelRegistry):
+def build_audit_graph(
+    settings: AppSettings,
+    models: ModelRegistry,
+    event_repository: AuditEventRepository | None = None,
+):
     """主图仅包含 Agent、Tool、状态更新和结果汇总四类节点。"""
 
+    events = event_repository or AuditEventRepository()
     retrieval = RetrievalService(models.embedding, models.rerank, settings)
     evidence_tools = [
-        SearchEvidenceTool(retrieval_service=retrieval),
-        RetrieveEvidenceSourceTool(settings=settings),
+        SearchEvidenceTool(
+            retrieval_service=retrieval,
+            event_repository=events,
+        ),
+        RetrieveEvidenceSourceTool(
+            settings=settings,
+            event_repository=events,
+        ),
     ]
     evidence_graph = build_evidence_graph(
         models.evidence_chat,
         evidence_tools,
         max_steps=8,
+        event_repository=events,
     )
     bid_tools = [
         SearchBidResponseTool(
             task_repository=AuditTaskRepository(),
             file_repository=FileRepository(),
             retrieval_service=retrieval,
+            event_repository=events,
         ),
-        RetrieveRuleSourceTool(settings=settings),
-        RequestEvidenceReviewTool(evidence_graph=evidence_graph),
+        RetrieveRuleSourceTool(
+            settings=settings,
+            event_repository=events,
+        ),
+        RequestEvidenceReviewTool(
+            evidence_graph=evidence_graph,
+            event_repository=events,
+        ),
     ]
 
     graph = StateGraph(AuditState)
     graph.add_node(
         "bid_agent",
-        partial(bid_agent_node, model=models.bid_chat, tools=bid_tools),
+        partial(
+            bid_agent_node,
+            model=models.bid_chat,
+            tools=bid_tools,
+            event_repository=events,
+        ),
     )
     graph.add_node("tools", ToolNode(bid_tools))
-    graph.add_node("apply_output", apply_bid_agent_output_node)
+    graph.add_node(
+        "apply_output",
+        partial(apply_bid_agent_output_node, event_repository=events),
+    )
     graph.add_node("build_result", build_audit_result_node)
     graph.set_entry_point("bid_agent")
     graph.add_conditional_edges(
@@ -85,13 +116,27 @@ def build_audit_graph(settings: AppSettings, models: ModelRegistry):
 class LangGraphAuditExecutor(AuditExecutor):
     """每个服务实例编译一张图，thread_id 使用 task_id 防止状态串线。"""
 
-    def __init__(self, settings: AppSettings, models: ModelRegistry) -> None:
-        self.graph = build_audit_graph(settings, models)
+    def __init__(
+        self,
+        settings: AppSettings,
+        models: ModelRegistry,
+        event_repository: AuditEventRepository | None = None,
+    ) -> None:
+        self.graph = build_audit_graph(settings, models, event_repository)
 
     async def run(self, context: AuditTaskContext):
         final_state = await self.graph.ainvoke(
             build_initial_audit_state(context),
-            config={"configurable": {"thread_id": context.task_id}},
+            config={
+                "configurable": {"thread_id": context.task_id},
+                "run_name": "bid_audit_agent",
+                "tags": ["audit", "bid-agent"],
+                "metadata": {
+                    "task_id": context.task_id,
+                    "project_id": context.project_id,
+                    "bidder_id": context.bidder_id,
+                },
+            },
         )
         result = final_state.get("audit_result")
         if result is None:

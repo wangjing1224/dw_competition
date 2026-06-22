@@ -81,6 +81,18 @@ TABLE_DDLS = (
         )
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS audit_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        detail_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES audit_tasks(task_id)
+    )
+    """,
 )
 
 INDEX_DDLS = (
@@ -89,5 +101,9 @@ INDEX_DDLS = (
     """
     CREATE INDEX IF NOT EXISTS idx_files_scope
     ON files(project_id, bidder_id, task_id, data_role)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_audit_events_task
+    ON audit_events(task_id, event_id)
     """,
 )

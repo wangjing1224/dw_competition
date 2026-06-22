@@ -13,6 +13,7 @@ from app.agents.evidence_subagent import (
     route_evidence_agent,
 )
 from app.graph.evidence_state import EvidenceState
+from app.storage.repositories import AuditEventRepository
 
 
 def build_evidence_graph(
@@ -20,14 +21,24 @@ def build_evidence_graph(
     tools: list[BaseTool],
     *,
     max_steps: int = 8,
+    event_repository: AuditEventRepository | None = None,
 ):
+    events = event_repository or AuditEventRepository()
     graph = StateGraph(EvidenceState)
     graph.add_node(
         "agent",
-        partial(evidence_agent_node, model=model, tools=tools),
+        partial(
+            evidence_agent_node,
+            model=model,
+            tools=tools,
+            event_repository=events,
+        ),
     )
     graph.add_node("tools", ToolNode(tools))
-    graph.add_node("finalize", finalize_evidence_review)
+    graph.add_node(
+        "finalize",
+        partial(finalize_evidence_review, event_repository=events),
+    )
     graph.set_entry_point("agent")
     graph.add_conditional_edges(
         "agent",

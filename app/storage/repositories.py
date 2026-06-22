@@ -49,6 +49,19 @@ class AuditTaskRecord:
 
 
 @dataclass(frozen=True)
+class AuditEventRecord:
+    """供任务观测页展示的可读事件，不保存模型隐藏思维过程。"""
+
+    event_id: int
+    task_id: str
+    actor: str
+    event_type: str
+    title: str
+    detail: dict[str, Any]
+    created_at: str
+
+
+@dataclass(frozen=True)
 class FileRecord:
     file_id: str
     project_id: str
@@ -400,6 +413,77 @@ class AuditTaskRepository:
                 (utc_now(),),
             ).rowcount
         return updated
+
+
+class AuditEventRepository:
+    """按任务追加和读取 Agent、Tool、Pipeline 的轻量观测事件。"""
+
+    def append(
+        self,
+        task_id: str,
+        *,
+        actor: str,
+        event_type: str,
+        title: str,
+        detail: dict[str, Any] | None = None,
+    ) -> AuditEventRecord:
+        now = utc_now()
+        with open_db() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO audit_events(
+                    task_id, actor, event_type, title, detail_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    actor,
+                    event_type,
+                    title,
+                    json.dumps(detail or {}, ensure_ascii=False),
+                    now,
+                ),
+            )
+            event_id = int(cursor.lastrowid)
+        return AuditEventRecord(
+            event_id=event_id,
+            task_id=task_id,
+            actor=actor,
+            event_type=event_type,
+            title=title,
+            detail=detail or {},
+            created_at=now,
+        )
+
+    def list_by_task(
+        self,
+        task_id: str,
+        *,
+        limit: int = 500,
+    ) -> list[AuditEventRecord]:
+        AuditTaskRepository().require(task_id)
+        with open_db() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM audit_events
+                 WHERE task_id = ?
+                 ORDER BY event_id ASC
+                 LIMIT ?
+                """,
+                (task_id, limit),
+            ).fetchall()
+        return [
+            AuditEventRecord(
+                event_id=row["event_id"],
+                task_id=row["task_id"],
+                actor=row["actor"],
+                event_type=row["event_type"],
+                title=row["title"],
+                detail=json.loads(row["detail_json"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
 
 
 class FileRepository:

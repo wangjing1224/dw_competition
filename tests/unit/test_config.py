@@ -9,7 +9,8 @@ def test_settings_load_yaml_and_environment(monkeypatch):
 
     settings = get_settings()
 
-    assert settings.bid_chat_model.model == "qwen-plus"
+    assert settings.bid_chat_model.model == "qwen3.7-plus"
     assert settings.bid_chat_model.api_key.get_secret_value() == "test-secret"
     assert "test-secret" not in repr(settings.bid_chat_model)
     assert settings.storage.database_path.is_absolute()
+    assert settings.rerank_model.cache_dir == settings.project_root / "models"

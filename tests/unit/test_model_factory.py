@@ -1,0 +1,23 @@
+"""模型工厂参数契约测试。"""
+
+from app.llm import factory
+
+
+def test_llama_cpp_embedding_does_not_send_dimensions(
+    monkeypatch,
+    temp_settings,
+):
+    """llama.cpp 不支持 dimensions，维度只在本地用于响应校验。"""
+
+    captured = {}
+
+    class FakeOpenAIEmbeddings:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(factory, "OpenAIEmbeddings", FakeOpenAIEmbeddings)
+
+    model = factory.build_embedding_model(temp_settings.embedding_model)
+
+    assert "dimensions" not in captured
+    assert model.dimension == 2560

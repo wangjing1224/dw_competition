@@ -14,7 +14,11 @@ from app.retrieval.index import embedding_config_fingerprint
 from app.retrieval.models import IndexFilter
 from app.retrieval.service import RetrievalService
 from app.retrieval.store import load_index
-from app.storage.repositories import AuditTaskRepository, FileRepository
+from app.storage.repositories import (
+    AuditEventRepository,
+    AuditTaskRepository,
+    FileRepository,
+)
 
 
 class SearchBidResponseInput(BaseModel):
@@ -26,6 +30,7 @@ class SearchBidResponseInput(BaseModel):
 
 class RetrieveRuleSourceInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    task_id: str
     project_id: str
     source: SourceRef
 
@@ -44,6 +49,7 @@ class SearchBidResponseTool(BaseTool):
     task_repository: AuditTaskRepository
     file_repository: FileRepository
     retrieval_service: RetrievalService
+    event_repository: AuditEventRepository
 
     async def _arun(
         self, task_id: str, bid_file_id: str, rule: RuleItem
@@ -63,6 +69,26 @@ class SearchBidResponseTool(BaseTool):
                 file_ids=[bid_file_id],
             ),
         )
+        self.event_repository.append(
+            task_id,
+            actor="tool",
+            event_type="tool_result",
+            title="检索投标响应完成",
+            detail={
+                "tool": self.name,
+                "rule_id": rule.rule_id,
+                "rule_name": rule.name,
+                "result_count": len(results),
+                "top_results": [
+                    {
+                        "file_id": item.source.file_id,
+                        "section": item.source.section,
+                        "score": item.score,
+                    }
+                    for item in results[:5]
+                ],
+            },
+        )
         return [item.model_dump(mode="json") for item in results]
 
     def _run(self, **_: object) -> object:
@@ -76,8 +102,12 @@ class RetrieveRuleSourceTool(BaseTool):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     settings: AppSettings
+    event_repository: AuditEventRepository
 
-    def _run(self, project_id: str, source: SourceRef) -> dict:
+    def _run(self, task_id: str, project_id: str, source: SourceRef) -> dict:
+        task = AuditTaskRepository().require(task_id)
+        if task.project_id != project_id:
+            raise ToolException("审核任务不属于当前项目")
         index = load_index(
             f"rules-{project_id}",
             expected_fingerprint=embedding_config_fingerprint(
@@ -95,14 +125,35 @@ class RetrieveRuleSourceTool(BaseTool):
         )
         if chunk is None:
             raise ToolException("规则来源不属于当前项目或片段不存在")
+        self.event_repository.append(
+            task_id,
+            actor="tool",
+            event_type="tool_result",
+            title="读取招标规则原文片段",
+            detail={
+                "tool": self.name,
+                "file_id": source.file_id,
+                "chunk_id": chunk.chunk_id,
+                "section": chunk.section,
+                "content_chars": min(
+                    len(chunk.content),
+                    self.settings.retrieval.max_source_chars,
+                ),
+            },
+        )
         return RetrievedSource(
             source=chunk.source_ref(self.settings.retrieval.max_source_chars),
             content=chunk.content[: self.settings.retrieval.max_source_chars],
             parse_status=chunk.parse_status,
         ).model_dump(mode="json")
 
-    async def _arun(self, project_id: str, source: SourceRef) -> dict:
-        return self._run(project_id, source)
+    async def _arun(
+        self,
+        task_id: str,
+        project_id: str,
+        source: SourceRef,
+    ) -> dict:
+        return self._run(task_id, project_id, source)
 
 
 class RequestEvidenceReviewTool(BaseTool):
@@ -112,8 +163,24 @@ class RequestEvidenceReviewTool(BaseTool):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     evidence_graph: Any
+    event_repository: AuditEventRepository
 
     async def _arun(self, claim: Claim) -> dict:
+        self.event_repository.append(
+            claim.task_id,
+            actor="tool",
+            event_type="subagent_started",
+            title="主 Agent 委派资料核验任务",
+            detail={
+                "tool": self.name,
+                "claim_id": claim.claim_id,
+                "rule_id": claim.rule_id,
+                "statement": claim.statement[:300],
+                "required_evidence_types": [
+                    str(item) for item in claim.required_evidence_types
+                ],
+            },
+        )
         final_state = await self.evidence_graph.ainvoke(
             {
                 "messages": [],
@@ -124,11 +191,34 @@ class RequestEvidenceReviewTool(BaseTool):
                 "review_result": None,
                 "errors": [],
                 "step_count": 0,
-            }
+            },
+            config={
+                "run_name": "evidence_review_agent",
+                "tags": ["audit", "evidence-agent"],
+                "metadata": {
+                    "task_id": claim.task_id,
+                    "project_id": claim.project_id,
+                    "bidder_id": claim.bidder_id,
+                    "claim_id": claim.claim_id,
+                    "rule_id": claim.rule_id,
+                },
+            },
         )
         result = final_state.get("review_result")
         if result is None:
             raise ToolException("资料核验子图没有返回结果")
+        self.event_repository.append(
+            claim.task_id,
+            actor="tool",
+            event_type="subagent_completed",
+            title="资料核验子任务返回主 Agent",
+            detail={
+                "tool": self.name,
+                "claim_id": claim.claim_id,
+                "status": str(result.status),
+                "summary": result.summary,
+            },
+        )
         return result.model_dump(mode="json") if hasattr(result, "model_dump") else result
 
     def _run(self, **_: object) -> object:

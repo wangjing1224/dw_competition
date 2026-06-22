@@ -4,7 +4,7 @@ rule_extraction_model:
   base_url: ${RULE_EXTRACTION_MODEL_BASE_URL}
   api_key: ${RULE_EXTRACTION_MODEL_API_KEY}
   # 模型名可直接替换为百炼或本地 OpenAI 兼容服务提供的模型。
-  model: qwen-plus
+  model: qwen3.7-plus
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -16,7 +16,7 @@ rule_extraction_model:
 evidence_classification_model:
   base_url: ${EVIDENCE_CLASSIFICATION_MODEL_BASE_URL}
   api_key: ${EVIDENCE_CLASSIFICATION_MODEL_API_KEY}
-  model: qwen-plus
+  model: qwen3.7-plus
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -27,7 +27,7 @@ evidence_classification_model:
 bid_chat_model:
   base_url: ${BID_CHAT_MODEL_BASE_URL}
   api_key: ${BID_CHAT_MODEL_API_KEY}
-  model: qwen-plus
+  model: qwen3.7-plus
   temperature: 0.2
   timeout_seconds: 120
   max_retries: 2
@@ -38,7 +38,7 @@ bid_chat_model:
 evidence_chat_model:
   base_url: ${EVIDENCE_CHAT_MODEL_BASE_URL}
   api_key: ${EVIDENCE_CHAT_MODEL_API_KEY}
-  model: qwen-plus
+  model: qwen3.7-plus
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -49,22 +49,45 @@ evidence_chat_model:
 embedding_model:
   base_url: ${EMBEDDING_BASE_URL}
   api_key: ${EMBEDDING_API_KEY}
+  # 该名称需要与 llama.cpp 启动时暴露的模型名一致。
   model: text-embedding-v4
-  # 必须与模型服务实际输出维度一致；修改模型或维度后需要重建索引。
-  dimension: 1024
+  # Qwen3-Embedding-4B 原生输出 2560 维。此处只用于响应校验和索引清单，
+  # 不会作为 dimensions 参数发送给不支持该参数的 llama.cpp 服务。
+  # 修改模型、URL 或维度后必须删除旧索引并全量重建。
+  dimension: 2560
   # 单次提交给 Embedding 服务的文本数量。
   batch_size: 16
   timeout_seconds: 120
   max_retries: 2
 
-# 重排序模型：对向量和关键词初召回结果进行相关性重排。
+# 本地重排序模型：在后端进程内对向量和关键词初召回结果进行相关性重排。
+# 模型不会在服务启动时加载，第一次实际检索时才懒加载。
 rerank_model:
-  base_url: ${RERANK_BASE_URL}
-  api_key: ${RERANK_API_KEY}
-  model: local-reranker
+  # 魔塔模型 ID；若 model 填写的是已存在的本地目录，会直接使用本地文件。
+  model: Qwen/Qwen3-Reranker-0.6B
+  # modelscope：首次使用时从魔塔下载并复用缓存。
+  # local：只允许 model 指向已存在的本地目录，适合离线服务器。
+  source: modelscope
+  # 相对路径固定解析到项目根目录。实际模型位于
+  # models/Qwen/Qwen3-Reranker-0.6B，不使用 ~/.cache 临时缓存。
+  cache_dir: models
+  # auto 自动选择 npu、cuda、mps、cpu；加速设备失败时会自动改用 CPU。
+  # 你的 Mac 会优先选择 mps，服务器没有可用加速运行时则直接使用 cpu。
+  device: auto
+  # auto 在加速设备上使用 float16，在 CPU 上使用 float32。
+  dtype: auto
+  # Mac 内存较小时建议 2～4；服务器显存充足时可适当增大。
+  batch_size: 4
+  # 当前片段约 800 token，2048 足够且能控制内存；无需使用模型 32K 上限。
+  max_length: 2048
   # 最多保留的重排结果数量。
   top_n: 10
-  timeout_seconds: 120
-  max_retries: 2
+  # 官方建议按具体任务定制 instruction，并优先使用英文。
+  instruction: >-
+    Given an electric power tender review requirement, rank the document
+    passages by how directly and completely they provide evidence for the
+    requirement.
+  # 使用魔塔缓存且禁止联网时可设为 true；完全离线部署更建议 source=local。
+  local_files_only: false
   # Rerank 不可用时是否退回初召回顺序，避免整个审核任务直接失败。
   allow_degradation: true

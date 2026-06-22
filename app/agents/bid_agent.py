@@ -18,6 +18,7 @@ from app.models.common import generate_id
 from app.models.findings import Finding
 from app.models.tasks import RecordFindingDecision
 from app.prompts.loader import render_prompt
+from app.storage.repositories import AuditEventRepository
 
 
 def _work_item(state: AuditState) -> dict[str, Any]:
@@ -79,10 +80,30 @@ async def bid_agent_node(
     *,
     model: BaseChatModel,
     tools: list[BaseTool],
+    event_repository: AuditEventRepository,
 ) -> dict[str, Any]:
     bid_file = current_file(state)
+    rules = applicable_rules_for_file(state["rule_set"], bid_file)
+    rule = (
+        rules[state["current_rule_index"]]
+        if bid_file.file_id in state["project_matches"] and rules
+        else None
+    )
+    event_repository.append(
+        state["task_id"],
+        actor="main_agent",
+        event_type="agent_turn_started",
+        title="主 Agent 开始分析当前审核单元",
+        detail={
+            "step": state["react_step_count"] + 1,
+            "file_id": bid_file.file_id,
+            "file_name": bid_file.file_name,
+            "work_kind": "rule_audit" if rule else "project_match",
+            "rule_id": rule.rule_id if rule else None,
+            "rule_name": rule.name if rule else None,
+        },
+    )
     if bid_file.file_id in state["project_matches"]:
-        rules = applicable_rules_for_file(state["rule_set"], bid_file)
         if rules:
             rule = current_rule(state)
             if str(rule.status) in {"rule_conflict", "manual_review"}:
@@ -114,6 +135,23 @@ async def bid_agent_node(
                     "react_step_count": state["react_step_count"] + 1,
                 }
     response = await model.bind_tools(tools).ainvoke(build_bid_agent_messages(state))
+    if response.tool_calls:
+        event_repository.append(
+            state["task_id"],
+            actor="main_agent",
+            event_type="tool_plan",
+            title="主 Agent 请求调用工具",
+            detail={
+                "step": state["react_step_count"] + 1,
+                "tools": [
+                    {
+                        "name": call.get("name"),
+                        "call_id": call.get("id"),
+                    }
+                    for call in response.tool_calls
+                ],
+            },
+        )
     return {
         "messages": [response],
         "react_step_count": state["react_step_count"] + 1,

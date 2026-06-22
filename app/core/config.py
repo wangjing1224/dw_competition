@@ -49,14 +49,18 @@ class EmbeddingSettings(ConfigModel):
 
 
 class RerankSettings(ConfigModel):
-    """Rerank 原生服务配置和不可用时的降级策略。"""
+    """进程内 Rerank 模型、设备、批处理和降级配置。"""
 
-    base_url: str
-    api_key: SecretStr
     model: str
+    source: Literal["modelscope", "local"] = "modelscope"
+    cache_dir: Path
+    device: str = "auto"
+    dtype: Literal["auto", "float16", "bfloat16", "float32"] = "auto"
+    batch_size: int = Field(gt=0)
+    max_length: int = Field(gt=0)
     top_n: int = Field(gt=0)
-    timeout_seconds: float = Field(gt=0)
-    max_retries: int = Field(ge=0)
+    instruction: str
+    local_files_only: bool = False
     allow_degradation: bool = True
 
 
@@ -177,5 +181,9 @@ def get_settings() -> AppSettings:
     raw["storage"]["data_root"] = _resolve_path(raw["storage"]["data_root"])
     raw["storage"]["database_path"] = _resolve_path(
         raw["storage"]["database_path"]
+    )
+    # 模型缓存也固定到项目根目录，避免依赖可能被系统清理的用户缓存目录。
+    raw["rerank_model"]["cache_dir"] = _resolve_path(
+        raw["rerank_model"]["cache_dir"]
     )
     return AppSettings.model_validate(raw)

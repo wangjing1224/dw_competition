@@ -10,6 +10,7 @@ from app.llm.structured_output import validate_structured_content
 from app.models.common import generate_id
 from app.models.evidence import EvidenceReviewResult
 from app.prompts.loader import render_prompt
+from app.storage.repositories import AuditEventRepository
 
 
 def build_evidence_messages(state: dict[str, Any]) -> list[BaseMessage]:
@@ -34,8 +35,39 @@ async def evidence_agent_node(
     *,
     model: BaseChatModel,
     tools: list[BaseTool],
+    event_repository: AuditEventRepository,
 ) -> dict[str, Any]:
+    claim = state["claim"]
+    event_repository.append(
+        state["task_id"],
+        actor="evidence_agent",
+        event_type="agent_turn_started",
+        title="资料核验子 Agent 分析 Claim",
+        detail={
+            "step": state["step_count"] + 1,
+            "claim_id": claim.claim_id,
+            "rule_id": claim.rule_id,
+            "statement": claim.statement[:300],
+        },
+    )
     response = await model.bind_tools(tools).ainvoke(build_evidence_messages(state))
+    if response.tool_calls:
+        event_repository.append(
+            state["task_id"],
+            actor="evidence_agent",
+            event_type="tool_plan",
+            title="资料核验子 Agent 请求调用工具",
+            detail={
+                "claim_id": claim.claim_id,
+                "tools": [
+                    {
+                        "name": call.get("name"),
+                        "call_id": call.get("id"),
+                    }
+                    for call in response.tool_calls
+                ],
+            },
+        )
     return {"messages": [response], "step_count": state["step_count"] + 1}
 
 
@@ -58,7 +90,11 @@ def route_evidence_agent(state: dict[str, Any], max_steps: int) -> str:
     return "limit_reached" if state["step_count"] >= max_steps else "agent"
 
 
-def finalize_evidence_review(state: dict[str, Any]) -> dict[str, Any]:
+def finalize_evidence_review(
+    state: dict[str, Any],
+    *,
+    event_repository: AuditEventRepository,
+) -> dict[str, Any]:
     claim = state["claim"]
     last = state["messages"][-1] if state["messages"] else None
     if last is not None and can_parse_review_result(last):
@@ -97,4 +133,19 @@ def finalize_evidence_review(state: dict[str, Any]) -> dict[str, Any]:
     )
     if actual != expected:
         raise ValueError("EvidenceReviewResult 归属与 Claim 不一致")
+    event_repository.append(
+        state["task_id"],
+        actor="evidence_agent",
+        event_type="evidence_decision",
+        title="资料核验子 Agent 形成结论",
+        detail={
+            "claim_id": claim.claim_id,
+            "rule_id": claim.rule_id,
+            "status": str(result.status),
+            "summary": result.summary,
+            "evidence_found_count": len(result.evidence_found),
+            "missing_evidence_count": len(result.missing_evidence),
+            "consistency_issue_count": len(result.consistency_issues),
+        },
+    )
     return {"review_result": result}
