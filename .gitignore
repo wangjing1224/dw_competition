@@ -19,3 +19,5 @@ data/
 
 # 进程内推理模型下载目录。模型文件较大，不提交 Git。
 models/
+
+.pytest_cache/
