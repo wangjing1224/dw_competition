@@ -21,3 +21,5 @@ data/
 models/
 
 .pytest_cache/
+
+tasks/
