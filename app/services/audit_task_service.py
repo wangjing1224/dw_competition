@@ -198,6 +198,20 @@ class AuditTaskService:
         except Exception as exc:
             current = self.task_repository.require(task_id)
             if current.status == "running":
+                self.event_repository.append(
+                    task_id,
+                    actor="pipeline",
+                    event_type="task_failed",
+                    title="审核任务执行失败",
+                    detail={
+                        "error_code": getattr(
+                            exc,
+                            "code",
+                            type(exc).__name__,
+                        ),
+                        "error_message": str(exc),
+                    },
+                )
                 self.task_repository.mark_failed(
                     task_id,
                     error_code=getattr(exc, "code", type(exc).__name__),

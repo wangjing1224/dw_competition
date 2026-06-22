@@ -7,7 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
     ["writing_outputs", "结果输出"],
   ];
   const terminal = new Set(["completed", "completed_with_report_error", "failed"]);
-  let timer = null;
+  let eventSource = null;
   let currentPayload = null;
 
   const input = document.getElementById("task-id-input");
@@ -19,7 +19,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const completed = status === "completed" || status === "completed_with_report_error";
     document.getElementById("stage-list").innerHTML = stages.map(([key, label], itemIndex) => {
       const state = completed || itemIndex < index ? "done" : itemIndex === index ? "current" : "";
-      return `<div class="stage ${state}"><strong>${label}</strong><span>${key}</span></div>`;
+      return `
+        <div class="stage ${state}">
+          <span class="stage-number">${itemIndex + 1}</span>
+          <strong>${label}</strong>
+        </div>
+      `;
     }).join("");
   }
 
@@ -249,14 +254,37 @@ document.addEventListener("DOMContentLoaded", () => {
     renderResults(payload);
     renderDownloads(payload);
 
-    const poll = document.getElementById("poll-indicator");
-    if (terminal.has(payload.status)) {
-      poll.textContent = "已停止轮询";
-      if (timer) window.clearInterval(timer);
-      timer = null;
-    } else {
-      poll.textContent = "每 2 秒自动轮询";
-    }
+    const indicator = document.getElementById("stream-indicator");
+    indicator.textContent = terminal.has(payload.status) ? "任务已结束" : "实时接收事件";
+  }
+
+  function closeStream() {
+    if (eventSource) eventSource.close();
+    eventSource = null;
+  }
+
+  function connectStream(taskId) {
+    closeStream();
+    const indicator = document.getElementById("stream-indicator");
+    indicator.textContent = "正在连接";
+    eventSource = new EventSource(
+      `/api/audit-tasks/${encodeURIComponent(taskId)}/stream`
+    );
+    eventSource.addEventListener("task-update", (event) => {
+      const payload = JSON.parse(event.data);
+      render(payload);
+      indicator.textContent = terminal.has(payload.status)
+        ? "任务已结束"
+        : "实时接收事件";
+    });
+    eventSource.addEventListener("stream-end", () => {
+      indicator.textContent = "任务已结束";
+      closeStream();
+    });
+    eventSource.onerror = () => {
+      if (!eventSource) return;
+      indicator.textContent = "连接中断，正在重连";
+    };
   }
 
   async function loadTask(showError = true) {
@@ -269,12 +297,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const payload = await ReviewUI.request(`/api/audit-tasks/${encodeURIComponent(taskId)}`);
       ReviewUI.setIdentity({ taskId });
       render(payload);
-      if (!terminal.has(payload.status) && !timer) {
-        timer = window.setInterval(() => loadTask(false), 2000);
+      if (!terminal.has(payload.status)) {
+        connectStream(taskId);
+      } else {
+        closeStream();
       }
     } catch (error) {
-      if (timer) window.clearInterval(timer);
-      timer = null;
+      closeStream();
       if (showError) ReviewUI.toast(error.message, "error");
     }
   }
@@ -290,6 +319,7 @@ document.addEventListener("DOMContentLoaded", () => {
     await navigator.clipboard.writeText(JSON.stringify(currentPayload || {}, null, 2));
     ReviewUI.toast("JSON 已复制");
   });
+  window.addEventListener("beforeunload", closeStream);
 
   if (input.value) loadTask(false);
 });

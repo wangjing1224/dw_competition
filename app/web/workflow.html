@@ -9,8 +9,7 @@
   <body data-page="workflow">
     <header class="topbar">
       <a class="brand" href="/web/">
-        <span class="brand-mark">电</span>
-        <span><strong>智能招标审核</strong><small>Operation Console</small></span>
+        <span><strong>电力智能招标审核系统</strong></span>
       </a>
       <nav>
         <a href="/web/">系统总览</a>
@@ -53,7 +52,13 @@
               <strong>选择招标文件夹</strong>
               <small>支持 DOCX、XLSX、TXT、Markdown</small>
             </label>
-            <div class="file-summary" id="project-summary">尚未选择文件</div>
+            <div class="selected-files hidden" id="project-selection">
+              <div class="selected-files-head">
+                <div><strong id="project-summary">已选择文件</strong><span>上传前可继续追加文件夹</span></div>
+                <label class="add-folder-button" for="project-files">＋ 继续添加文件夹</label>
+              </div>
+              <div class="selected-files-list" id="project-file-list"></div>
+            </div>
             <button class="button primary full" id="create-project">上传并生成 RuleSet</button>
           </article>
 
@@ -69,7 +74,13 @@
               <strong>选择投标方资料文件夹</strong>
               <small>合同、发票、证书、参数表、人员与售后材料</small>
             </label>
-            <div class="file-summary" id="bidder-summary">尚未选择文件</div>
+            <div class="selected-files hidden" id="bidder-selection">
+              <div class="selected-files-head">
+                <div><strong id="bidder-summary">已选择文件</strong><span>上传前可继续追加文件夹</span></div>
+                <label class="add-folder-button" for="bidder-files">＋ 继续添加文件夹</label>
+              </div>
+              <div class="selected-files-list" id="bidder-file-list"></div>
+            </div>
             <button class="button primary full" id="create-bidder">上传并建立资料索引</button>
           </article>
 
@@ -85,7 +96,13 @@
               <strong>选择投标文件测试集</strong>
               <small>可同时包含相关投标文件和异类干扰文件</small>
             </label>
-            <div class="file-summary" id="task-summary">尚未选择文件</div>
+            <div class="selected-files hidden" id="task-selection">
+              <div class="selected-files-head">
+                <div><strong id="task-summary">已选择文件</strong><span>上传前可继续追加文件夹</span></div>
+                <label class="add-folder-button" for="task-files">＋ 继续添加文件夹</label>
+              </div>
+              <div class="selected-files-list" id="task-file-list"></div>
+            </div>
             <button class="button primary full" id="create-task">创建后台审核任务</button>
           </article>
         </div>

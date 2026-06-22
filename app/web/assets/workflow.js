@@ -1,5 +1,10 @@
 document.addEventListener("DOMContentLoaded", () => {
   const identity = ReviewUI.getIdentity();
+  const selectedFiles = {
+    project: new Map(),
+    bidder: new Map(),
+    task: new Map(),
+  };
   const elements = {
     projectId: document.getElementById("current-project"),
     bidderId: document.getElementById("current-bidder"),
@@ -38,24 +43,82 @@ document.addEventListener("DOMContentLoaded", () => {
     elements.log.prepend(item);
   }
 
-  function bindFileSummary(inputId, summaryId) {
+  function formatBytes(bytes) {
+    if (bytes >= 1024 * 1024) {
+      return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+    }
+    return `${Math.max(bytes / 1024, 0.1).toFixed(1)} KiB`;
+  }
+
+  function fileKey(file) {
+    return [
+      file.webkitRelativePath || file.name,
+      file.size,
+      file.lastModified,
+    ].join(":");
+  }
+
+  function renderSelectedFiles(prefix) {
+    const files = [...selectedFiles[prefix].values()];
+    const input = document.getElementById(`${prefix}-files`);
+    const dropZone = input.closest(".drop-zone");
+    const selection = document.getElementById(`${prefix}-selection`);
+    const summary = document.getElementById(`${prefix}-summary`);
+    const list = document.getElementById(`${prefix}-file-list`);
+
+    dropZone.classList.toggle("hidden", files.length > 0);
+    selection.classList.toggle("hidden", files.length === 0);
+    if (!files.length) {
+      list.replaceChildren();
+      return;
+    }
+
+    const bytes = files.reduce((sum, file) => sum + file.size, 0);
+    summary.textContent = `已选择 ${files.length} 个文件 · ${formatBytes(bytes)}`;
+    list.replaceChildren(
+      ...files.map((file) => {
+        const row = document.createElement("div");
+        row.className = "selected-file-row";
+
+        const info = document.createElement("div");
+        const name = document.createElement("strong");
+        name.textContent = file.webkitRelativePath || file.name;
+        const size = document.createElement("span");
+        size.textContent = formatBytes(file.size);
+        info.append(name, size);
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "remove-file";
+        remove.textContent = "移除";
+        remove.addEventListener("click", () => {
+          selectedFiles[prefix].delete(fileKey(file));
+          renderSelectedFiles(prefix);
+        });
+
+        row.append(info, remove);
+        return row;
+      })
+    );
+  }
+
+  function bindFilePicker(prefix) {
+    const inputId = `${prefix}-files`;
     const input = document.getElementById(inputId);
     input.addEventListener("change", () => {
-      const files = [...input.files];
-      const bytes = files.reduce((sum, file) => sum + file.size, 0);
-      const size = bytes > 1024 * 1024
-        ? `${(bytes / 1024 / 1024).toFixed(1)} MiB`
-        : `${(bytes / 1024).toFixed(1)} KiB`;
-      document.getElementById(summaryId).textContent = files.length
-        ? `已选择 ${files.length} 个文件，共 ${size}`
-        : "尚未选择文件";
+      [...input.files].forEach((file) => {
+        selectedFiles[prefix].set(fileKey(file), file);
+      });
+      // 清空原生 input，确保下一次可继续选择同一个或其他文件夹。
+      input.value = "";
+      renderSelectedFiles(prefix);
     });
   }
 
-  async function runUpload({ prefix, inputId, buttonId, url, success }) {
-    const input = document.getElementById(inputId);
+  async function runUpload({ prefix, buttonId, url, success }) {
+    const files = [...selectedFiles[prefix].values()];
     const button = document.getElementById(buttonId);
-    if (!input.files.length) {
+    if (!files.length) {
       ReviewUI.toast("请先选择文件夹", "error");
       return;
     }
@@ -64,12 +127,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const original = button.textContent;
     button.textContent = "处理中，请勿关闭页面…";
     setStatus(prefix, "处理中", "running");
-    addLog(`${original}开始`, `${input.files.length} 个文件`);
+    addLog(`${original}开始`, `${files.length} 个文件`);
     try {
       const target = typeof url === "function" ? url(ReviewUI.getIdentity()) : url;
       const data = await ReviewUI.request(target, {
         method: "POST",
-        body: ReviewUI.buildFolderForm(input.files),
+        body: ReviewUI.buildFolderForm(files),
       });
       success(data);
       const seconds = ((performance.now() - started) / 1000).toFixed(1);
@@ -87,14 +150,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  bindFileSummary("project-files", "project-summary");
-  bindFileSummary("bidder-files", "bidder-summary");
-  bindFileSummary("task-files", "task-summary");
+  bindFilePicker("project");
+  bindFilePicker("bidder");
+  bindFilePicker("task");
 
   document.getElementById("create-project").addEventListener("click", () => {
     runUpload({
       prefix: "project",
-      inputId: "project-files",
       buttonId: "create-project",
       url: "/api/projects",
       success: (data) => {
@@ -108,7 +170,6 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("create-bidder").addEventListener("click", () => {
     runUpload({
       prefix: "bidder",
-      inputId: "bidder-files",
       buttonId: "create-bidder",
       url: ({ projectId }) => `/api/projects/${encodeURIComponent(projectId)}/bidders`,
       success: (data) => {
@@ -121,7 +182,6 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("create-task").addEventListener("click", () => {
     runUpload({
       prefix: "task",
-      inputId: "task-files",
       buttonId: "create-task",
       url: ({ projectId, bidderId }) =>
         `/api/projects/${encodeURIComponent(projectId)}/bidders/${encodeURIComponent(bidderId)}/audit-tasks`,

@@ -1,7 +1,11 @@
-"""审核任务创建、后台启动和状态查询接口。"""
+"""审核任务创建、后台启动、状态查询和 SSE 实时观测接口。"""
+
+import asyncio
+import json
 
 from fastapi import APIRouter, File, Form, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import Request
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.core.errors import BusinessError
 from app.services.container import build_audit_task_service
@@ -38,6 +42,58 @@ async def create_audit_task(
 @router.get("/audit-tasks/{task_id}")
 async def get_audit_task(task_id: str) -> dict[str, object]:
     return query_audit_task(task_id)
+
+
+@router.get("/audit-tasks/{task_id}/stream")
+async def stream_audit_task(task_id: str, request: Request) -> StreamingResponse:
+    """任务发生事件或状态变化时推送完整快照，替代浏览器定时轮询。"""
+
+    # 建立连接前先校验任务，避免流式响应开始后才返回 404。
+    AuditTaskRepository().require(task_id)
+
+    async def event_stream():
+        last_signature: tuple[object, ...] | None = None
+        terminal_seen = 0
+        while not await request.is_disconnected():
+            payload = query_audit_task(task_id)
+            events = payload.get("events", [])
+            latest_event_id = events[-1]["event_id"] if events else 0
+            signature = (
+                latest_event_id,
+                payload["status"],
+                payload.get("progress", {}).get("stage"),
+            )
+            if signature != last_signature:
+                yield (
+                    "event: task-update\n"
+                    f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                )
+                last_signature = signature
+
+            if payload["status"] in {
+                "completed",
+                "completed_with_report_error",
+                "failed",
+            }:
+                # 终态后再观察一个周期，确保最后一条完成/失败事件已写入。
+                terminal_seen += 1
+                if terminal_seen >= 2:
+                    break
+            else:
+                terminal_seen = 0
+
+            await asyncio.sleep(0.35)
+
+        yield "event: stream-end\ndata: {}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/audit-tasks/{task_id}/outputs/json")
