@@ -33,6 +33,40 @@ document.addEventListener("DOMContentLoaded", () => {
     return labels[status] || status || "—";
   }
 
+  function enumText(value) {
+    const labels = {
+      compliant: "合规",
+      non_compliant: "不合规",
+      risk: "存在风险",
+      manual_review: "人工复核",
+      not_applicable: "不适用",
+      matched: "匹配",
+      not_matched: "不匹配",
+      uncertain: "不确定",
+      fatal: "致命",
+      major: "重大",
+      minor: "一般",
+      info: "提示",
+      unknown: "未知",
+      found: "已找到响应",
+      not_found: "未找到响应",
+      unreadable: "无法读取",
+      supported: "资料支持",
+      partially_supported: "部分支持",
+      unsupported: "不支持",
+      contradicted: "存在矛盾",
+      ocr_required: "需要 OCR",
+      unverifiable: "无法核验",
+      weakly_related: "弱相关",
+      record_project_match: "记录项目匹配",
+      record_finding: "记录审核发现",
+      record_file_result: "记录文件结果",
+      project_match: "项目适用性判断",
+      rule_audit: "规则审核",
+    };
+    return labels[value] || value || "—";
+  }
+
   function renderResults(payload) {
     const results = payload.result?.file_results || [];
     const body = document.getElementById("result-body");
@@ -44,7 +78,7 @@ document.addEventListener("DOMContentLoaded", () => {
       <tr>
         <td>${escapeHtml(item.file.file_name)}</td>
         <td>${item.is_applicable ? "适用" : "不适用"}</td>
-        <td><span class="conclusion ${item.overall_conclusion}">${escapeHtml(item.overall_conclusion)}</span></td>
+        <td><span class="conclusion ${item.overall_conclusion}">${escapeHtml(enumText(item.overall_conclusion))}</span></td>
         <td>${item.findings.length}</td>
         <td>${item.evidence_results.length}</td>
         <td><button class="detail-button" data-index="${index}">查看</button></td>
@@ -81,6 +115,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }[actor] || actor || "系统";
   }
 
+  function toolText(name) {
+    return {
+      search_bid_response: "检索投标响应",
+      retrieve_rule_source: "读取招标规则原文",
+      request_evidence_review: "委派资料核验",
+      search_evidence: "检索支撑资料",
+      retrieve_evidence_source: "读取支撑资料原文",
+    }[name] || name || "未知工具";
+  }
+
   function renderEventDetail(detail) {
     if (!detail || !Object.keys(detail).length) return "";
     const preferred = [
@@ -95,15 +139,18 @@ document.addEventListener("DOMContentLoaded", () => {
       ["result_count", "命中数量"],
       ["file_result_count", "文件结果数"],
     ];
+    const enumFields = new Set(["action", "result", "status", "work_kind"]);
     const rows = preferred
       .filter(([key]) => detail[key] !== undefined && detail[key] !== null)
       .map(([key, label]) => `
-        <div><dt>${label}</dt><dd>${escapeHtml(detail[key])}</dd></div>
+        <div><dt>${label}</dt><dd>${escapeHtml(
+          enumFields.has(key) ? enumText(detail[key]) : detail[key]
+        )}</dd></div>
       `)
       .join("");
     const tools = Array.isArray(detail.tools)
       ? `<div><dt>计划工具</dt><dd>${detail.tools
-          .map((item) => escapeHtml(item.name))
+          .map((item) => escapeHtml(toolText(item.name)))
           .join("、")}</dd></div>`
       : "";
     const topResults = Array.isArray(detail.top_results) && detail.top_results.length
@@ -152,7 +199,7 @@ document.addEventListener("DOMContentLoaded", () => {
       ? item.findings.map((finding) => `
           <article class="finding-detail">
             <h3>${escapeHtml(finding.title)}</h3>
-            <p><strong>结论：</strong>${escapeHtml(finding.result)} · ${escapeHtml(finding.severity)}</p>
+            <p><strong>结论：</strong>${escapeHtml(enumText(finding.result))} · ${escapeHtml(enumText(finding.severity))}</p>
             <p>${escapeHtml(finding.description)}</p>
             <p><strong>规则来源：</strong>${escapeHtml(finding.rule_source.source_path)} / ${escapeHtml(finding.rule_source.section || "文件级")}</p>
             ${finding.suggestion ? `<p><strong>建议：</strong>${escapeHtml(finding.suggestion)}</p>` : ""}
@@ -160,8 +207,8 @@ document.addEventListener("DOMContentLoaded", () => {
         `).join("")
       : "<p>该文件没有普通规则 Finding。</p>";
     document.getElementById("dialog-body").innerHTML = `
-      <p><strong>项目匹配：</strong>${escapeHtml(item.project_match.status)} · ${escapeHtml(item.project_match.reason)}</p>
-      <p><strong>总体结论：</strong>${escapeHtml(item.overall_conclusion)}</p>
+      <p><strong>项目匹配：</strong>${escapeHtml(enumText(item.project_match.status))} · ${escapeHtml(item.project_match.reason)}</p>
+      <p><strong>总体结论：</strong>${escapeHtml(enumText(item.overall_conclusion))}</p>
       ${findings}
     `;
     document.getElementById("detail-dialog").showModal();
