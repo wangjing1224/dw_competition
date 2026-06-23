@@ -56,6 +56,8 @@ async def test_project_and_bidder_preprocessing_reach_ready(
             rules=[
                 ExtractedRule(
                     category="technical",
+                    priority="important",
+                    verification_level="bid_only",
                     name="像素要求",
                     requirement="像素不低于640x480",
                     check_type="semantic",
@@ -70,6 +72,17 @@ async def test_project_and_bidder_preprocessing_reach_ready(
             confidence=0.95,
             classification_status="classified",
             reason="包含合同标的和双方主体",
+            catalog_profile={
+                "rule_categories": ["commercial", "performance_capacity"],
+                "summary": "供货合同",
+                "verifiable_topics": ["合同主体", "产品"],
+            },
+            retrieval_profile={
+                "document_title": "供货合同",
+                "entities": ["红外热成像仪"],
+                "keywords": ["供货合同", "红外热成像仪"],
+                "searchable_facts": ["合同主体", "产品"],
+            },
         )
 
     monkeypatch.setattr("app.rules.extractor.invoke_structured", fake_rule_output)

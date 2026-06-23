@@ -37,8 +37,16 @@ class SearchEvidenceTool(BaseTool):
     event_repository: AuditEventRepository
 
     async def _arun(self, claim: Claim) -> list[dict]:
+        query = "\n".join(
+            [
+                claim.statement,
+                claim.retrieval_query,
+                " ".join(claim.keywords),
+                "；".join(claim.verification_points),
+            ]
+        )
         results = await self.retrieval_service.search(
-            claim.statement,
+            query,
             IndexFilter(
                 scope_id=f"evidence-{claim.project_id}-{claim.bidder_id}",
                 project_id=claim.project_id,
@@ -46,6 +54,8 @@ class SearchEvidenceTool(BaseTool):
                 data_role="evidence_material",
                 evidence_types=claim.required_evidence_types,
             ),
+            candidate_top_k=20,
+            final_top_k=5,
         )
         self.event_repository.append(
             claim.task_id,

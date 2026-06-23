@@ -224,6 +224,8 @@ async def test_mock_dataset_full_pipeline(monkeypatch, temp_settings):
             rules=[
                 ExtractedRule(
                     category="technical",
+                    priority="critical",
+                    verification_level="evidence_check",
                     name="探测器像素要求",
                     requirement="探测器像素不得低于640x480",
                     check_type="parameter_compare",
@@ -236,6 +238,8 @@ async def test_mock_dataset_full_pipeline(monkeypatch, temp_settings):
                 ),
                 ExtractedRule(
                     category="commercial",
+                    priority="important",
+                    verification_level="bid_only",
                     name="投标总价完整性",
                     requirement="投标文件必须填写投标总价",
                     check_type="presence",
@@ -253,12 +257,34 @@ async def test_mock_dataset_full_pipeline(monkeypatch, temp_settings):
                 confidence=0.99,
                 classification_status="classified",
                 reason="内容包含产品型号、像素、测温范围和精度",
+                catalog_profile={
+                    "rule_categories": ["technical"],
+                    "summary": "产品技术参数资料",
+                    "verifiable_topics": ["像素", "测温范围", "精度"],
+                },
+                retrieval_profile={
+                    "document_title": "技术参数表",
+                    "entities": ["红外热成像仪"],
+                    "keywords": ["像素", "测温范围", "精度"],
+                    "searchable_facts": ["产品型号", "技术参数"],
+                },
             )
         return EvidenceClassification(
             evidence_type="contract",
             confidence=0.99,
             classification_status="classified",
             reason="内容包含合同标的和合同主体",
+            catalog_profile={
+                "rule_categories": ["commercial", "performance_capacity"],
+                "summary": "红外热成像仪供货合同",
+                "verifiable_topics": ["合同主体", "合同标的"],
+            },
+            retrieval_profile={
+                "document_title": "供货合同",
+                "entities": ["红外热成像仪"],
+                "keywords": ["供货合同", "红外热成像仪"],
+                "searchable_facts": ["合同主体", "合同标的"],
+            },
         )
 
     monkeypatch.setattr(
@@ -311,4 +337,4 @@ async def test_mock_dataset_full_pipeline(monkeypatch, temp_settings):
     assert conclusions["01-红外热成像仪投标文件.md"] == "risk"
     assert conclusions["02-机械加工设备投标文件.md"] == "not_applicable"
     assert response["outputs"]["json"]
-    assert len(response["outputs"]["word"]) == 1
+    assert len(response["outputs"]["word"]) == 2

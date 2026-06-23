@@ -11,12 +11,20 @@ from app.llm.errors import InvalidStructuredOutput
 from app.models.common import (
     EvidenceType,
     RuleCategory,
+    RulePriority,
     RuleStatus,
     Severity,
     StrictModel,
+    VerificationLevel,
 )
 from app.models.documents import ParsedDocument, SourceRef
-from app.models.rules import ProjectProfile, RuleItem, RuleScope, RuleSet
+from app.models.rules import (
+    ProjectProfile,
+    RuleCheckItem,
+    RuleItem,
+    RuleScope,
+    RuleSet,
+)
 from app.prompts.loader import render_prompt
 from app.storage.ids import next_id
 
@@ -25,12 +33,15 @@ class ExtractedRule(StrictModel):
     """模型只输出规则语义字段；来源由程序绑定，禁止模型编造文件 ID。"""
 
     category: RuleCategory
+    priority: RulePriority
+    verification_level: VerificationLevel
     name: str
     requirement: str
     check_type: str
     target_field: str | None = None
     operator: str | None = None
     expected_value: Any | None = None
+    check_items: list[RuleCheckItem] = Field(default_factory=list)
     scope: RuleScope = Field(default_factory=RuleScope)
     severity: Severity
     evidence_required: bool = False
@@ -39,7 +50,7 @@ class ExtractedRule(StrictModel):
 
 class RuleExtractionBatch(StrictModel):
     project_profile: ProjectProfile = Field(default_factory=ProjectProfile)
-    rules: list[ExtractedRule] = Field(default_factory=list, max_length=20)
+    rules: list[ExtractedRule] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -157,6 +168,9 @@ async def extract_rule_set(
 
     rules: list[RuleItem] = []
     profile = ProjectProfile()
+    existing_outline: dict[str, list[str]] = {
+        category.value: [] for category in RuleCategory
+    }
     for parsed in parsed_documents:
         contexts = build_rule_extraction_batches(parsed)
         if not contexts:
@@ -169,7 +183,7 @@ async def extract_rule_set(
                 source_file=parsed.document.source_path,
                 batch_index=batch_index,
                 batch_count=len(contexts),
-                max_rules=20,
+                existing_outline=existing_outline,
                 source_context=context,
                 rule_extraction_schema=RuleExtractionBatch.model_json_schema(),
             )
@@ -189,6 +203,9 @@ async def extract_rule_set(
             if not any(profile.model_dump(exclude_none=True).values()):
                 profile = batch.project_profile
             for extracted in batch.rules:
+                outline = existing_outline[str(extracted.category)]
+                if extracted.name not in outline:
+                    outline.append(extracted.name)
                 rules.append(
                     RuleItem(
                         rule_id=next_id("rule"),

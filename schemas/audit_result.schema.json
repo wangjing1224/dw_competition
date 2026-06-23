@@ -1,5 +1,128 @@
 {
   "$defs": {
+    "BidDocumentSummary": {
+      "additionalProperties": false,
+      "description": "投标文件进入索引和主 Agent 前的清洗摘要与路由结果。",
+      "properties": {
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "document_type": {
+          "title": "Document Type",
+          "type": "string"
+        },
+        "project_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Name"
+        },
+        "buyer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Buyer"
+        },
+        "bidder_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bidder Name"
+        },
+        "package_numbers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Package Numbers",
+          "type": "array"
+        },
+        "material_categories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Material Categories",
+          "type": "array"
+        },
+        "product_names": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Product Names",
+          "type": "array"
+        },
+        "model_numbers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Model Numbers",
+          "type": "array"
+        },
+        "category_overview": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/RuleCategory"
+          },
+          "title": "Category Overview",
+          "type": "object"
+        },
+        "key_sections": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Key Sections",
+          "type": "array"
+        },
+        "match_status": {
+          "title": "Match Status",
+          "type": "string"
+        },
+        "match_reason": {
+          "title": "Match Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file_id",
+        "summary",
+        "document_type",
+        "match_status",
+        "match_reason",
+        "confidence"
+      ],
+      "title": "BidDocumentSummary",
+      "type": "object"
+    },
     "ClassificationStatus": {
       "enum": [
         "classified",
@@ -244,6 +367,17 @@
         "project_match": {
           "$ref": "#/$defs/ProjectMatch"
         },
+        "document_summary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BidDocumentSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "exclusion_reason": {
           "anyOf": [
             {
@@ -363,6 +497,13 @@
           "default": null,
           "title": "Evidence Result Id"
         },
+        "check_results": {
+          "items": {
+            "$ref": "#/$defs/FindingCheckResult"
+          },
+          "title": "Check Results",
+          "type": "array"
+        },
         "suggestion": {
           "anyOf": [
             {
@@ -399,6 +540,53 @@
         "confidence"
       ],
       "title": "Finding",
+      "type": "object"
+    },
+    "FindingCheckResult": {
+      "additionalProperties": false,
+      "description": "复合规则中单个检查项的结论。",
+      "properties": {
+        "item_key": {
+          "title": "Item Key",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/FindingResult"
+        },
+        "actual_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual Value"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "bid_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "item_key",
+        "result",
+        "description"
+      ],
+      "title": "FindingCheckResult",
       "type": "object"
     },
     "FindingResult": {
@@ -487,14 +675,12 @@
     },
     "RuleCategory": {
       "enum": [
-        "project_match",
         "format",
+        "qualification",
         "commercial",
         "technical",
-        "qualification",
-        "performance",
-        "capacity",
-        "consistency"
+        "performance_capacity",
+        "consistency_risk"
       ],
       "title": "RuleCategory",
       "type": "string"

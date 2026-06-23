@@ -10,13 +10,13 @@ from app.core.config import PROJECT_ROOT
 from app.models.evidence import EvidenceClassification, EvidenceReviewResult
 from app.models.results import AuditResult
 from app.models.rules import RuleSet
-from app.models.tasks import BidAgentDecision
+from app.models.tasks import BatchAuditDecision
 
 
 SCHEMA_TARGETS: tuple[tuple[Any, str], ...] = (
     (RuleSet, "rule_set.schema.json"),
     (EvidenceClassification, "evidence_classification.schema.json"),
-    (BidAgentDecision, "bid_agent_decision.schema.json"),
+    (BatchAuditDecision, "bid_agent_decision.schema.json"),
     (EvidenceReviewResult, "evidence_review_result.schema.json"),
     (AuditResult, "audit_result.schema.json"),
 )

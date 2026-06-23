@@ -111,11 +111,13 @@ async def test_background_task_reaches_completed(monkeypatch, temp_settings):
     assert completed.status == "completed"
     assert completed.json_path
     assert FileStore().resolve_relative(completed.json_path).exists()
-    assert completed.word_paths == []
+    assert len(completed.word_paths or []) == 1
     response = query_audit_task(task.task_id)
     assert [event["event_type"] for event in response["events"]] == [
         "task_created",
         "stage_changed",
+        "stage_changed",
+        "bid_document_routed",
         "stage_changed",
         "stage_changed",
         "stage_changed",

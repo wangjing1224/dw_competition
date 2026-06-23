@@ -7,6 +7,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from app.agents.bid_agent import bid_agent_node
+from app.audit.retrieval_context import build_grouped_retrieval_context
 from app.core.config import AppSettings
 from app.graph.audit_state import AuditState, build_initial_audit_state
 from app.graph.evidence_graph import build_evidence_graph
@@ -18,6 +19,7 @@ from app.graph.state_updates import (
 from app.llm.factory import ModelRegistry
 from app.retrieval.service import RetrievalService
 from app.services.audit_task_service import AuditExecutor, AuditTaskContext
+from app.models.results import AuditResult
 from app.storage.repositories import (
     AuditEventRepository,
     AuditTaskRepository,
@@ -56,7 +58,7 @@ def build_audit_graph(
     evidence_graph = build_evidence_graph(
         models.evidence_chat,
         evidence_tools,
-        max_steps=8,
+        max_steps=settings.audit.evidence_agent_max_steps,
         event_repository=events,
     )
     bid_tools = [
@@ -77,6 +79,20 @@ def build_audit_graph(
     ]
 
     graph = StateGraph(AuditState)
+    async def prepare_context(state: AuditState):
+        from app.graph.audit_state import current_file
+
+        context = await build_grouped_retrieval_context(
+            retrieval,
+            task_id=state["task_id"],
+            project_id=state["project_id"],
+            bidder_id=state["bidder_id"],
+            document=current_file(state),
+            rule_set=state["rule_set"],
+        )
+        return {"grouped_retrieval_context": context}
+
+    graph.add_node("prepare_context", prepare_context)
     graph.add_node(
         "bid_agent",
         partial(
@@ -92,10 +108,11 @@ def build_audit_graph(
         partial(apply_bid_agent_output_node, event_repository=events),
     )
     graph.add_node("build_result", build_audit_result_node)
-    graph.set_entry_point("bid_agent")
+    graph.set_entry_point("prepare_context")
+    graph.add_edge("prepare_context", "bid_agent")
     graph.add_conditional_edges(
         "bid_agent",
-        partial(route_bid_agent, max_steps=10),
+        partial(route_bid_agent, max_steps=settings.audit.bid_agent_max_steps),
         {
             "bid_agent": "bid_agent",
             "tools": "tools",
@@ -107,7 +124,7 @@ def build_audit_graph(
     graph.add_conditional_edges(
         "apply_output",
         route_after_state_update,
-        {"continue": "bid_agent", "complete": "build_result"},
+        {"continue": "prepare_context", "complete": "build_result"},
     )
     graph.add_edge("build_result", END)
     return graph.compile(checkpointer=InMemorySaver())
@@ -125,6 +142,13 @@ class LangGraphAuditExecutor(AuditExecutor):
         self.graph = build_audit_graph(settings, models, event_repository)
 
     async def run(self, context: AuditTaskContext):
+        if not context.bid_files:
+            return AuditResult(
+                task_id=context.task_id,
+                project_id=context.project_id,
+                bidder_id=context.bidder_id,
+                file_results=context.routed_file_results,
+            )
         final_state = await self.graph.ainvoke(
             build_initial_audit_state(context),
             config={

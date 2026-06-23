@@ -10,6 +10,7 @@
 |---|---|---|
 | `${project_id}` | `app/rules/extractor.py` | 当前新建项目的 ID |
 | `${source_context}` | `app/rules/extractor.py` | 解析后的章节标题、正文和表格 |
+| `${existing_outline}` | `app/rules/extractor.py` | 前序批次已覆盖的精简审核点目录 |
 | `${rule_extraction_schema}` | `app/rules/extractor.py` | `RuleExtractionBatch` 动态生成的 JSON Schema |
 
 ### `templates/evidence_classification.md`
@@ -20,19 +21,30 @@
 | `${evidence_types}` | `app/evidence/classifier.py` | `EvidenceType` 枚举的全部可选值 |
 | `${evidence_classification_schema}` | `app/evidence/classifier.py` | `EvidenceClassification` 动态生成的 JSON Schema |
 
+### `templates/bid_document_summary.md`
+
+| 占位符 | 注入位置 | 内容 |
+|---|---|---|
+| `${file_identity}` | `app/audit/bid_summary.py` | 当前投标文件身份 |
+| `${project_profile}` | `app/audit/bid_summary.py` | 项目基本信息 |
+| `${rule_category_outline}` | `app/audit/bid_summary.py` | 按分类组织的规则名称目录 |
+| `${document_context}` | `app/audit/bid_summary.py` | 投标文件详细解析内容 |
+| `${bid_document_summary_schema}` | `app/audit/bid_summary.py` | `BidDocumentSummary` JSON Schema |
+
 ### `templates/bid_agent.md`
 
 | 占位符 | 注入位置 | 内容 |
 |---|---|---|
-| `${bid_agent_decision_schema}` | `app/agents/bid_agent.py` | `BidAgentDecision` 判别联合动态生成的 JSON Schema |
+| `${batch_audit_decision_schema}` | `app/agents/bid_agent.py` | `BatchAuditDecision` 动态生成的 JSON Schema |
 
 `app/agents/bid_agent.py` 还会在运行时追加 HumanMessage：
 
 - `task_id/project_id/bidder_id`
 - 当前投标文件
-- 当前 RuleItem 或项目适用性工作单元
-- 已有相关 Finding
-- 当前工作单元内的 AIMessage/ToolMessage 历史
+- 投标文件详细摘要
+- 按分类组织的全部规则和预检索响应片段
+- 精简资料目录
+- 当前文件内的 AIMessage/ToolMessage 历史
 
 ### `templates/evidence_subagent.md`
 

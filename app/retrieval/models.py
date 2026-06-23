@@ -45,6 +45,7 @@ class IndexChunk(StrictModel):
     source_path: str
     section: str
     content: str
+    retrieval_hint: str | None = None
     parse_status: ParseStatus
     evidence_type: EvidenceType | None = None
     classification_status: ClassificationStatus | None = None

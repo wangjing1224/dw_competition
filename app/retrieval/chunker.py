@@ -55,6 +55,7 @@ def chunk_parsed_document(
     *,
     max_tokens: int,
     overlap_tokens: int,
+    retrieval_hint: str | None = None,
 ) -> list[IndexChunk]:
     chunks: list[IndexChunk] = []
     document = parsed.document
@@ -83,6 +84,7 @@ def chunk_parsed_document(
                         source_path=document.source_path,
                         section=section.title,
                         content=text,
+                        retrieval_hint=retrieval_hint,
                         parse_status=parsed.parse_status,
                         evidence_type=document.evidence_type,
                         classification_status=document.classification_status,

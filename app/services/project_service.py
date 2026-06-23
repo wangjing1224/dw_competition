@@ -71,7 +71,10 @@ class ProjectService:
                 self.models.rule_extraction,
                 self.settings.rule_extraction_model,
             )
-            rule_set = merge_rule_set(extracted)
+            rule_set = merge_rule_set(
+                extracted,
+                limit=self.settings.audit.rule_limit,
+            )
             if not rule_set.rules:
                 raise ValueError("模型未抽取到任何审核规则")
             rule_path = self._write_rule_set(rule_set)

@@ -12,7 +12,7 @@ def test_rule_prompt_runtime_values_are_injected():
         source_file="规则/技术规范.md",
         batch_index=1,
         batch_count=2,
-        max_rules=20,
+        existing_outline={"technical": []},
         source_context="技术要求：像素不低于640x480",
         rule_extraction_schema={"type": "object"},
     )
@@ -42,7 +42,7 @@ def test_all_tool_descriptions_are_available():
 @pytest.mark.parametrize(
     ("name", "schema_variable", "model_name"),
     [
-        ("bid_agent", "bid_agent_decision_schema", "BidAgentDecision"),
+        ("bid_agent", "batch_audit_decision_schema", "BatchAuditDecision"),
         (
             "evidence_subagent",
             "evidence_review_result_schema",

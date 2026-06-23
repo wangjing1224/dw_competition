@@ -69,6 +69,8 @@ class SearchBidResponseTool(BaseTool):
                 data_role="bid_document",
                 file_ids=[bid_file_id],
             ),
+            candidate_top_k=20,
+            final_top_k=5,
         )
         self.event_repository.append(
             task_id,
@@ -90,7 +92,12 @@ class SearchBidResponseTool(BaseTool):
                 ],
             },
         )
-        return [item.model_dump(mode="json") for item in results]
+        return [
+            item.model_copy(update={"content": item.content[:1500]}).model_dump(
+                mode="json"
+            )
+            for item in results
+        ]
 
     def _run(self, **_: object) -> object:
         raise ToolException("search_bid_response 仅支持异步调用")

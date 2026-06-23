@@ -30,7 +30,7 @@ def bid(file_id, applicable):
     )
 
 
-def test_word_is_generated_only_for_applicable_files(monkeypatch, temp_settings):
+def test_word_is_generated_for_every_file_result(monkeypatch, temp_settings):
     monkeypatch.setattr("app.storage.file_store.get_settings", lambda: temp_settings)
     store = FileStore()
     result = AuditResult(
@@ -44,5 +44,5 @@ def test_word_is_generated_only_for_applicable_files(monkeypatch, temp_settings)
     word_paths = generate_word_reports(json_path, store)
 
     assert read_json_result(json_path, store) == result
-    assert len(word_paths) == 1
-    assert store.resolve_relative(word_paths[0]).exists()
+    assert len(word_paths) == 2
+    assert all(store.resolve_relative(path).exists() for path in word_paths)

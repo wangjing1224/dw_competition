@@ -95,6 +95,15 @@ class RuntimeSettings(ConfigModel):
     langsmith_project: str = "dw-competition"
 
 
+class AuditSettings(ConfigModel):
+    """主/子 Agent 的有界循环和文件路由阈值。"""
+
+    bid_agent_max_steps: int = Field(default=8, gt=0)
+    evidence_agent_max_steps: int = Field(default=3, gt=0)
+    route_confidence_threshold: float = Field(default=0.65, ge=0, le=1)
+    rule_limit: int = Field(default=30, gt=0)
+
+
 class AppSettings(ConfigModel):
     """应用启动后使用的完整已解析配置。"""
 
@@ -103,6 +112,7 @@ class AppSettings(ConfigModel):
     project_root: Path = PROJECT_ROOT
     rule_extraction_model: ChatModelSettings
     evidence_classification_model: ChatModelSettings
+    bid_summary_model: ChatModelSettings
     bid_chat_model: ChatModelSettings
     evidence_chat_model: ChatModelSettings
     embedding_model: EmbeddingSettings
@@ -110,6 +120,7 @@ class AppSettings(ConfigModel):
     retrieval: RetrievalSettings
     storage: StorageSettings
     runtime: RuntimeSettings
+    audit: AuditSettings = Field(default_factory=AuditSettings)
 
     def ensure_runtime_directories(self) -> None:
         """按需创建运行目录，不使用 .gitkeep 提前占位。"""
@@ -175,6 +186,18 @@ def get_settings() -> AppSettings:
                 "langsmith_project": os.getenv(
                     "LANGSMITH_PROJECT", "dw-competition"
                 ),
+            },
+            "audit": {
+                "bid_agent_max_steps": int(
+                    os.getenv("BID_AGENT_MAX_STEPS", "8")
+                ),
+                "evidence_agent_max_steps": int(
+                    os.getenv("EVIDENCE_AGENT_MAX_STEPS", "3")
+                ),
+                "route_confidence_threshold": float(
+                    os.getenv("ROUTE_CONFIDENCE_THRESHOLD", "0.65")
+                ),
+                "rule_limit": int(os.getenv("RULE_LIMIT", "30")),
             },
         }
     )

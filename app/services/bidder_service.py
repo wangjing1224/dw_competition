@@ -6,6 +6,7 @@ from typing import BinaryIO
 
 from app.core.config import AppSettings
 from app.evidence.classifier import classify_evidence_document
+from app.evidence.storage import write_evidence_classification
 from app.llm.factory import ModelRegistry
 from app.models.documents import document_ref_from_record
 from app.parsers.service import parse_document
@@ -64,6 +65,11 @@ class BidderService:
                     parsed,
                     self.models.evidence_classification,
                     self.settings.evidence_classification_model,
+                )
+                write_evidence_classification(
+                    record.file_id,
+                    classification,
+                    self.settings,
                 )
                 classified_record = self.file_repository.update_classification(
                     record.file_id,

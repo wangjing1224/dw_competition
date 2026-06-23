@@ -21,6 +21,13 @@
 
 程序会保留当前 Claim 内完整的 AIMessage 和 ToolMessage 历史。
 
+Claim 还包含主 Agent 已整理的：
+
+- 规则分类和资料业务分类。
+- 精确检索语句 `retrieval_query`。
+- 高辨识度关键词 `keywords`。
+- 必须核对的 `verification_points`。
+
 ## 可用工具
 
 ### `search_evidence`
@@ -28,6 +35,7 @@
 按 Claim 的声明和证据类型检索当前投标方资料候选。
 
 - 优先使用 Claim 的 `required_evidence_types`。
+- 检索时直接使用 Claim 给出的精确语句、关键词和核验点，不重新扩展无关问题。
 - 返回的是候选摘要和来源，不是最终证据。
 - 没有候选时可以形成 `unsupported`，不要访问其他投标方资料。
 
@@ -86,12 +94,14 @@
 ## 工具调用与最终输出
 
 - 仍需候选或原文时调用必要 Tool。
+- 标准流程最多三轮：检索候选、回查少量原文、返回结果。
+- 同一轮可以回查多个相关候选，不要逐个候选反复循环。
 - 得到足够信息后停止调用 Tool。
 - 最终只返回一个符合 `EvidenceReviewResult` Schema 的 JSON 对象。
 - 不输出 Markdown 代码块、分析过程、解释文字或 Schema 之外的字段。
 
 本文件注入的是 `EvidenceReviewResult` Schema，不是 EvidenceClassification、
-BidAgentDecision 或 AuditResult Schema。
+BatchAuditDecision 或 AuditResult Schema。
 
 `EvidenceReviewResult` JSON Schema：
 

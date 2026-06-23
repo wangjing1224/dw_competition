@@ -2,6 +2,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const stages = [
     ["saving_files", "保存文件"],
     ["parsing_bid_documents", "文档解析"],
+    ["summarizing_bid_documents", "摘要路由"],
     ["building_bid_index", "构建索引"],
     ["auditing", "智能审核"],
     ["writing_outputs", "结果输出"],
@@ -68,6 +69,13 @@ document.addEventListener("DOMContentLoaded", () => {
       record_file_result: "记录文件结果",
       project_match: "项目适用性判断",
       rule_audit: "规则审核",
+      format: "形式与完整性",
+      qualification: "资格与合规",
+      commercial: "商务响应",
+      technical: "技术响应",
+      performance_capacity: "业绩与履约能力",
+      consistency_risk: "一致性与风险",
+      record_batch: "记录批量审核结果",
     };
     return labels[value] || value || "—";
   }
@@ -82,7 +90,7 @@ document.addEventListener("DOMContentLoaded", () => {
     body.innerHTML = results.map((item, index) => `
       <tr>
         <td>${escapeHtml(item.file.file_name)}</td>
-        <td>${item.is_applicable ? "适用" : "不适用"}</td>
+        <td>${item.is_applicable ? "适用" : item.project_match.status === "uncertain" ? "待人工确认" : "不适用"}</td>
         <td><span class="conclusion ${item.overall_conclusion}">${escapeHtml(enumText(item.overall_conclusion))}</span></td>
         <td>${item.findings.length}</td>
         <td>${item.evidence_results.length}</td>
@@ -214,6 +222,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("dialog-body").innerHTML = `
       <p><strong>项目匹配：</strong>${escapeHtml(enumText(item.project_match.status))} · ${escapeHtml(item.project_match.reason)}</p>
       <p><strong>总体结论：</strong>${escapeHtml(enumText(item.overall_conclusion))}</p>
+      ${item.document_summary?.summary ? `<p><strong>文件摘要：</strong>${escapeHtml(item.document_summary.summary)}</p>` : ""}
       ${findings}
     `;
     document.getElementById("detail-dialog").showModal();

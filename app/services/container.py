@@ -32,4 +32,6 @@ def build_audit_task_service():
         LangGraphAuditExecutor(settings, models),
         ReportService(),
         background_runner,
+        summary_model=models.bid_summary,
+        summary_model_settings=settings.bid_summary_model,
     )

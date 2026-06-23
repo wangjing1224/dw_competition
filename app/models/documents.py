@@ -9,6 +9,7 @@ from app.models.common import (
     ParseStatus,
     StrictModel,
 )
+from app.models.common import RuleCategory
 
 
 class DocumentRef(StrictModel):
@@ -85,3 +86,29 @@ class ParsedDocument(StrictModel):
     parse_status: ParseStatus
     sections: list[ParsedSection] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class BidDocumentSummary(StrictModel):
+    """投标文件进入索引和主 Agent 前的清洗摘要与路由结果。"""
+
+    file_id: str
+    summary: str
+    document_type: str
+    project_name: str | None = None
+    buyer: str | None = None
+    bidder_name: str | None = None
+    package_numbers: list[str] = Field(default_factory=list)
+    material_categories: list[str] = Field(default_factory=list)
+    product_names: list[str] = Field(default_factory=list)
+    model_numbers: list[str] = Field(default_factory=list)
+    category_overview: dict[RuleCategory, str] = Field(default_factory=dict)
+    key_sections: list[str] = Field(default_factory=list)
+    match_status: str
+    match_reason: str
+    confidence: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_match_status(self) -> "BidDocumentSummary":
+        if self.match_status not in {"matched", "not_matched", "uncertain"}:
+            raise ValueError("match_status 必须为 matched/not_matched/uncertain")
+        return self

@@ -214,17 +214,69 @@
     },
     "RuleCategory": {
       "enum": [
-        "project_match",
         "format",
+        "qualification",
         "commercial",
         "technical",
-        "qualification",
-        "performance",
-        "capacity",
-        "consistency"
+        "performance_capacity",
+        "consistency_risk"
       ],
       "title": "RuleCategory",
       "type": "string"
+    },
+    "RuleCheckItem": {
+      "additionalProperties": false,
+      "description": "复合规则中的一个可独立判断检查项。",
+      "properties": {
+        "item_key": {
+          "title": "Item Key",
+          "type": "string"
+        },
+        "requirement": {
+          "title": "Requirement",
+          "type": "string"
+        },
+        "target_field": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Field"
+        },
+        "operator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operator"
+        },
+        "expected_value": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Value"
+        }
+      },
+      "required": [
+        "item_key",
+        "requirement"
+      ],
+      "title": "RuleCheckItem",
+      "type": "object"
     },
     "RuleItem": {
       "additionalProperties": false,
@@ -238,6 +290,14 @@
         },
         "category": {
           "$ref": "#/$defs/RuleCategory"
+        },
+        "priority": {
+          "$ref": "#/$defs/RulePriority",
+          "default": "normal"
+        },
+        "verification_level": {
+          "$ref": "#/$defs/VerificationLevel",
+          "default": "bid_only"
         },
         "name": {
           "title": "Name",
@@ -284,6 +344,13 @@
           ],
           "default": null,
           "title": "Expected Value"
+        },
+        "check_items": {
+          "items": {
+            "$ref": "#/$defs/RuleCheckItem"
+          },
+          "title": "Check Items",
+          "type": "array"
         },
         "scope": {
           "$ref": "#/$defs/RuleScope"
@@ -338,6 +405,15 @@
       ],
       "title": "RuleItem",
       "type": "object"
+    },
+    "RulePriority": {
+      "enum": [
+        "critical",
+        "important",
+        "normal"
+      ],
+      "title": "RulePriority",
+      "type": "string"
     },
     "RuleScope": {
       "additionalProperties": false,
@@ -449,6 +525,16 @@
       ],
       "title": "SourceRef",
       "type": "object"
+    },
+    "VerificationLevel": {
+      "enum": [
+        "bid_only",
+        "source_check",
+        "evidence_check",
+        "cross_check"
+      ],
+      "title": "VerificationLevel",
+      "type": "string"
     }
   },
   "additionalProperties": false,

@@ -90,7 +90,14 @@ class RetrievalService:
             [
                 RerankDocument(
                     document_id=item.chunk.chunk_id,
-                    text=item.chunk.content,
+                    text="\n".join(
+                        part
+                        for part in [
+                            item.chunk.retrieval_hint,
+                            item.chunk.content,
+                        ]
+                        if part
+                    ),
                 )
                 for item in merged
             ],

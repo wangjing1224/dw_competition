@@ -9,7 +9,7 @@ from app.models.common import (
     ProjectMatchStatus,
     StrictModel,
 )
-from app.models.documents import DocumentRef
+from app.models.documents import BidDocumentSummary, DocumentRef
 from app.models.evidence import EvidenceReviewResult
 from app.models.findings import Finding
 
@@ -25,6 +25,7 @@ class FileAuditResult(StrictModel):
     file: DocumentRef
     is_applicable: bool
     project_match: ProjectMatch
+    document_summary: BidDocumentSummary | None = None
     exclusion_reason: str | None = None
     overall_conclusion: OverallConclusion
     findings: list[Finding] = Field(default_factory=list)
@@ -38,9 +39,14 @@ class FileAuditResult(StrictModel):
                 raise ValueError("适用文件不能标记为 not_applicable")
         else:
             if not self.exclusion_reason:
-                raise ValueError("不适用文件必须说明排除原因")
-            if self.overall_conclusion != OverallConclusion.NOT_APPLICABLE:
-                raise ValueError("不适用文件总体结论必须为 not_applicable")
+                raise ValueError("未进入自动审核的文件必须说明原因")
+            expected = (
+                OverallConclusion.NOT_APPLICABLE
+                if self.project_match.status == "not_matched"
+                else OverallConclusion.MANUAL_REVIEW
+            )
+            if self.overall_conclusion != expected:
+                raise ValueError("文件总体结论与路由状态不一致")
             if self.findings:
                 raise ValueError("不适用文件不能包含普通审核 Finding")
         return self

@@ -26,7 +26,20 @@ evidence_classification_model:
   enable_thinking: false
   structured_output_mode: prompt_only
 
-# 主审核 Agent 模型：按 RuleSet 逐项审核投标文件并调用审核工具。
+# 投标文件详细摘要与项目相关性路由模型：每个投标文件进入索引前调用一次。
+bid_summary_model:
+  # 默认复用主审核模型连接；如需独立部署，直接把下面两个占位符改成新的环境变量。
+  base_url: ${BID_CHAT_MODEL_BASE_URL}
+  api_key: ${BID_CHAT_MODEL_API_KEY}
+  model: qwen3.7-plus
+  temperature: 0.1
+  timeout_seconds: 120
+  max_retries: 2
+  max_output_tokens: 8192
+  enable_thinking: false
+  structured_output_mode: prompt_only
+
+# 主审核 Agent 模型：一次审核当前投标文件的全部最终规则并按需调用工具。
 bid_chat_model:
   base_url: ${BID_CHAT_MODEL_BASE_URL}
   api_key: ${BID_CHAT_MODEL_API_KEY}
@@ -38,7 +51,7 @@ bid_chat_model:
   enable_thinking: false
   structured_output_mode: prompt_only
 
-# 资料核验子 Agent 模型：针对主 Agent 传入的单条 Claim 核验支撑材料。
+# 资料核验子 Agent 模型：针对主 Agent 传入的精确 Claim，在最多三轮内核验资料。
 evidence_chat_model:
   base_url: ${EVIDENCE_CHAT_MODEL_BASE_URL}
   api_key: ${EVIDENCE_CHAT_MODEL_API_KEY}

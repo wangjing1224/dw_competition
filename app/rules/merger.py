@@ -4,6 +4,7 @@ import json
 from collections import defaultdict
 
 from app.models.rules import RuleItem, RuleSet
+from app.rules.policies import limit_rules, normalize_rule_policy
 
 
 def _semantic_key(rule: RuleItem) -> tuple[str, str, str, str]:
@@ -27,8 +28,8 @@ def _requirement_signature(rule: RuleItem) -> str:
     )
 
 
-def merge_rule_set(rule_set: RuleSet) -> RuleSet:
-    """第一版只做可解释的精确去重，不做额外 LLM 语义合并。"""
+def merge_rule_set(rule_set: RuleSet, *, limit: int = 30) -> RuleSet:
+    """按稳定语义键归并，并在策略校正后只施加总量上限。"""
 
     groups: dict[tuple[str, str, str, str], list[RuleItem]] = defaultdict(list)
     for rule in rule_set.rules:
@@ -45,26 +46,30 @@ def merge_rule_set(rule_set: RuleSet) -> RuleSet:
         ]
         if len(signatures) == 1:
             merged.append(
-                primary.model_copy(
-                    update={
-                        "supporting_sources": [
-                            *primary.supporting_sources,
-                            *supporting,
-                        ]
-                    }
+                normalize_rule_policy(
+                    primary.model_copy(
+                        update={
+                            "supporting_sources": [
+                                *primary.supporting_sources,
+                                *supporting,
+                            ]
+                        }
+                    )
                 )
             )
         else:
             merged.append(
-                primary.model_copy(
-                    update={
-                        "status": "rule_conflict",
-                        "conflict_note": "相同作用域下存在无法自动消解的不同要求",
-                        "supporting_sources": [
-                            *primary.supporting_sources,
-                            *supporting,
-                        ],
-                    }
+                normalize_rule_policy(
+                    primary.model_copy(
+                        update={
+                            "status": "rule_conflict",
+                            "conflict_note": "相同作用域下存在无法自动消解的不同要求",
+                            "supporting_sources": [
+                                *primary.supporting_sources,
+                                *supporting,
+                            ],
+                        }
+                    )
                 )
             )
-    return rule_set.model_copy(update={"rules": merged})
+    return rule_set.model_copy(update={"rules": limit_rules(merged, limit)})

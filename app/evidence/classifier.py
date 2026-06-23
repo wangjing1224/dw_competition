@@ -6,7 +6,11 @@ from app.core.config import ChatModelSettings
 from app.llm.chat_model import invoke_structured
 from app.models.common import EvidenceType
 from app.models.documents import DocumentRef, ParsedDocument
-from app.models.evidence import EvidenceClassification
+from app.models.evidence import (
+    EvidenceCatalogProfile,
+    EvidenceClassification,
+    EvidenceRetrievalProfile,
+)
 from app.prompts.loader import render_prompt
 
 
@@ -48,6 +52,17 @@ async def classify_evidence_document(
             confidence=0,
             classification_status="manual_review",
             reason="当前解析结果不足以可靠自动分类",
+            catalog_profile=EvidenceCatalogProfile(
+                rule_categories=[],
+                summary="资料内容无法可靠解析",
+                verifiable_topics=[],
+            ),
+            retrieval_profile=EvidenceRetrievalProfile(
+                document_title=document.file_name,
+                entities=[],
+                keywords=[],
+                searchable_facts=[],
+            ),
         )
     prompt = render_prompt(
         "evidence_classification",

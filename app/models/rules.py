@@ -7,9 +7,11 @@ from pydantic import Field, model_validator
 from app.models.common import (
     EvidenceType,
     RuleCategory,
+    RulePriority,
     RuleStatus,
     Severity,
     StrictModel,
+    VerificationLevel,
 )
 from app.models.documents import DocumentRef, SourceRef
 
@@ -27,16 +29,29 @@ class RuleScope(StrictModel):
     material_name: str | None = None
 
 
+class RuleCheckItem(StrictModel):
+    """复合规则中的一个可独立判断检查项。"""
+
+    item_key: str
+    requirement: str
+    target_field: str | None = None
+    operator: str | None = None
+    expected_value: Any | None = None
+
+
 class RuleItem(StrictModel):
     rule_id: str
     status: RuleStatus
     category: RuleCategory
+    priority: RulePriority = RulePriority.NORMAL
+    verification_level: VerificationLevel = VerificationLevel.BID_ONLY
     name: str
     requirement: str
     check_type: str
     target_field: str | None = None
     operator: str | None = None
     expected_value: Any | None = None
+    check_items: list[RuleCheckItem] = Field(default_factory=list)
     scope: RuleScope = Field(default_factory=RuleScope)
     severity: Severity
     evidence_required: bool = False
@@ -51,6 +66,20 @@ class RuleItem(StrictModel):
             raise ValueError("需要资料核验的规则必须声明证据类型")
         if self.status == RuleStatus.RULE_CONFLICT and not self.conflict_note:
             raise ValueError("冲突规则必须说明冲突原因")
+        if not self.check_items:
+            object.__setattr__(
+                self,
+                "check_items",
+                [
+                    RuleCheckItem(
+                        item_key=self.target_field or self.name,
+                        requirement=self.requirement,
+                        target_field=self.target_field,
+                        operator=self.operator,
+                        expected_value=self.expected_value,
+                    )
+                ],
+            )
         return self
 
 

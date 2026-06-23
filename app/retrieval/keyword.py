@@ -28,7 +28,13 @@ def keyword_tokens(text: str) -> list[str]:
 def build_keyword_index(chunks: list[IndexChunk]) -> dict[str, list[int]]:
     inverted: dict[str, list[int]] = defaultdict(list)
     for row_index, chunk in enumerate(chunks):
-        for token in keyword_tokens(f"{chunk.section}\n{chunk.content}"):
+        for token in keyword_tokens(
+            "\n".join(
+                part
+                for part in [chunk.section, chunk.retrieval_hint, chunk.content]
+                if part
+            )
+        ):
             inverted[token].append(row_index)
     return dict(inverted)
 

@@ -59,6 +59,7 @@ def build_embedding_model(settings: EmbeddingSettings) -> EmbeddingModel:
 class ModelRegistry:
     rule_extraction: ChatOpenAI
     evidence_classification: ChatOpenAI
+    bid_summary: ChatOpenAI
     bid_chat: ChatOpenAI
     evidence_chat: ChatOpenAI
     embedding: EmbeddingModel
@@ -72,6 +73,7 @@ def build_model_registry(settings: AppSettings | None = None) -> ModelRegistry:
         evidence_classification=build_chat_model(
             resolved.evidence_classification_model
         ),
+        bid_summary=build_chat_model(resolved.bid_summary_model),
         bid_chat=build_chat_model(resolved.bid_chat_model),
         evidence_chat=build_chat_model(resolved.evidence_chat_model),
         embedding=build_embedding_model(resolved.embedding_model),

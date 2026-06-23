@@ -11,6 +11,7 @@ from app.retrieval.chunker import chunk_parsed_document
 from app.retrieval.keyword import build_keyword_index
 from app.retrieval.models import IndexManifest, IndexScope
 from app.retrieval.store import atomic_index_directory, write_index
+from app.evidence.storage import load_evidence_classification
 
 
 def embedding_config_fingerprint(settings: EmbeddingSettings) -> str:
@@ -46,15 +47,43 @@ async def build_document_index(
             }
         )
         parsed = parsed.model_copy(update={"document": indexed_document})
+        retrieval_hint = None
+        if str(document.data_role) == "evidence_material":
+            classification = load_evidence_classification(
+                document.file_id,
+                resolved,
+            )
+            if classification is not None:
+                profile = classification.retrieval_profile
+                retrieval_hint = "\n".join(
+                    [
+                        profile.document_title,
+                        " ".join(profile.entities),
+                        " ".join(profile.keywords),
+                        " ".join(profile.searchable_facts),
+                    ]
+                )
         chunks.extend(
             chunk_parsed_document(
                 parsed,
                 max_tokens=resolved.retrieval.chunk_tokens,
                 overlap_tokens=resolved.retrieval.chunk_overlap,
+                retrieval_hint=retrieval_hint,
             )
         )
     vectors = await embedding_model.embed(
-        [f"{chunk.section}\n{chunk.content}" for chunk in chunks]
+        [
+            "\n".join(
+                part
+                for part in [
+                    chunk.section,
+                    chunk.retrieval_hint,
+                    chunk.content,
+                ]
+                if part
+            )
+            for chunk in chunks
+        ]
     )
     manifest = IndexManifest(
         dimension=resolved.embedding_model.dimension,

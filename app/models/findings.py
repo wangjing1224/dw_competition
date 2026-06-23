@@ -12,6 +12,16 @@ from app.models.common import (
 from app.models.documents import SourceRef
 
 
+class FindingCheckResult(StrictModel):
+    """复合规则中单个检查项的结论。"""
+
+    item_key: str
+    result: FindingResult
+    actual_value: str | None = None
+    description: str
+    bid_source: SourceRef | None = None
+
+
 class Finding(StrictModel):
     finding_id: str
     task_id: str
@@ -28,6 +38,7 @@ class Finding(StrictModel):
     rule_source: SourceRef
     bid_source: SourceRef | None = None
     evidence_result_id: str | None = None
+    check_results: list[FindingCheckResult] = Field(default_factory=list)
     suggestion: str | None = None
     confidence: float = Field(ge=0, le=1)
 

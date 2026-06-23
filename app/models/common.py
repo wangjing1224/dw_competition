@@ -74,14 +74,25 @@ class RuleStatus(StrEnum):
 
 
 class RuleCategory(StrEnum):
-    PROJECT_MATCH = "project_match"
     FORMAT = "format"
+    QUALIFICATION = "qualification"
     COMMERCIAL = "commercial"
     TECHNICAL = "technical"
-    QUALIFICATION = "qualification"
-    PERFORMANCE = "performance"
-    CAPACITY = "capacity"
-    CONSISTENCY = "consistency"
+    PERFORMANCE_CAPACITY = "performance_capacity"
+    CONSISTENCY_RISK = "consistency_risk"
+
+
+class RulePriority(StrEnum):
+    CRITICAL = "critical"
+    IMPORTANT = "important"
+    NORMAL = "normal"
+
+
+class VerificationLevel(StrEnum):
+    BID_ONLY = "bid_only"
+    SOURCE_CHECK = "source_check"
+    EVIDENCE_CHECK = "evidence_check"
+    CROSS_CHECK = "cross_check"
 
 
 class Severity(StrEnum):

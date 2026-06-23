@@ -1,4 +1,4 @@
-"""只根据已落盘 JSON 为每个适用文件生成固定章节 Word 报告。"""
+"""只根据已落盘 JSON 为每个上传文件生成固定章节 Word 报告。"""
 
 import os
 import re
@@ -43,12 +43,20 @@ def _add_findings(document, file_result: FileAuditResult) -> None:
         table.rows[0].cells[index].text = value
     for finding in ordered_findings(file_result.findings):
         cells = table.add_row().cells
+        check_details = "\n".join(
+            f"- {item.item_key}：{item.result}，{item.description}"
+            for item in finding.check_results
+        )
         values = [
             finding.title,
             str(finding.category),
             str(finding.severity),
             str(finding.result),
-            finding.description,
+            (
+                f"{finding.description}\n{check_details}"
+                if check_details
+                else finding.description
+            ),
             finding.suggestion or "",
         ]
         for index, value in enumerate(values):
@@ -65,12 +73,23 @@ def _render_report(
     document.add_paragraph(f"审核任务：{result.task_id}")
     document.add_paragraph(f"投标文件：{file_result.file.file_name}")
     document.add_paragraph(f"总体结论：{file_result.overall_conclusion}")
+    if file_result.document_summary is not None:
+        document.add_heading("文件摘要", level=1)
+        document.add_paragraph(file_result.document_summary.summary)
 
     document.add_heading("项目适用性判断", level=1)
     document.add_paragraph(
         f"状态：{file_result.project_match.status}\n"
         f"理由：{file_result.project_match.reason}"
     )
+    if not file_result.is_applicable:
+        document.add_paragraph(
+            f"未进入自动规则审核：{file_result.exclusion_reason or '原因未记录'}"
+        )
+        if str(file_result.project_match.status) == "uncertain":
+            document.add_paragraph("处理方式：需要人工确认文件项目归属。")
+        return document
+
     _add_findings(document, file_result)
 
     document.add_heading("资格与资料核验", level=1)
@@ -141,8 +160,6 @@ def generate_word_reports(
     directory = store.task_output_dir(result.task_id)
     paths: list[str] = []
     for file_result in result.file_results:
-        if not file_result.is_applicable:
-            continue
         path = directory / (
             f"{_safe_stem(file_result.file.file_name)}_{file_result.file.file_id[:12]}"
             "_审核报告.docx"

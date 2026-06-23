@@ -1,119 +1,5 @@
 {
   "$defs": {
-    "ClassificationStatus": {
-      "enum": [
-        "classified",
-        "manual_review"
-      ],
-      "title": "ClassificationStatus",
-      "type": "string"
-    },
-    "DataRole": {
-      "enum": [
-        "rule_source",
-        "evidence_material",
-        "bid_document"
-      ],
-      "title": "DataRole",
-      "type": "string"
-    },
-    "DocumentRef": {
-      "additionalProperties": false,
-      "properties": {
-        "file_id": {
-          "title": "File Id",
-          "type": "string"
-        },
-        "file_name": {
-          "title": "File Name",
-          "type": "string"
-        },
-        "source_path": {
-          "title": "Source Path",
-          "type": "string"
-        },
-        "data_role": {
-          "$ref": "#/$defs/DataRole"
-        },
-        "parse_status": {
-          "$ref": "#/$defs/ParseStatus",
-          "default": "pending"
-        },
-        "project_id": {
-          "title": "Project Id",
-          "type": "string"
-        },
-        "bidder_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Bidder Id"
-        },
-        "task_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Task Id"
-        },
-        "evidence_type": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EvidenceType"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "classification_status": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ClassificationStatus"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "classification_confidence": {
-          "anyOf": [
-            {
-              "maximum": 1,
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Classification Confidence"
-        }
-      },
-      "required": [
-        "file_id",
-        "file_name",
-        "source_path",
-        "data_role",
-        "project_id"
-      ],
-      "title": "DocumentRef",
-      "type": "object"
-    },
     "EvidenceReviewResult": {
       "additionalProperties": false,
       "properties": {
@@ -213,83 +99,6 @@
       "title": "EvidenceReviewStatus",
       "type": "string"
     },
-    "EvidenceType": {
-      "enum": [
-        "contract",
-        "invoice",
-        "invoice_verification",
-        "certificate",
-        "business_license",
-        "technical_parameter",
-        "test_report",
-        "performance_table",
-        "production_capacity",
-        "personnel",
-        "after_sales",
-        "other"
-      ],
-      "title": "EvidenceType",
-      "type": "string"
-    },
-    "FileAuditResult": {
-      "additionalProperties": false,
-      "properties": {
-        "file": {
-          "$ref": "#/$defs/DocumentRef"
-        },
-        "is_applicable": {
-          "title": "Is Applicable",
-          "type": "boolean"
-        },
-        "project_match": {
-          "$ref": "#/$defs/ProjectMatch"
-        },
-        "exclusion_reason": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Exclusion Reason"
-        },
-        "overall_conclusion": {
-          "$ref": "#/$defs/OverallConclusion"
-        },
-        "findings": {
-          "items": {
-            "$ref": "#/$defs/Finding"
-          },
-          "title": "Findings",
-          "type": "array"
-        },
-        "evidence_results": {
-          "items": {
-            "$ref": "#/$defs/EvidenceReviewResult"
-          },
-          "title": "Evidence Results",
-          "type": "array"
-        },
-        "suggestions": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Suggestions",
-          "type": "array"
-        }
-      },
-      "required": [
-        "file",
-        "is_applicable",
-        "project_match",
-        "overall_conclusion"
-      ],
-      "title": "FileAuditResult",
-      "type": "object"
-    },
     "Finding": {
       "additionalProperties": false,
       "properties": {
@@ -363,6 +172,13 @@
           "default": null,
           "title": "Evidence Result Id"
         },
+        "check_results": {
+          "items": {
+            "$ref": "#/$defs/FindingCheckResult"
+          },
+          "title": "Check Results",
+          "type": "array"
+        },
         "suggestion": {
           "anyOf": [
             {
@@ -401,202 +217,18 @@
       "title": "Finding",
       "type": "object"
     },
-    "FindingResult": {
-      "enum": [
-        "compliant",
-        "non_compliant",
-        "risk",
-        "manual_review"
-      ],
-      "title": "FindingResult",
-      "type": "string"
-    },
-    "OverallConclusion": {
-      "enum": [
-        "compliant",
-        "non_compliant",
-        "risk",
-        "manual_review",
-        "not_applicable"
-      ],
-      "title": "OverallConclusion",
-      "type": "string"
-    },
-    "ParseStatus": {
-      "enum": [
-        "pending",
-        "parsed",
-        "partial",
-        "ocr_required",
-        "unsupported",
-        "manual_review"
-      ],
-      "title": "ParseStatus",
-      "type": "string"
-    },
-    "ProjectMatch": {
+    "FindingCheckResult": {
       "additionalProperties": false,
+      "description": "复合规则中单个检查项的结论。",
       "properties": {
-        "status": {
-          "$ref": "#/$defs/ProjectMatchStatus"
-        },
-        "reason": {
-          "title": "Reason",
+        "item_key": {
+          "title": "Item Key",
           "type": "string"
         },
-        "matched_fields": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Matched Fields",
-          "type": "array"
+        "result": {
+          "$ref": "#/$defs/FindingResult"
         },
-        "conflicting_fields": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Conflicting Fields",
-          "type": "array"
-        }
-      },
-      "required": [
-        "status",
-        "reason"
-      ],
-      "title": "ProjectMatch",
-      "type": "object"
-    },
-    "ProjectMatchStatus": {
-      "enum": [
-        "matched",
-        "not_matched",
-        "uncertain"
-      ],
-      "title": "ProjectMatchStatus",
-      "type": "string"
-    },
-    "RecordFileResultDecision": {
-      "additionalProperties": false,
-      "properties": {
-        "action": {
-          "const": "record_file_result",
-          "title": "Action",
-          "type": "string"
-        },
-        "reason": {
-          "title": "Reason",
-          "type": "string"
-        },
-        "project_match": {
-          "default": null,
-          "title": "Project Match",
-          "type": "null"
-        },
-        "is_applicable": {
-          "default": null,
-          "title": "Is Applicable",
-          "type": "null"
-        },
-        "exclusion_reason": {
-          "default": null,
-          "title": "Exclusion Reason",
-          "type": "null"
-        },
-        "finding": {
-          "default": null,
-          "title": "Finding",
-          "type": "null"
-        },
-        "file_result": {
-          "$ref": "#/$defs/FileAuditResult"
-        },
-        "evidence_results": {
-          "items": {
-            "$ref": "#/$defs/EvidenceReviewResult"
-          },
-          "title": "Evidence Results",
-          "type": "array"
-        }
-      },
-      "required": [
-        "action",
-        "reason",
-        "file_result"
-      ],
-      "title": "RecordFileResultDecision",
-      "type": "object"
-    },
-    "RecordFindingDecision": {
-      "additionalProperties": false,
-      "properties": {
-        "action": {
-          "const": "record_finding",
-          "title": "Action",
-          "type": "string"
-        },
-        "reason": {
-          "title": "Reason",
-          "type": "string"
-        },
-        "finding": {
-          "$ref": "#/$defs/Finding"
-        },
-        "project_match": {
-          "default": null,
-          "title": "Project Match",
-          "type": "null"
-        },
-        "is_applicable": {
-          "default": null,
-          "title": "Is Applicable",
-          "type": "null"
-        },
-        "exclusion_reason": {
-          "default": null,
-          "title": "Exclusion Reason",
-          "type": "null"
-        },
-        "file_result": {
-          "default": null,
-          "title": "File Result",
-          "type": "null"
-        },
-        "evidence_results": {
-          "items": {
-            "$ref": "#/$defs/EvidenceReviewResult"
-          },
-          "title": "Evidence Results",
-          "type": "array"
-        }
-      },
-      "required": [
-        "action",
-        "reason",
-        "finding"
-      ],
-      "title": "RecordFindingDecision",
-      "type": "object"
-    },
-    "RecordProjectMatchDecision": {
-      "additionalProperties": false,
-      "properties": {
-        "action": {
-          "const": "record_project_match",
-          "title": "Action",
-          "type": "string"
-        },
-        "reason": {
-          "title": "Reason",
-          "type": "string"
-        },
-        "project_match": {
-          "$ref": "#/$defs/ProjectMatch"
-        },
-        "is_applicable": {
-          "title": "Is Applicable",
-          "type": "boolean"
-        },
-        "exclusion_reason": {
+        "actual_value": {
           "anyOf": [
             {
               "type": "string"
@@ -606,34 +238,41 @@
             }
           ],
           "default": null,
-          "title": "Exclusion Reason"
+          "title": "Actual Value"
         },
-        "finding": {
-          "default": null,
-          "title": "Finding",
-          "type": "null"
+        "description": {
+          "title": "Description",
+          "type": "string"
         },
-        "file_result": {
-          "default": null,
-          "title": "File Result",
-          "type": "null"
-        },
-        "evidence_results": {
-          "items": {
-            "$ref": "#/$defs/EvidenceReviewResult"
-          },
-          "title": "Evidence Results",
-          "type": "array"
+        "bid_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
-        "action",
-        "reason",
-        "project_match",
-        "is_applicable"
+        "item_key",
+        "result",
+        "description"
       ],
-      "title": "RecordProjectMatchDecision",
+      "title": "FindingCheckResult",
       "type": "object"
+    },
+    "FindingResult": {
+      "enum": [
+        "compliant",
+        "non_compliant",
+        "risk",
+        "manual_review"
+      ],
+      "title": "FindingResult",
+      "type": "string"
     },
     "ResponseStatus": {
       "enum": [
@@ -647,14 +286,12 @@
     },
     "RuleCategory": {
       "enum": [
-        "project_match",
         "format",
+        "qualification",
         "commercial",
         "technical",
-        "qualification",
-        "performance",
-        "capacity",
-        "consistency"
+        "performance_capacity",
+        "consistency_risk"
       ],
       "title": "RuleCategory",
       "type": "string"
@@ -731,23 +368,47 @@
       "type": "object"
     }
   },
-  "discriminator": {
-    "mapping": {
-      "record_file_result": "#/$defs/RecordFileResultDecision",
-      "record_finding": "#/$defs/RecordFindingDecision",
-      "record_project_match": "#/$defs/RecordProjectMatchDecision"
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "const": "record_batch",
+      "title": "Action",
+      "type": "string"
     },
-    "propertyName": "action"
-  },
-  "oneOf": [
-    {
-      "$ref": "#/$defs/RecordProjectMatchDecision"
+    "reason": {
+      "title": "Reason",
+      "type": "string"
     },
-    {
-      "$ref": "#/$defs/RecordFindingDecision"
+    "file_id": {
+      "title": "File Id",
+      "type": "string"
     },
-    {
-      "$ref": "#/$defs/RecordFileResultDecision"
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "evidence_results": {
+      "items": {
+        "$ref": "#/$defs/EvidenceReviewResult"
+      },
+      "title": "Evidence Results",
+      "type": "array"
     }
-  ]
+  },
+  "required": [
+    "action",
+    "reason",
+    "file_id",
+    "summary",
+    "findings"
+  ],
+  "title": "BatchAuditDecision",
+  "type": "object"
 }

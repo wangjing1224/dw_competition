@@ -9,13 +9,11 @@ from app.models.findings import Finding
 
 CATEGORY_ORDER = {
     "format": 0,
-    "commercial": 1,
-    "technical": 2,
-    "qualification": 3,
-    "performance": 4,
-    "capacity": 5,
-    "consistency": 6,
-    "project_match": 7,
+    "qualification": 1,
+    "commercial": 2,
+    "technical": 3,
+    "performance_capacity": 4,
+    "consistency_risk": 5,
 }
 SEVERITY_ORDER = {
     "fatal": 0,
