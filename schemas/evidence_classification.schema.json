@@ -8,69 +8,6 @@
       "title": "ClassificationStatus",
       "type": "string"
     },
-    "EvidenceCatalogProfile": {
-      "additionalProperties": false,
-      "properties": {
-        "rule_categories": {
-          "items": {
-            "$ref": "#/$defs/RuleCategory"
-          },
-          "title": "Rule Categories",
-          "type": "array"
-        },
-        "summary": {
-          "title": "Summary",
-          "type": "string"
-        },
-        "verifiable_topics": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Verifiable Topics",
-          "type": "array"
-        }
-      },
-      "required": [
-        "summary"
-      ],
-      "title": "EvidenceCatalogProfile",
-      "type": "object"
-    },
-    "EvidenceRetrievalProfile": {
-      "additionalProperties": false,
-      "properties": {
-        "document_title": {
-          "title": "Document Title",
-          "type": "string"
-        },
-        "entities": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Entities",
-          "type": "array"
-        },
-        "keywords": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Keywords",
-          "type": "array"
-        },
-        "searchable_facts": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Searchable Facts",
-          "type": "array"
-        }
-      },
-      "required": [
-        "document_title"
-      ],
-      "title": "EvidenceRetrievalProfile",
-      "type": "object"
-    },
     "EvidenceType": {
       "enum": [
         "contract",
@@ -88,18 +25,6 @@
       ],
       "title": "EvidenceType",
       "type": "string"
-    },
-    "RuleCategory": {
-      "enum": [
-        "format",
-        "qualification",
-        "commercial",
-        "technical",
-        "performance_capacity",
-        "consistency_risk"
-      ],
-      "title": "RuleCategory",
-      "type": "string"
     }
   },
   "additionalProperties": false,
@@ -107,33 +32,34 @@
     "evidence_type": {
       "$ref": "#/$defs/EvidenceType"
     },
-    "confidence": {
-      "maximum": 1,
-      "minimum": 0,
-      "title": "Confidence",
-      "type": "number"
-    },
     "classification_status": {
       "$ref": "#/$defs/ClassificationStatus"
     },
     "reason": {
+      "maxLength": 500,
+      "minLength": 2,
       "title": "Reason",
       "type": "string"
     },
-    "catalog_profile": {
-      "$ref": "#/$defs/EvidenceCatalogProfile"
+    "bid_summary": {
+      "maxLength": 500,
+      "minLength": 2,
+      "title": "Bid Summary",
+      "type": "string"
     },
-    "retrieval_profile": {
-      "$ref": "#/$defs/EvidenceRetrievalProfile"
+    "evidence_summary": {
+      "maxLength": 2000,
+      "minLength": 2,
+      "title": "Evidence Summary",
+      "type": "string"
     }
   },
   "required": [
     "evidence_type",
-    "confidence",
     "classification_status",
     "reason",
-    "catalog_profile",
-    "retrieval_profile"
+    "bid_summary",
+    "evidence_summary"
   ],
   "title": "EvidenceClassification",
   "type": "object"

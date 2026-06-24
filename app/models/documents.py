@@ -9,7 +9,6 @@ from app.models.common import (
     ParseStatus,
     StrictModel,
 )
-from app.models.common import RuleCategory
 
 
 class DocumentRef(StrictModel):
@@ -23,7 +22,6 @@ class DocumentRef(StrictModel):
     task_id: str | None = None
     evidence_type: EvidenceType | None = None
     classification_status: ClassificationStatus | None = None
-    classification_confidence: float | None = Field(default=None, ge=0, le=1)
 
     @model_validator(mode="after")
     def validate_ownership(self) -> "DocumentRef":
@@ -52,7 +50,6 @@ def document_ref_from_record(record: object) -> DocumentRef:
         task_id=getattr(record, "task_id"),
         evidence_type=getattr(record, "evidence_type"),
         classification_status=getattr(record, "classification_status"),
-        classification_confidence=getattr(record, "classification_confidence"),
     )
 
 
@@ -88,27 +85,21 @@ class ParsedDocument(StrictModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class BidDocumentSummary(StrictModel):
-    """投标文件进入索引和主 Agent 前的清洗摘要与路由结果。"""
+class BidRouteDecision(StrictModel):
+    """摘要模型只输出路由状态、原因和详细摘要。"""
 
-    file_id: str
-    summary: str
-    document_type: str
-    project_name: str | None = None
-    buyer: str | None = None
-    bidder_name: str | None = None
-    package_numbers: list[str] = Field(default_factory=list)
-    material_categories: list[str] = Field(default_factory=list)
-    product_names: list[str] = Field(default_factory=list)
-    model_numbers: list[str] = Field(default_factory=list)
-    category_overview: dict[RuleCategory, str] = Field(default_factory=dict)
-    key_sections: list[str] = Field(default_factory=list)
     match_status: str
     match_reason: str
-    confidence: float = Field(ge=0, le=1)
+    summary: str
 
     @model_validator(mode="after")
-    def validate_match_status(self) -> "BidDocumentSummary":
+    def validate_match_status(self) -> "BidRouteDecision":
         if self.match_status not in {"matched", "not_matched", "uncertain"}:
             raise ValueError("match_status 必须为 matched/not_matched/uncertain")
         return self
+
+
+class BidDocumentSummary(BidRouteDecision):
+    """代码补充文件身份后的持久化摘要。"""
+
+    file_id: str

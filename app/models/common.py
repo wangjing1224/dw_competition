@@ -124,7 +124,6 @@ class EvidenceReviewStatus(StrEnum):
     CONTRADICTED = "contradicted"
     OCR_REQUIRED = "ocr_required"
     UNVERIFIABLE = "unverifiable"
-    WEAKLY_RELATED = "weakly_related"
 
 
 class ProjectMatchStatus(StrEnum):

@@ -1,40 +1,38 @@
-"""将核心 Pydantic 模型导出为稳定 JSON Schema 文件。"""
+"""把当前领域模型的 JSON Schema 导出到根目录 schemas/。"""
 
 import json
 from pathlib import Path
-from typing import Any
-
-from pydantic import TypeAdapter
 
 from app.core.config import PROJECT_ROOT
-from app.models.evidence import EvidenceClassification, EvidenceReviewResult
+from app.models.evidence import EvidenceClassification, EvidenceReviewDecision
 from app.models.results import AuditResult
 from app.models.rules import RuleSet
-from app.models.tasks import BatchAuditDecision
+from app.models.tasks import AgentAuditDecision
 
 
-SCHEMA_TARGETS: tuple[tuple[Any, str], ...] = (
-    (RuleSet, "rule_set.schema.json"),
-    (EvidenceClassification, "evidence_classification.schema.json"),
-    (BatchAuditDecision, "bid_agent_decision.schema.json"),
-    (EvidenceReviewResult, "evidence_review_result.schema.json"),
-    (AuditResult, "audit_result.schema.json"),
-)
+SCHEMA_MODELS = {
+    "rule_set.schema.json": RuleSet,
+    "evidence_classification.schema.json": EvidenceClassification,
+    "bid_agent_decision.schema.json": AgentAuditDecision,
+    "evidence_review_result.schema.json": EvidenceReviewDecision,
+    "audit_result.schema.json": AuditResult,
+}
 
 
 def export_schemas(output_dir: Path | None = None) -> list[Path]:
-    target_dir = output_dir or PROJECT_ROOT / "schemas"
-    target_dir.mkdir(parents=True, exist_ok=True)
+    directory = output_dir or PROJECT_ROOT / "schemas"
+    directory.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
-    for schema_type, file_name in SCHEMA_TARGETS:
-        path = target_dir / file_name
-        temporary = path.with_suffix(path.suffix + ".tmp")
+    for file_name, model in SCHEMA_MODELS.items():
+        path = directory / file_name
+        temporary = path.with_suffix(".json.tmp")
         temporary.write_text(
             json.dumps(
-                TypeAdapter(schema_type).json_schema(),
+                model.model_json_schema(),
                 ensure_ascii=False,
                 indent=2,
-            ),
+            )
+            + "\n",
             encoding="utf-8",
         )
         temporary.replace(path)

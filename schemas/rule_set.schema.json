@@ -88,20 +88,6 @@
             }
           ],
           "default": null
-        },
-        "classification_confidence": {
-          "anyOf": [
-            {
-              "maximum": 1,
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Classification Confidence"
         }
       },
       "required": [
@@ -224,69 +210,17 @@
       "title": "RuleCategory",
       "type": "string"
     },
-    "RuleCheckItem": {
-      "additionalProperties": false,
-      "description": "复合规则中的一个可独立判断检查项。",
-      "properties": {
-        "item_key": {
-          "title": "Item Key",
-          "type": "string"
-        },
-        "requirement": {
-          "title": "Requirement",
-          "type": "string"
-        },
-        "target_field": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Target Field"
-        },
-        "operator": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Operator"
-        },
-        "expected_value": {
-          "anyOf": [
-            {},
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Expected Value"
-        }
-      },
-      "required": [
-        "item_key",
-        "requirement"
-      ],
-      "title": "RuleCheckItem",
-      "type": "object"
-    },
     "RuleItem": {
       "additionalProperties": false,
+      "description": "持久化规则。\n\n模型调用只读取 ``RuleModelView``；来源字段仅供代码做溯源和报告拼接。",
       "properties": {
         "rule_id": {
           "title": "Rule Id",
           "type": "string"
         },
         "status": {
-          "$ref": "#/$defs/RuleStatus"
+          "$ref": "#/$defs/RuleStatus",
+          "default": "active"
         },
         "category": {
           "$ref": "#/$defs/RuleCategory"
@@ -295,79 +229,21 @@
           "$ref": "#/$defs/RulePriority",
           "default": "normal"
         },
-        "verification_level": {
+        "verification": {
           "$ref": "#/$defs/VerificationLevel",
           "default": "bid_only"
         },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "requirement": {
+          "maxLength": 500,
+          "minLength": 8,
           "title": "Requirement",
           "type": "string"
         },
-        "check_type": {
-          "title": "Check Type",
-          "type": "string"
-        },
-        "target_field": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Target Field"
-        },
-        "operator": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Operator"
-        },
-        "expected_value": {
-          "anyOf": [
-            {},
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Expected Value"
-        },
-        "check_items": {
-          "items": {
-            "$ref": "#/$defs/RuleCheckItem"
-          },
-          "title": "Check Items",
-          "type": "array"
-        },
-        "scope": {
-          "$ref": "#/$defs/RuleScope"
-        },
-        "severity": {
-          "$ref": "#/$defs/Severity"
-        },
-        "evidence_required": {
-          "default": false,
-          "title": "Evidence Required",
-          "type": "boolean"
-        },
-        "required_evidence_types": {
+        "evidence_types": {
           "items": {
             "$ref": "#/$defs/EvidenceType"
           },
-          "title": "Required Evidence Types",
+          "title": "Evidence Types",
           "type": "array"
         },
         "conflict_note": {
@@ -395,12 +271,8 @@
       },
       "required": [
         "rule_id",
-        "status",
         "category",
-        "name",
         "requirement",
-        "check_type",
-        "severity",
         "source"
       ],
       "title": "RuleItem",
@@ -415,37 +287,6 @@
       "title": "RulePriority",
       "type": "string"
     },
-    "RuleScope": {
-      "additionalProperties": false,
-      "properties": {
-        "package_no": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Package No"
-        },
-        "material_name": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Material Name"
-        }
-      },
-      "title": "RuleScope",
-      "type": "object"
-    },
     "RuleStatus": {
       "enum": [
         "active",
@@ -453,17 +294,6 @@
         "manual_review"
       ],
       "title": "RuleStatus",
-      "type": "string"
-    },
-    "Severity": {
-      "enum": [
-        "fatal",
-        "major",
-        "minor",
-        "info",
-        "unknown"
-      ],
-      "title": "Severity",
       "type": "string"
     },
     "SourceRef": {

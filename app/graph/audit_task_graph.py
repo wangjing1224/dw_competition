@@ -7,7 +7,6 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from app.agents.bid_agent import bid_agent_node
-from app.audit.retrieval_context import build_grouped_retrieval_context
 from app.core.config import AppSettings
 from app.graph.audit_state import AuditState, build_initial_audit_state
 from app.graph.evidence_graph import build_evidence_graph
@@ -15,25 +14,21 @@ from app.graph.routing import route_after_state_update, route_bid_agent
 from app.graph.state_updates import (
     apply_bid_agent_output_node,
     build_audit_result_node,
+    prepare_format_retry_node,
+    prepare_length_retry_node,
 )
 from app.llm.factory import ModelRegistry
+from app.models.results import AuditResult
+from app.models.rules import RuleReportItem, present_rule_for_model
 from app.retrieval.service import RetrievalService
 from app.services.audit_task_service import AuditExecutor, AuditTaskContext
-from app.models.results import AuditResult
-from app.storage.repositories import (
-    AuditEventRepository,
-    AuditTaskRepository,
-    FileRepository,
-)
+from app.storage.repositories import AuditEventRepository
 from app.tools.bid_tools import (
     RequestEvidenceReviewTool,
-    RetrieveRuleSourceTool,
     SearchBidResponseTool,
+    SearchTenderSourceTool,
 )
-from app.tools.evidence_tools import (
-    RetrieveEvidenceSourceTool,
-    SearchEvidenceTool,
-)
+from app.tools.evidence_tools import SearchEvidenceTool
 
 
 def build_audit_graph(
@@ -41,19 +36,14 @@ def build_audit_graph(
     models: ModelRegistry,
     event_repository: AuditEventRepository | None = None,
 ):
-    """主图仅包含 Agent、Tool、状态更新和结果汇总四类节点。"""
-
     events = event_repository or AuditEventRepository()
     retrieval = RetrievalService(models.embedding, models.rerank, settings)
     evidence_tools = [
         SearchEvidenceTool(
             retrieval_service=retrieval,
-            event_repository=events,
-        ),
-        RetrieveEvidenceSourceTool(
             settings=settings,
             event_repository=events,
-        ),
+        )
     ]
     evidence_graph = build_evidence_graph(
         models.evidence_chat,
@@ -63,36 +53,23 @@ def build_audit_graph(
     )
     bid_tools = [
         SearchBidResponseTool(
-            task_repository=AuditTaskRepository(),
-            file_repository=FileRepository(),
             retrieval_service=retrieval,
+            settings=settings,
             event_repository=events,
         ),
-        RetrieveRuleSourceTool(
+        SearchTenderSourceTool(
+            retrieval_service=retrieval,
             settings=settings,
             event_repository=events,
         ),
         RequestEvidenceReviewTool(
             evidence_graph=evidence_graph,
+            settings=settings,
             event_repository=events,
         ),
     ]
 
     graph = StateGraph(AuditState)
-    async def prepare_context(state: AuditState):
-        from app.graph.audit_state import current_file
-
-        context = await build_grouped_retrieval_context(
-            retrieval,
-            task_id=state["task_id"],
-            project_id=state["project_id"],
-            bidder_id=state["bidder_id"],
-            document=current_file(state),
-            rule_set=state["rule_set"],
-        )
-        return {"grouped_retrieval_context": context}
-
-    graph.add_node("prepare_context", prepare_context)
     graph.add_node(
         "bid_agent",
         partial(
@@ -103,13 +80,14 @@ def build_audit_graph(
         ),
     )
     graph.add_node("tools", ToolNode(bid_tools))
+    graph.add_node("retry_length", prepare_length_retry_node)
+    graph.add_node("retry_format", prepare_format_retry_node)
     graph.add_node(
         "apply_output",
         partial(apply_bid_agent_output_node, event_repository=events),
     )
     graph.add_node("build_result", build_audit_result_node)
-    graph.set_entry_point("prepare_context")
-    graph.add_edge("prepare_context", "bid_agent")
+    graph.set_entry_point("bid_agent")
     graph.add_conditional_edges(
         "bid_agent",
         partial(route_bid_agent, max_steps=settings.audit.bid_agent_max_steps),
@@ -117,22 +95,24 @@ def build_audit_graph(
             "bid_agent": "bid_agent",
             "tools": "tools",
             "apply_output": "apply_output",
+            "retry_length": "retry_length",
+            "retry_format": "retry_format",
             "limit_reached": "apply_output",
         },
     )
     graph.add_edge("tools", "bid_agent")
+    graph.add_edge("retry_length", "bid_agent")
+    graph.add_edge("retry_format", "bid_agent")
     graph.add_conditional_edges(
         "apply_output",
         route_after_state_update,
-        {"continue": "prepare_context", "complete": "build_result"},
+        {"continue": "bid_agent", "complete": "build_result"},
     )
     graph.add_edge("build_result", END)
     return graph.compile(checkpointer=InMemorySaver())
 
 
 class LangGraphAuditExecutor(AuditExecutor):
-    """每个服务实例编译一张图，thread_id 使用 task_id 防止状态串线。"""
-
     def __init__(
         self,
         settings: AppSettings,
@@ -147,6 +127,13 @@ class LangGraphAuditExecutor(AuditExecutor):
                 task_id=context.task_id,
                 project_id=context.project_id,
                 bidder_id=context.bidder_id,
+                rules=[
+                    RuleReportItem.model_validate(
+                        present_rule_for_model(rule).model_dump(mode="json")
+                    )
+                    for rule in context.rule_set.rules
+                ],
+                evidence_classifications=context.evidence_classifications,
                 file_results=context.routed_file_results,
             )
         final_state = await self.graph.ainvoke(

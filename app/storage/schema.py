@@ -67,7 +67,6 @@ TABLE_DDLS = (
         sha256 TEXT NOT NULL,
         parse_status TEXT NOT NULL,
         evidence_type TEXT,
-        classification_confidence REAL,
         classification_status TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,

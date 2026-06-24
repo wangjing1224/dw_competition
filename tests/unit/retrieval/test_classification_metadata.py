@@ -15,7 +15,6 @@ def test_classified_document_metadata_is_inherited_by_chunk():
         bidder_id="bidder-1",
         evidence_type="contract",
         classification_status="classified",
-        classification_confidence=0.9,
     )
     parsed = ParsedDocument(
         document=document,

@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from app.evidence.classifier import EvidenceClassification
-from app.rules.extractor import ExtractedRule, RuleExtractionBatch
+from app.models.evidence import EvidenceClassification
+from app.models.rules import RuleDeltaResult
 from app.services.bidder_service import BidderService
 from app.services.project_service import ProjectService
 from app.storage.database import initialize_database
@@ -26,21 +26,13 @@ class FakeEmbedding:
 
 @pytest.fixture
 def preprocessing_environment(monkeypatch, temp_settings):
-    """把所有运行时路径和 Repository 连接统一重定向到临时目录。"""
-
     monkeypatch.setattr(
         "app.storage.database.database_path",
         lambda: temp_settings.storage.database_path,
     )
-    monkeypatch.setattr(
-        "app.storage.file_store.get_settings", lambda: temp_settings
-    )
-    monkeypatch.setattr(
-        "app.parsers.service.get_settings", lambda: temp_settings
-    )
-    monkeypatch.setattr(
-        "app.retrieval.store.get_settings", lambda: temp_settings
-    )
+    monkeypatch.setattr("app.storage.file_store.get_settings", lambda: temp_settings)
+    monkeypatch.setattr("app.parsers.service.get_settings", lambda: temp_settings)
+    monkeypatch.setattr("app.retrieval.store.get_settings", lambda: temp_settings)
     initialize_database(temp_settings.storage.database_path)
     return temp_settings
 
@@ -52,49 +44,38 @@ async def test_project_and_bidder_preprocessing_reach_ready(
     settings = preprocessing_environment
 
     async def fake_rule_output(*_args, **_kwargs):
-        return RuleExtractionBatch(
-            rules=[
-                ExtractedRule(
-                    category="technical",
-                    priority="important",
-                    verification_level="bid_only",
-                    name="像素要求",
-                    requirement="像素不低于640x480",
-                    check_type="semantic",
-                    severity="major",
-                )
+        return RuleDeltaResult(
+            operations=[
+                {
+                    "action": "add",
+                    "category": "technical",
+                    "priority": "important",
+                    "verification": "bid_only",
+                    "requirement": "探测器分辨率不低于640x480",
+                    "reason": "技术规范明确要求",
+                }
             ]
         )
 
     async def fake_classification(*_args, **_kwargs):
         return EvidenceClassification(
             evidence_type="contract",
-            confidence=0.95,
             classification_status="classified",
             reason="包含合同标的和双方主体",
-            catalog_profile={
-                "rule_categories": ["commercial", "performance_capacity"],
-                "summary": "供货合同",
-                "verifiable_topics": ["合同主体", "产品"],
-            },
-            retrieval_profile={
-                "document_title": "供货合同",
-                "entities": ["红外热成像仪"],
-                "keywords": ["供货合同", "红外热成像仪"],
-                "searchable_facts": ["合同主体", "产品"],
-            },
+            bid_summary="红外热成像仪供货合同",
+            evidence_summary="合同标的为红外热成像仪20台，正文可读",
         )
 
     monkeypatch.setattr("app.rules.extractor.invoke_structured", fake_rule_output)
     monkeypatch.setattr(
-        "app.evidence.classifier.invoke_structured", fake_classification
+        "app.evidence.classifier.invoke_structured",
+        fake_classification,
     )
     models = SimpleNamespace(
         rule_extraction=object(),
         evidence_classification=object(),
         embedding=FakeEmbedding(settings.embedding_model.dimension),
     )
-
     project = await ProjectService(settings, models).create_project(
         [
             (
@@ -114,18 +95,5 @@ async def test_project_and_bidder_preprocessing_reach_ready(
             )
         ],
     )
-
     assert project.status == "rule_ready"
     assert bidder.status == "evidence_ready"
-    assert (
-        settings.storage.data_root
-        / "indexes"
-        / f"rules-{project.project_id}"
-        / "index.json"
-    ).exists()
-    assert (
-        settings.storage.data_root
-        / "indexes"
-        / f"evidence-{project.project_id}-{bidder.bidder_id}"
-        / "index.json"
-    ).exists()

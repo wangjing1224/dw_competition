@@ -7,155 +7,35 @@
         "unsupported",
         "contradicted",
         "ocr_required",
-        "unverifiable",
-        "weakly_related"
+        "unverifiable"
       ],
       "title": "EvidenceReviewStatus",
       "type": "string"
-    },
-    "SourceRef": {
-      "additionalProperties": false,
-      "properties": {
-        "file_id": {
-          "title": "File Id",
-          "type": "string"
-        },
-        "chunk_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Chunk Id"
-        },
-        "file_name": {
-          "title": "File Name",
-          "type": "string"
-        },
-        "source_path": {
-          "title": "Source Path",
-          "type": "string"
-        },
-        "section": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Section"
-        },
-        "quote": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Quote"
-        }
-      },
-      "required": [
-        "file_id",
-        "file_name",
-        "source_path"
-      ],
-      "title": "SourceRef",
-      "type": "object"
     }
   },
   "additionalProperties": false,
   "properties": {
-    "evidence_result_id": {
-      "title": "Evidence Result Id",
-      "type": "string"
-    },
-    "claim_id": {
-      "title": "Claim Id",
-      "type": "string"
-    },
-    "task_id": {
-      "title": "Task Id",
-      "type": "string"
-    },
-    "project_id": {
-      "title": "Project Id",
-      "type": "string"
-    },
-    "bidder_id": {
-      "title": "Bidder Id",
-      "type": "string"
-    },
-    "bid_file_id": {
-      "title": "Bid File Id",
-      "type": "string"
-    },
-    "rule_id": {
-      "title": "Rule Id",
-      "type": "string"
-    },
     "status": {
       "$ref": "#/$defs/EvidenceReviewStatus"
     },
-    "evidence_found": {
-      "items": {
-        "$ref": "#/$defs/SourceRef"
-      },
-      "title": "Evidence Found",
-      "type": "array"
-    },
-    "missing_evidence": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Missing Evidence",
-      "type": "array"
-    },
-    "consistency_issues": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Consistency Issues",
-      "type": "array"
-    },
-    "manual_review_reason": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Manual Review Reason"
-    },
     "summary": {
+      "maxLength": 500,
+      "minLength": 2,
       "title": "Summary",
       "type": "string"
+    },
+    "evidence_chunk_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Evidence Chunk Ids",
+      "type": "array"
     }
   },
   "required": [
-    "evidence_result_id",
-    "claim_id",
-    "task_id",
-    "project_id",
-    "bidder_id",
-    "bid_file_id",
-    "rule_id",
     "status",
     "summary"
   ],
-  "title": "EvidenceReviewResult",
+  "title": "EvidenceReviewDecision",
   "type": "object"
 }

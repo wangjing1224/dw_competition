@@ -74,7 +74,6 @@ class BidderService:
                 classified_record = self.file_repository.update_classification(
                     record.file_id,
                     evidence_type=classification.evidence_type,
-                    confidence=classification.confidence,
                     classification_status=classification.classification_status,
                 )
                 indexed_documents.append(

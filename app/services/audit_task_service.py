@@ -18,8 +18,9 @@ from app.core.config import ChatModelSettings
 from app.models.common import StrictModel
 from app.models.documents import BidDocumentSummary, DocumentRef, document_ref_from_record
 from app.models.results import AuditResult, FileAuditResult, ProjectMatch
-from app.models.evidence import EvidenceCatalogEntry
+from app.models.evidence import EvidenceCatalogItem, EvidenceClassificationRecord
 from app.evidence.catalog import build_evidence_catalog
+from app.evidence.storage import load_evidence_classification
 from app.models.rules import RuleSet
 from app.parsers.service import parse_document
 from app.retrieval.index import build_document_index
@@ -44,7 +45,12 @@ class AuditTaskContext(StrictModel):
     bid_files: list[DocumentRef] = Field(default_factory=list)
     bid_summaries: dict[str, BidDocumentSummary] = Field(default_factory=dict)
     routed_file_results: list[FileAuditResult] = Field(default_factory=list)
-    evidence_catalog: dict[str, EvidenceCatalogEntry] = Field(default_factory=dict)
+    evidence_catalog: dict[str, list[EvidenceCatalogItem]] = Field(
+        default_factory=dict
+    )
+    evidence_classifications: list[EvidenceClassificationRecord] = Field(
+        default_factory=list
+    )
 
 
 class AuditExecutor(Protocol):
@@ -185,10 +191,8 @@ class AuditTaskService:
                     summary = BidDocumentSummary(
                         file_id=parsed.document.file_id,
                         summary="测试执行器未配置摘要模型，默认进入审核",
-                        document_type="bid_document",
                         match_status="matched",
                         match_reason="测试执行器默认放行",
-                        confidence=1,
                     )
                 else:
                     summary = await summarize_and_route_bid_document(
@@ -196,9 +200,6 @@ class AuditTaskService:
                         rule_set,
                         self.summary_model,
                         self.summary_model_settings,
-                        confidence_threshold=(
-                            self.settings.audit.route_confidence_threshold
-                        ),
                     )
                 write_bid_summary(summary, self.settings)
                 if summary.match_status == "matched":
@@ -213,7 +214,6 @@ class AuditTaskService:
                         "file_name": parsed.document.file_name,
                         "match_status": summary.match_status,
                         "reason": summary.match_reason,
-                        "confidence": summary.confidence,
                     },
                 )
 
@@ -315,6 +315,28 @@ class AuditTaskService:
             for file in files
             if summaries[file.file_id].match_status != "matched"
         ]
+        evidence_documents = [
+            document_ref_from_record(record)
+            for record in self.file_repository.list_by_scope(
+                project_id=task.project_id,
+                bidder_id=task.bidder_id,
+                data_role="evidence_material",
+            )
+        ]
+        evidence_classifications: list[EvidenceClassificationRecord] = []
+        for document in evidence_documents:
+            classification = load_evidence_classification(
+                document.file_id,
+                self.settings,
+            )
+            if classification is not None:
+                evidence_classifications.append(
+                    EvidenceClassificationRecord(
+                        file_id=document.file_id,
+                        file_name=document.file_name,
+                        **classification.model_dump(),
+                    )
+                )
         return AuditTaskContext(
             task_id=task.task_id,
             project_id=task.project_id,
@@ -330,17 +352,11 @@ class AuditTaskService:
             evidence_catalog={
                 str(category): entry
                 for category, entry in build_evidence_catalog(
-                    [
-                        document_ref_from_record(record)
-                        for record in self.file_repository.list_by_scope(
-                            project_id=task.project_id,
-                            bidder_id=task.bidder_id,
-                            data_role="evidence_material",
-                        )
-                    ],
+                    evidence_documents,
                     self.settings,
                 ).items()
             },
+            evidence_classifications=evidence_classifications,
         )
 
     def get_task(self, task_id: str) -> dict[str, object]:

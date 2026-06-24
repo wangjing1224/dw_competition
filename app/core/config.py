@@ -96,11 +96,10 @@ class RuntimeSettings(ConfigModel):
 
 
 class AuditSettings(ConfigModel):
-    """主/子 Agent 的有界循环和文件路由阈值。"""
+    """主/子 Agent 的有界循环和规则总量。"""
 
     bid_agent_max_steps: int = Field(default=8, gt=0)
     evidence_agent_max_steps: int = Field(default=3, gt=0)
-    route_confidence_threshold: float = Field(default=0.65, ge=0, le=1)
     rule_limit: int = Field(default=30, gt=0)
 
 
@@ -193,9 +192,6 @@ def get_settings() -> AppSettings:
                 ),
                 "evidence_agent_max_steps": int(
                     os.getenv("EVIDENCE_AGENT_MAX_STEPS", "3")
-                ),
-                "route_confidence_threshold": float(
-                    os.getenv("ROUTE_CONFIDENCE_THRESHOLD", "0.65")
                 ),
                 "rule_limit": int(os.getenv("RULE_LIMIT", "30")),
             },

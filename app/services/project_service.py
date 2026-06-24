@@ -70,6 +70,7 @@ class ProjectService:
                 parsed,
                 self.models.rule_extraction,
                 self.settings.rule_extraction_model,
+                maximum=self.settings.audit.rule_limit,
             )
             rule_set = merge_rule_set(
                 extracted,

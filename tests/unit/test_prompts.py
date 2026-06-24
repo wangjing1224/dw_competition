@@ -1,40 +1,40 @@
-"""Prompt 配置路径、运行时注入和缺失变量测试。"""
+"""Prompt 配置路径、System/Human 模板和工具说明测试。"""
 
 import pytest
 
-from app.prompts.loader import load_prompt, load_tool_description, render_prompt
+from app.prompts.loader import load_tool_description, render_prompt
 
 
-def test_rule_prompt_runtime_values_are_injected():
-    rendered = render_prompt(
+def test_rule_system_and_input_are_separate():
+    system = render_prompt(
         "rule_extraction",
-        project_id="project-test",
+        rule_delta_schema={"type": "object"},
+    )
+    human = render_prompt(
+        "rule_extraction_input",
+        current_rules=[],
         source_file="规则/技术规范.md",
         batch_index=1,
         batch_count=2,
-        existing_outline={"technical": []},
         source_context="技术要求：像素不低于640x480",
-        rule_extraction_schema={"type": "object"},
     )
-
-    assert "project-test" in rendered
-    assert "1/2" in rendered
-    assert "640x480" in rendered
-    assert '"type": "object"' in rendered
+    assert '"type": "object"' in system
+    assert "640x480" not in system
+    assert "640x480" in human
+    assert "1/2" in human
 
 
 def test_missing_prompt_variable_fails_fast():
     with pytest.raises(KeyError):
-        render_prompt("rule_extraction", project_id="project-test")
+        render_prompt("rule_extraction")
 
 
 def test_all_tool_descriptions_are_available():
     for name in (
         "search_bid_response",
-        "retrieve_rule_source",
+        "search_tender_source",
         "request_evidence_review",
         "search_evidence",
-        "retrieve_evidence_source",
     ):
         assert load_tool_description(name)
 
@@ -42,11 +42,11 @@ def test_all_tool_descriptions_are_available():
 @pytest.mark.parametrize(
     ("name", "schema_variable", "model_name"),
     [
-        ("bid_agent", "batch_audit_decision_schema", "BatchAuditDecision"),
+        ("bid_agent", "agent_audit_decision_schema", "AgentAuditDecision"),
         (
             "evidence_subagent",
-            "evidence_review_result_schema",
-            "EvidenceReviewResult",
+            "evidence_review_schema",
+            "EvidenceReviewDecision",
         ),
     ],
 )
@@ -62,6 +62,5 @@ def test_agent_prompt_contains_runtime_output_schema(
             }
         },
     )
-
     assert model_name in rendered
     assert f"${{{schema_variable}}}" not in rendered

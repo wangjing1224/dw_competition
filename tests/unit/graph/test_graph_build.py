@@ -18,6 +18,7 @@ def test_graph_compiles_without_calling_external_models(temp_settings):
             "evidence_classification_model": with_key(
                 temp_settings.evidence_classification_model
             ),
+            "bid_summary_model": with_key(temp_settings.bid_summary_model),
             "bid_chat_model": with_key(temp_settings.bid_chat_model),
             "evidence_chat_model": with_key(temp_settings.evidence_chat_model),
             "embedding_model": with_key(temp_settings.embedding_model),

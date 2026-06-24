@@ -1,39 +1,27 @@
-"""规则抽取批次对常见模型结构偏差的兼容测试。"""
+"""规则增量 Schema 和章节组批测试。"""
 
 import pytest
 from pydantic import ValidationError
 
 from app.models.documents import DocumentRef, ParsedDocument, ParsedSection
-from app.rules.extractor import (
-    RuleExtractionBatch,
-    build_rule_extraction_batches,
-)
+from app.models.rules import RuleDeltaResult
+from app.rules.extractor import build_rule_extraction_batches
 
 
-def test_flattened_project_profile_is_moved_under_profile():
-    batch = RuleExtractionBatch.model_validate(
-        {
-            "project_name": "示例项目",
-            "buyer": "示例采购人",
-            "material_category": "物资类",
-            "bid_deadline": "2026-04-21 09:30",
-            "bid_validity_days": None,
-            "rules": [],
-        }
+def test_rule_delta_accepts_empty_operations():
+    result = RuleDeltaResult.model_validate(
+        {"project_profile": {"project_name": "示例项目"}, "operations": []}
     )
-
-    assert batch.project_profile.project_name == "示例项目"
-    assert batch.project_profile.buyer == "示例采购人"
-    assert batch.rules == []
+    assert result.project_profile.project_name == "示例项目"
+    assert result.operations == []
 
 
-def test_unknown_root_field_is_still_rejected():
+def test_add_operation_requires_core_fields():
     with pytest.raises(ValidationError):
-        RuleExtractionBatch.model_validate(
+        RuleDeltaResult.model_validate(
             {
                 "project_profile": {},
-                "rules": [],
-                "unexpected": "不能静默忽略",
+                "operations": [{"action": "add", "reason": "缺少字段"}],
             }
         )
 
@@ -57,12 +45,10 @@ def test_long_parsed_document_is_split_into_bounded_batches():
             )
         ],
     )
-
     batches = build_rule_extraction_batches(
         parsed,
         max_chars=300,
         overlap_chars=30,
     )
-
     assert len(batches) > 1
     assert all(len(batch) <= 300 for batch in batches)

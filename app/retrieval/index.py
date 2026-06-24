@@ -43,7 +43,6 @@ async def build_document_index(
             update={
                 "evidence_type": document.evidence_type,
                 "classification_status": document.classification_status,
-                "classification_confidence": document.classification_confidence,
             }
         )
         parsed = parsed.model_copy(update={"document": indexed_document})
@@ -54,15 +53,7 @@ async def build_document_index(
                 resolved,
             )
             if classification is not None:
-                profile = classification.retrieval_profile
-                retrieval_hint = "\n".join(
-                    [
-                        profile.document_title,
-                        " ".join(profile.entities),
-                        " ".join(profile.keywords),
-                        " ".join(profile.searchable_facts),
-                    ]
-                )
+                retrieval_hint = classification.evidence_summary
         chunks.extend(
             chunk_parsed_document(
                 parsed,

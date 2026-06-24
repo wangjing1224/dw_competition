@@ -76,7 +76,6 @@ class FileRecord:
     sha256: str
     parse_status: str
     evidence_type: str | None = None
-    classification_confidence: float | None = None
     classification_status: str | None = None
 
 
@@ -497,14 +496,12 @@ class FileRepository:
                     file_id, project_id, bidder_id, task_id, data_role,
                     file_name, source_path, storage_path, extension,
                     size_bytes, sha256, parse_status, evidence_type,
-                    classification_confidence, classification_status,
-                    created_at, updated_at
+                    classification_status, created_at, updated_at
                 ) VALUES (
                     :file_id, :project_id, :bidder_id, :task_id, :data_role,
                     :file_name, :source_path, :storage_path, :extension,
                     :size_bytes, :sha256, :parse_status, :evidence_type,
-                    :classification_confidence, :classification_status,
-                    :created_at, :updated_at
+                    :classification_status, :created_at, :updated_at
                 )
                 """,
                 {**values, "created_at": now, "updated_at": now},
@@ -540,7 +537,6 @@ class FileRepository:
         file_id: str,
         *,
         evidence_type: str,
-        confidence: float,
         classification_status: str,
     ) -> FileRecord:
         """保存资料分类结果，使后续重建索引无需再次调用分类模型。"""
@@ -549,13 +545,12 @@ class FileRepository:
             updated = connection.execute(
                 """
                 UPDATE files
-                   SET evidence_type = ?, classification_confidence = ?,
-                       classification_status = ?, updated_at = ?
+                   SET evidence_type = ?, classification_status = ?,
+                       updated_at = ?
                  WHERE file_id = ? AND data_role = 'evidence_material'
                 """,
                 (
                     evidence_type,
-                    confidence,
                     classification_status,
                     utc_now(),
                     file_id,

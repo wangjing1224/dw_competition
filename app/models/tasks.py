@@ -1,12 +1,8 @@
-"""任务错误和主 Agent 批量审核 Decision。"""
-
-from typing import Literal
+"""任务错误和主 Agent 轻量审核 Decision。"""
 
 from pydantic import Field
 
-from app.models.evidence import EvidenceReviewResult
-from app.models.findings import Finding
-from app.models.common import StrictModel
+from app.models.common import FindingResult, RuleCategory, StrictModel
 
 
 class TaskError(StrictModel):
@@ -18,13 +14,28 @@ class TaskError(StrictModel):
     claim_id: str | None = None
 
 
-class BatchAuditDecision(StrictModel):
-    action: Literal["record_batch"]
-    reason: str
-    file_id: str
-    summary: str
-    findings: list[Finding]
-    evidence_results: list[EvidenceReviewResult] = Field(default_factory=list)
+class RuleAuditSummary(StrictModel):
+    reason: str = Field(min_length=2, max_length=200)
+    tender_chunk_ids: list[str] = Field(default_factory=list)
+    bid_chunk_ids: list[str] = Field(default_factory=list)
+    evidence_chunk_ids: list[str] = Field(default_factory=list)
 
 
-BidAgentDecision = BatchAuditDecision
+class RuleAuditDecision(StrictModel):
+    rule_id: str
+    result: FindingResult
+    summary: RuleAuditSummary
+
+
+class CategoryAuditDecision(StrictModel):
+    category: RuleCategory
+    summary: str = Field(min_length=2, max_length=500)
+    rules: list[RuleAuditDecision] = Field(default_factory=list)
+
+
+class AgentAuditDecision(StrictModel):
+    summary: str = Field(min_length=2, max_length=800)
+    categories: list[CategoryAuditDecision] = Field(default_factory=list)
+
+
+BidAgentDecision = AgentAuditDecision

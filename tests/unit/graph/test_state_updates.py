@@ -1,4 +1,4 @@
-"""批量审核结果覆盖、文件推进和总体结论测试。"""
+"""轻量审核结果覆盖、文件推进和总体结论测试。"""
 
 from langchain_core.messages import AIMessage
 
@@ -7,16 +7,8 @@ from app.graph.state_updates import apply_bid_agent_output_node, summarize_concl
 from app.models.documents import BidDocumentSummary, DocumentRef, SourceRef
 from app.models.findings import Finding
 from app.models.rules import RuleItem, RuleSet
-from app.models.tasks import BatchAuditDecision
+from app.models.tasks import AgentAuditDecision
 from app.services.audit_task_service import AuditTaskContext
-
-
-def source():
-    return SourceRef(
-        file_id="rule-file",
-        file_name="规则.docx",
-        source_path="规则.docx",
-    )
 
 
 def state():
@@ -32,13 +24,15 @@ def state():
     )
     rule = RuleItem(
         rule_id="rule-1",
-        status="active",
         category="technical",
-        name="像素",
-        requirement="不低于640x480",
-        check_type="semantic",
-        severity="major",
-        source=source(),
+        requirement="探测器分辨率不低于640x480",
+        priority="critical",
+        verification="bid_only",
+        source=SourceRef(
+            file_id="rule-file",
+            file_name="规则.docx",
+            source_path="规则.docx",
+        ),
     )
     return build_initial_audit_state(
         AuditTaskContext(
@@ -51,63 +45,42 @@ def state():
                 "bid-file": BidDocumentSummary(
                     file_id="bid-file",
                     summary="测试投标文件",
-                    document_type="bid_document",
                     match_status="matched",
                     match_reason="项目一致",
-                    confidence=1,
                 )
             },
         )
     )
 
 
-def test_batch_decision_completes_file():
+def test_agent_decision_completes_file():
     current = state()
-    finding = Finding(
-        finding_id="pending",
-        task_id="audit-1",
-        project_id="project-1",
-        bidder_id="bidder-1",
-        bid_file_id="bid-file",
-        rule_id="rule-1",
-        response_status="not_found",
-        category="technical",
-        severity="major",
-        result="non_compliant",
-        title="未响应像素要求",
-        description="没有找到响应",
-        rule_source=source(),
-        confidence=1,
-    )
-    decision = BatchAuditDecision(
-        action="record_batch",
-        reason="未找到",
-        file_id="bid-file",
-        summary="审核完成",
-        findings=[finding],
+    decision = AgentAuditDecision(
+        summary="存在未响应项",
+        categories=[
+            {
+                "category": "technical",
+                "summary": "技术响应不完整",
+                "rules": [
+                    {
+                        "rule_id": "rule-1",
+                        "result": "non_compliant",
+                        "summary": {"reason": "未找到分辨率响应"},
+                    }
+                ],
+            }
+        ],
     )
     current["messages"] = [AIMessage(content=decision.model_dump_json())]
     updated = apply_bid_agent_output_node(current)
-
     assert updated["current_bid_index"] == 1
     assert updated["file_results"][0].overall_conclusion == "non_compliant"
 
 
 def test_conclusion_priority_is_deterministic():
     finding = Finding(
-        finding_id="finding-risk",
-        task_id="audit-1",
-        project_id="project-1",
-        bidder_id="bidder-1",
-        bid_file_id="bid-file",
         rule_id="rule-1",
-        response_status="not_found",
-        category="technical",
-        severity="major",
         result="risk",
-        title="风险",
-        description="风险",
-        rule_source=source(),
-        confidence=1,
+        summary="存在风险",
     )
     assert summarize_conclusion([finding]) == "risk"

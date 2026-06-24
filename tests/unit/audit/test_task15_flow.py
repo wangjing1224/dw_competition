@@ -1,4 +1,4 @@
-"""Task 15 的规则总量、摘要路由和资料目录回归测试。"""
+"""投标摘要路由和文件级资料目录回归测试。"""
 
 from types import SimpleNamespace
 
@@ -7,50 +7,13 @@ import pytest
 from app.audit.bid_summary import summarize_and_route_bid_document
 from app.evidence.catalog import build_evidence_catalog
 from app.evidence.storage import write_evidence_classification
-from app.models.documents import (
-    BidDocumentSummary,
-    DocumentRef,
-    ParsedDocument,
-    ParsedSection,
-)
+from app.models.documents import BidRouteDecision, DocumentRef, ParsedDocument, ParsedSection
 from app.models.evidence import EvidenceClassification
-from app.models.rules import RuleItem, RuleSet
-from app.rules.policies import limit_rules
-
-
-def _source():
-    return {
-        "file_id": "rule-file",
-        "file_name": "规则.md",
-        "source_path": "规则.md",
-    }
-
-
-def test_rule_limit_is_global_not_per_category():
-    rules = [
-        RuleItem(
-            rule_id=f"rule-{index}",
-            status="active",
-            category="technical",
-            priority="important" if index < 4 else "normal",
-            verification_level="bid_only",
-            name=f"规则{index}",
-            requirement=f"要求{index}",
-            check_type="semantic",
-            severity="major",
-            source=_source(),
-        )
-        for index in range(8)
-    ]
-
-    limited = limit_rules(rules, 5)
-
-    assert len(limited) == 5
-    assert {str(rule.category) for rule in limited} == {"technical"}
+from app.models.rules import RuleSet
 
 
 @pytest.mark.asyncio
-async def test_low_confidence_route_is_normalized_to_uncertain():
+async def test_summary_model_output_is_bound_to_current_file():
     document = DocumentRef(
         file_id="file-1",
         file_name="投标.md",
@@ -74,13 +37,10 @@ async def test_low_confidence_route_is_normalized_to_uncertain():
     )
 
     async def fake_invoke(*_args, **_kwargs):
-        return BidDocumentSummary(
-            file_id="file-1",
-            summary="可能属于当前项目",
-            document_type="bid_document",
+        return BidRouteDecision(
+            summary="## 文件基本信息\n红外热成像仪投标文件",
             match_status="matched",
-            match_reason="只找到物资名称",
-            confidence=0.4,
+            match_reason="采购对象一致",
         )
 
     import app.audit.bid_summary as module
@@ -93,16 +53,13 @@ async def test_low_confidence_route_is_normalized_to_uncertain():
             RuleSet(project_id="project-1"),
             object(),
             SimpleNamespace(structured_output_mode="prompt_only"),
-            confidence_threshold=0.65,
         )
     finally:
         module.invoke_structured = original
-
-    assert result.match_status == "uncertain"
-    assert "置信度不足" in result.match_reason
+    assert result.file_id == "file-1"
 
 
-def test_evidence_catalog_uses_catalog_profile(temp_settings):
+def test_evidence_catalog_keeps_file_level_entries(temp_settings):
     document = DocumentRef(
         file_id="file-1",
         file_name="合同.md",
@@ -113,32 +70,18 @@ def test_evidence_catalog_uses_catalog_profile(temp_settings):
         bidder_id="bidder-1",
         evidence_type="contract",
         classification_status="classified",
-        classification_confidence=0.9,
     )
     write_evidence_classification(
         document.file_id,
         EvidenceClassification(
             evidence_type="contract",
-            confidence=0.9,
             classification_status="classified",
-            reason="供货合同",
-            catalog_profile={
-                "rule_categories": ["commercial", "performance_capacity"],
-                "summary": "红外设备供货合同",
-                "verifiable_topics": ["合同主体", "产品"],
-            },
-            retrieval_profile={
-                "document_title": "供货合同",
-                "entities": ["红外设备"],
-                "keywords": ["供货合同"],
-                "searchable_facts": ["合同主体"],
-            },
+            reason="正文为供货合同",
+            bid_summary="红外设备供货合同，可用于核验业绩",
+            evidence_summary="合同主体和标的物清晰可读",
         ),
         temp_settings,
     )
-
     catalog = build_evidence_catalog([document], temp_settings)
-
-    assert catalog["commercial"].available is True
-    assert catalog["performance_capacity"].count == 1
-    assert catalog["technical"].available is False
+    assert len(catalog["contract"]) == 1
+    assert catalog["contract"][0].file_id == "file-1"

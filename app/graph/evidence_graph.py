@@ -20,7 +20,7 @@ def build_evidence_graph(
     model: BaseChatModel,
     tools: list[BaseTool],
     *,
-    max_steps: int = 8,
+    max_steps: int = 3,
     event_repository: AuditEventRepository | None = None,
 ):
     events = event_repository or AuditEventRepository()

@@ -1,204 +1,267 @@
-"""主审核 Agent 的投标检索、规则回查和资料核验 BaseTool。"""
+"""主审核 Agent 的投标检索、招标原文检索和资料核验工具。"""
 
-from typing import Any, ClassVar
+from typing import Annotated, Any, ClassVar
 
 from langchain_core.tools import BaseTool, ToolException
+from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.config import AppSettings
-from app.models.documents import RetrievedSource, SourceRef
-from app.models.evidence import Claim
-from app.models.rules import RuleItem
-from app.prompts.loader import load_tool_description
-from app.retrieval.index import embedding_config_fingerprint
-from app.retrieval.models import IndexFilter
-from app.retrieval.service import RetrievalService
-from app.retrieval.store import load_index
-from app.storage.repositories import (
-    AuditEventRepository,
-    AuditTaskRepository,
-    FileRepository,
+from app.evidence.storage import load_evidence_classification
+from app.models.common import EvidenceType
+from app.models.evidence import (
+    EvidenceFileSummary,
+    EvidenceReviewResult,
+    EvidenceReviewTask,
 )
-from app.storage.ids import next_id
+from app.prompts.loader import load_tool_description
+from app.retrieval.models import IndexFilter, SearchResult
+from app.retrieval.service import RetrievalService
+from app.storage.repositories import AuditEventRepository
 
 
-class SearchBidResponseInput(BaseModel):
+class SearchQueriesInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    task_id: str
-    bid_file_id: str
-    rule: RuleItem
+    queries: list[str] = Field(min_length=1, max_length=5)
+    state: Annotated[dict, InjectedState]
 
 
-class RetrieveRuleSourceInput(BaseModel):
+class EvidenceReviewToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    task_id: str
-    project_id: str
-    source: SourceRef
+    rule_id: str
+    verification_request: str
+    evidence_type: EvidenceType
+    state: Annotated[dict, InjectedState]
 
 
-class RequestEvidenceReviewInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    claim: Claim
+def _compact_results(
+    results: list[SearchResult],
+    *,
+    per_chunk_chars: int,
+    total_chars: int,
+    top_k: int,
+) -> dict[str, list[dict[str, str]]]:
+    chunks: list[dict[str, str]] = []
+    used = 0
+    seen: set[str] = set()
+    for result in sorted(results, key=lambda item: item.score, reverse=True):
+        if result.chunk_id in seen or len(chunks) >= top_k:
+            continue
+        remaining = total_chars - used
+        if remaining <= 0:
+            break
+        content = result.content[: min(per_chunk_chars, remaining)]
+        chunks.append(
+            {
+                "chunk_id": result.chunk_id,
+                "file_id": result.source.file_id,
+                "section": result.source.section or "",
+                "content": content,
+            }
+        )
+        seen.add(result.chunk_id)
+        used += len(content)
+    return {"chunks": chunks}
+
+
+async def _search_many(
+    retrieval: RetrievalService,
+    queries: list[str],
+    query_filter: IndexFilter,
+) -> list[SearchResult]:
+    merged: list[SearchResult] = []
+    for query in dict.fromkeys(item.strip() for item in queries if item.strip()):
+        merged.extend(
+            await retrieval.search(
+                query,
+                query_filter,
+                candidate_top_k=20,
+                final_top_k=8,
+            )
+        )
+    return merged
 
 
 class SearchBidResponseTool(BaseTool):
     name: str = "search_bid_response"
     description: str = load_tool_description("search_bid_response")
-    args_schema: ClassVar[type[BaseModel]] = SearchBidResponseInput
+    args_schema: ClassVar[type[BaseModel]] = SearchQueriesInput
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    task_repository: AuditTaskRepository
-    file_repository: FileRepository
     retrieval_service: RetrievalService
+    settings: AppSettings
     event_repository: AuditEventRepository
 
     async def _arun(
-        self, task_id: str, bid_file_id: str, rule: RuleItem
-    ) -> list[dict]:
-        task = self.task_repository.require(task_id)
-        file_record = self.file_repository.require(bid_file_id)
-        if file_record.task_id != task_id:
-            raise ToolException("投标文件不属于当前审核任务")
-        results = await self.retrieval_service.search(
-            f"{rule.name}\n{rule.requirement}\n{rule.target_field or ''}",
+        self,
+        queries: list[str],
+        state: Annotated[dict, InjectedState],
+    ) -> dict:
+        bid_file = state["bid_files"][state["current_bid_index"]]
+        results = await _search_many(
+            self.retrieval_service,
+            queries,
             IndexFilter(
-                scope_id=f"bid-{task_id}",
-                project_id=task.project_id,
-                bidder_id=task.bidder_id,
-                task_id=task_id,
+                scope_id=f"bid-{state['task_id']}",
+                project_id=state["project_id"],
+                bidder_id=state["bidder_id"],
+                task_id=state["task_id"],
                 data_role="bid_document",
-                file_ids=[bid_file_id],
+                file_ids=[bid_file.file_id],
             ),
-            candidate_top_k=20,
-            final_top_k=5,
+        )
+        response = _compact_results(
+            results,
+            per_chunk_chars=min(self.settings.retrieval.max_source_chars, 1800),
+            total_chars=min(self.settings.retrieval.max_source_chars * 2, 8000),
+            top_k=5,
         )
         self.event_repository.append(
-            task_id,
+            state["task_id"],
             actor="tool",
             event_type="tool_result",
-            title="检索投标响应完成",
+            title="检索投标文件原文",
             detail={
                 "tool": self.name,
-                "rule_id": rule.rule_id,
-                "rule_name": rule.name,
-                "result_count": len(results),
-                "top_results": [
-                    {
-                        "file_id": item.source.file_id,
-                        "section": item.source.section,
-                        "score": item.score,
-                    }
-                    for item in results[:5]
-                ],
+                "file_id": bid_file.file_id,
+                "query_count": len(queries),
+                "result_count": len(response["chunks"]),
             },
         )
-        return [
-            item.model_copy(update={"content": item.content[:1500]}).model_dump(
-                mode="json"
-            )
-            for item in results
-        ]
+        return response
 
     def _run(self, **_: object) -> object:
         raise ToolException("search_bid_response 仅支持异步调用")
 
 
-class RetrieveRuleSourceTool(BaseTool):
-    name: str = "retrieve_rule_source"
-    description: str = load_tool_description("retrieve_rule_source")
-    args_schema: ClassVar[type[BaseModel]] = RetrieveRuleSourceInput
+class SearchTenderSourceTool(BaseTool):
+    name: str = "search_tender_source"
+    description: str = load_tool_description("search_tender_source")
+    args_schema: ClassVar[type[BaseModel]] = SearchQueriesInput
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    retrieval_service: RetrievalService
     settings: AppSettings
     event_repository: AuditEventRepository
 
-    def _run(self, task_id: str, project_id: str, source: SourceRef) -> dict:
-        task = AuditTaskRepository().require(task_id)
-        if task.project_id != project_id:
-            raise ToolException("审核任务不属于当前项目")
-        index = load_index(
-            f"rules-{project_id}",
-            expected_fingerprint=embedding_config_fingerprint(
-                self.settings.embedding_model
-            ),
-        )
-        chunk = next(
-            (
-                item
-                for item in index.chunks
-                if item.file_id == source.file_id
-                and (source.chunk_id is None or item.chunk_id == source.chunk_id)
-            ),
-            None,
-        )
-        if chunk is None:
-            raise ToolException("规则来源不属于当前项目或片段不存在")
-        self.event_repository.append(
-            task_id,
-            actor="tool",
-            event_type="tool_result",
-            title="读取招标规则原文片段",
-            detail={
-                "tool": self.name,
-                "file_id": source.file_id,
-                "chunk_id": chunk.chunk_id,
-                "section": chunk.section,
-                "content_chars": min(
-                    len(chunk.content),
-                    self.settings.retrieval.max_source_chars,
-                ),
-            },
-        )
-        return RetrievedSource(
-            source=chunk.source_ref(self.settings.retrieval.max_source_chars),
-            content=chunk.content[: self.settings.retrieval.max_source_chars],
-            parse_status=chunk.parse_status,
-        ).model_dump(mode="json")
-
     async def _arun(
         self,
-        task_id: str,
-        project_id: str,
-        source: SourceRef,
+        queries: list[str],
+        state: Annotated[dict, InjectedState],
     ) -> dict:
-        return self._run(task_id, project_id, source)
+        results = await _search_many(
+            self.retrieval_service,
+            queries,
+            IndexFilter(
+                scope_id=f"rules-{state['project_id']}",
+                project_id=state["project_id"],
+                data_role="rule_source",
+            ),
+        )
+        response = _compact_results(
+            results,
+            per_chunk_chars=min(self.settings.retrieval.max_source_chars, 1800),
+            total_chars=min(self.settings.retrieval.max_source_chars * 2, 8000),
+            top_k=5,
+        )
+        self.event_repository.append(
+            state["task_id"],
+            actor="tool",
+            event_type="tool_result",
+            title="检索招标文件原文",
+            detail={
+                "tool": self.name,
+                "query_count": len(queries),
+                "result_count": len(response["chunks"]),
+            },
+        )
+        return response
+
+    def _run(self, **_: object) -> object:
+        raise ToolException("search_tender_source 仅支持异步调用")
 
 
 class RequestEvidenceReviewTool(BaseTool):
     name: str = "request_evidence_review"
     description: str = load_tool_description("request_evidence_review")
-    args_schema: ClassVar[type[BaseModel]] = RequestEvidenceReviewInput
+    args_schema: ClassVar[type[BaseModel]] = EvidenceReviewToolInput
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     evidence_graph: Any
+    settings: AppSettings
     event_repository: AuditEventRepository
 
-    async def _arun(self, claim: Claim) -> dict:
-        # Claim 的业务内容来自主 Agent，但 ID 由程序统一缩短和持久化分配。
-        claim = claim.model_copy(update={"claim_id": next_id("claim")})
+    async def _arun(
+        self,
+        rule_id: str,
+        verification_request: str,
+        evidence_type: EvidenceType,
+        state: Annotated[dict, InjectedState],
+    ) -> dict:
+        rule_ids = {rule.rule_id for rule in state["rule_set"].rules}
+        if rule_id not in rule_ids:
+            raise ToolException("资料核验引用了未知规则")
+        catalog_items = state["evidence_catalog"].get(str(evidence_type), [])
+        available = [
+            item for item in catalog_items if str(item.status) == "classified"
+        ]
+        if not available:
+            return EvidenceReviewResult(
+                rule_id=rule_id,
+                status="unsupported",
+                summary="当前资料目录中没有可自动读取的对应资料，需结合人工核验情况判断",
+                evidence_chunk_ids=[],
+            ).model_dump(mode="json")
+
+        files: list[EvidenceFileSummary] = []
+        for item in available:
+            classification = load_evidence_classification(
+                item.file_id,
+                self.settings,
+            )
+            if classification is not None:
+                files.append(
+                    EvidenceFileSummary(
+                        file_id=item.file_id,
+                        evidence_summary=classification.evidence_summary,
+                    )
+                )
+        if not files:
+            return EvidenceReviewResult(
+                rule_id=rule_id,
+                status="unverifiable",
+                summary="资料目录存在对应文件，但缺少可供子 Agent 使用的文件级摘要",
+                evidence_chunk_ids=[],
+            ).model_dump(mode="json")
+        review_task = EvidenceReviewTask(
+            task_id=state["task_id"],
+            project_id=state["project_id"],
+            bidder_id=state["bidder_id"],
+            rule_id=rule_id,
+            evidence_type=evidence_type,
+            verification_request=verification_request,
+            files=files,
+        )
         self.event_repository.append(
-            claim.task_id,
+            state["task_id"],
             actor="tool",
             event_type="subagent_started",
             title="主 Agent 委派资料核验任务",
             detail={
                 "tool": self.name,
-                "claim_id": claim.claim_id,
-                "rule_id": claim.rule_id,
-                "statement": claim.statement[:300],
-                "required_evidence_types": [
-                    str(item) for item in claim.required_evidence_types
-                ],
+                "rule_id": rule_id,
+                "evidence_type": str(evidence_type),
+                "file_count": len(files),
             },
         )
         final_state = await self.evidence_graph.ainvoke(
             {
                 "messages": [],
-                "task_id": claim.task_id,
-                "project_id": claim.project_id,
-                "bidder_id": claim.bidder_id,
-                "claim": claim,
-                "review_result": None,
+                "task_id": state["task_id"],
+                "project_id": state["project_id"],
+                "bidder_id": state["bidder_id"],
+                "review_task": review_task,
+                "review_decision": None,
                 "errors": [],
                 "step_count": 0,
             },
@@ -206,30 +269,34 @@ class RequestEvidenceReviewTool(BaseTool):
                 "run_name": "evidence_review_agent",
                 "tags": ["audit", "evidence-agent"],
                 "metadata": {
-                    "task_id": claim.task_id,
-                    "project_id": claim.project_id,
-                    "bidder_id": claim.bidder_id,
-                    "claim_id": claim.claim_id,
-                    "rule_id": claim.rule_id,
+                    "task_id": state["task_id"],
+                    "rule_id": rule_id,
+                    "evidence_type": str(evidence_type),
                 },
             },
         )
-        result = final_state.get("review_result")
-        if result is None:
+        decision = final_state.get("review_decision")
+        if decision is None:
             raise ToolException("资料核验子图没有返回结果")
+        result = EvidenceReviewResult(
+            rule_id=rule_id,
+            status=decision.status,
+            summary=decision.summary,
+            evidence_chunk_ids=decision.evidence_chunk_ids,
+        )
         self.event_repository.append(
-            claim.task_id,
+            state["task_id"],
             actor="tool",
             event_type="subagent_completed",
-            title="资料核验子任务返回主 Agent",
+            title="资料核验结果返回主 Agent",
             detail={
                 "tool": self.name,
-                "claim_id": claim.claim_id,
+                "rule_id": rule_id,
                 "status": str(result.status),
-                "summary": result.summary,
+                "evidence_count": len(result.evidence_chunk_ids),
             },
         )
-        return result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+        return result.model_dump(mode="json")
 
     def _run(self, **_: object) -> object:
         raise ToolException("request_evidence_review 仅支持异步调用")

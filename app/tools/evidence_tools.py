@@ -1,30 +1,48 @@
-"""资料核验子 Agent 的候选检索和原文回查 BaseTool。"""
+"""资料核验子 Agent 的资料原文检索工具。"""
 
-from typing import ClassVar
+from typing import Annotated, ClassVar
 
 from langchain_core.tools import BaseTool, ToolException
+from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.documents import RetrievedSource
-from app.models.evidence import Claim, EvidenceCandidate
-from app.prompts.loader import load_tool_description
-from app.retrieval.models import IndexFilter
-from app.retrieval.service import RetrievalService
-from app.retrieval.store import load_index
-from app.retrieval.index import embedding_config_fingerprint
 from app.core.config import AppSettings
+from app.prompts.loader import load_tool_description
+from app.retrieval.models import IndexFilter, SearchResult
+from app.retrieval.service import RetrievalService
 from app.storage.repositories import AuditEventRepository
 
 
 class SearchEvidenceInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    claim: Claim = Field(description="主 Agent 生成的单条受信任待核验声明")
+    queries: list[str] = Field(min_length=1, max_length=5)
+    file_ids: list[str] = Field(default_factory=list, max_length=10)
+    state: Annotated[dict, InjectedState]
 
 
-class RetrieveEvidenceSourceInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    claim: Claim
-    candidate: EvidenceCandidate
+def _compact(results: list[SearchResult], settings: AppSettings) -> dict:
+    chunks: list[dict[str, str]] = []
+    seen: set[str] = set()
+    used = 0
+    total_limit = min(settings.retrieval.max_source_chars * 2, 8000)
+    for result in sorted(results, key=lambda item: item.score, reverse=True):
+        if result.chunk_id in seen or len(chunks) >= 5:
+            continue
+        remaining = total_limit - used
+        if remaining <= 0:
+            break
+        content = result.content[: min(1800, remaining)]
+        chunks.append(
+            {
+                "chunk_id": result.chunk_id,
+                "file_id": result.source.file_id,
+                "section": result.source.section or "",
+                "content": content,
+            }
+        )
+        seen.add(result.chunk_id)
+        used += len(content)
+    return {"chunks": chunks}
 
 
 class SearchEvidenceTool(BaseTool):
@@ -34,122 +52,55 @@ class SearchEvidenceTool(BaseTool):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     retrieval_service: RetrievalService
-    event_repository: AuditEventRepository
-
-    async def _arun(self, claim: Claim) -> list[dict]:
-        query = "\n".join(
-            [
-                claim.statement,
-                claim.retrieval_query,
-                " ".join(claim.keywords),
-                "；".join(claim.verification_points),
-            ]
-        )
-        results = await self.retrieval_service.search(
-            query,
-            IndexFilter(
-                scope_id=f"evidence-{claim.project_id}-{claim.bidder_id}",
-                project_id=claim.project_id,
-                bidder_id=claim.bidder_id,
-                data_role="evidence_material",
-                evidence_types=claim.required_evidence_types,
-            ),
-            candidate_top_k=20,
-            final_top_k=5,
-        )
-        self.event_repository.append(
-            claim.task_id,
-            actor="tool",
-            event_type="tool_result",
-            title="检索投标方支撑资料完成",
-            detail={
-                "tool": self.name,
-                "claim_id": claim.claim_id,
-                "result_count": len(results),
-                "top_results": [
-                    {
-                        "file_id": item.source.file_id,
-                        "section": item.source.section,
-                        "evidence_type": item.evidence_type,
-                        "score": item.score,
-                    }
-                    for item in results[:5]
-                ],
-            },
-        )
-        return [
-            EvidenceCandidate(
-                file_id=item.source.file_id,
-                chunk_id=item.chunk_id,
-                project_id=item.project_id,
-                bidder_id=item.bidder_id or claim.bidder_id,
-                evidence_type=item.evidence_type or "other",
-                score=item.score,
-                summary=item.content[:500],
-                source=item.source,
-            ).model_dump(mode="json")
-            for item in results
-        ]
-
-    def _run(self, **_: object) -> object:
-        raise ToolException("search_evidence 仅支持异步调用")
-
-
-class RetrieveEvidenceSourceTool(BaseTool):
-    name: str = "retrieve_evidence_source"
-    description: str = load_tool_description("retrieve_evidence_source")
-    args_schema: ClassVar[type[BaseModel]] = RetrieveEvidenceSourceInput
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
     settings: AppSettings
     event_repository: AuditEventRepository
 
-    def _run(self, claim: Claim, candidate: EvidenceCandidate) -> dict:
-        # Claim 受信任，但候选仍必须属于 Claim 指定的投标方和项目。
-        if (
-            candidate.project_id != claim.project_id
-            or candidate.bidder_id != claim.bidder_id
-        ):
-            raise ToolException("候选资料不属于当前 Claim")
-        index = load_index(
-            f"evidence-{claim.project_id}-{claim.bidder_id}",
-            expected_fingerprint=embedding_config_fingerprint(
-                self.settings.embedding_model
-            ),
-        )
-        chunk = next(
-            (
-                item
-                for item in index.chunks
-                if item.chunk_id == candidate.chunk_id
-                and item.file_id == candidate.file_id
-            ),
-            None,
-        )
-        if chunk is None:
-            raise ToolException("候选资料片段不存在")
+    async def _arun(
+        self,
+        queries: list[str],
+        file_ids: list[str],
+        state: Annotated[dict, InjectedState],
+    ) -> dict:
+        task = state["review_task"]
+        allowed_file_ids = {item.file_id for item in task.files}
+        if not allowed_file_ids:
+            return {"chunks": []}
+        selected = set(file_ids) if file_ids else allowed_file_ids
+        if not selected <= allowed_file_ids:
+            raise ToolException("资料检索请求包含未授权文件")
+
+        results: list[SearchResult] = []
+        for query in dict.fromkeys(item.strip() for item in queries if item.strip()):
+            results.extend(
+                await self.retrieval_service.search(
+                    query,
+                    IndexFilter(
+                        scope_id=f"evidence-{task.project_id}-{task.bidder_id}",
+                        project_id=task.project_id,
+                        bidder_id=task.bidder_id,
+                        data_role="evidence_material",
+                        evidence_types=[task.evidence_type],
+                        file_ids=sorted(selected),
+                    ),
+                    candidate_top_k=20,
+                    final_top_k=8,
+                )
+            )
+        response = _compact(results, self.settings)
         self.event_repository.append(
-            claim.task_id,
+            task.task_id,
             actor="tool",
             event_type="tool_result",
-            title="读取支撑资料原文片段",
+            title="检索投标方资料原文",
             detail={
                 "tool": self.name,
-                "claim_id": claim.claim_id,
-                "file_id": candidate.file_id,
-                "chunk_id": candidate.chunk_id,
-                "section": chunk.section,
-                "content_chars": min(
-                    len(chunk.content),
-                    self.settings.retrieval.max_source_chars,
-                ),
+                "rule_id": task.rule_id,
+                "evidence_type": str(task.evidence_type),
+                "query_count": len(queries),
+                "result_count": len(response["chunks"]),
             },
         )
-        return RetrievedSource(
-            source=chunk.source_ref(self.settings.retrieval.max_source_chars),
-            content=chunk.content[: self.settings.retrieval.max_source_chars],
-            parse_status=chunk.parse_status,
-        ).model_dump(mode="json")
+        return response
 
-    async def _arun(self, claim: Claim, candidate: EvidenceCandidate) -> dict:
-        return self._run(claim, candidate)
+    def _run(self, **_: object) -> object:
+        raise ToolException("search_evidence 仅支持异步调用")

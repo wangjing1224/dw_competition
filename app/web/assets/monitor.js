@@ -82,23 +82,38 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function renderResults(payload) {
     const results = payload.result?.file_results || [];
+    const rules = Object.fromEntries(
+      (payload.result?.rules || []).map((rule) => [rule.rule_id, rule])
+    );
+    const classifications = payload.result?.evidence_classifications || [];
     const body = document.getElementById("result-body");
     if (!results.length) {
       body.innerHTML = '<tr><td colspan="6" class="empty-cell">任务尚未生成审核结果</td></tr>';
       return;
     }
-    body.innerHTML = results.map((item, index) => `
+    body.innerHTML = results.map((item, index) => {
+      const evidenceCount = new Set(
+        (item.findings || []).flatMap((finding) => finding.evidence_chunk_ids || [])
+      ).size;
+      return `
       <tr>
         <td>${escapeHtml(item.file.file_name)}</td>
         <td>${item.is_applicable ? "适用" : item.project_match.status === "uncertain" ? "待人工确认" : "不适用"}</td>
         <td><span class="conclusion ${item.overall_conclusion}">${escapeHtml(enumText(item.overall_conclusion))}</span></td>
-        <td>${item.findings.length}</td>
-        <td>${item.evidence_results.length}</td>
+        <td>${(item.findings || []).length}</td>
+        <td>${evidenceCount}</td>
         <td><button class="detail-button" data-index="${index}">查看</button></td>
       </tr>
-    `).join("");
+    `;
+    }).join("");
     body.querySelectorAll(".detail-button").forEach((button) => {
-      button.addEventListener("click", () => showDetail(results[Number(button.dataset.index)]));
+      button.addEventListener("click", () =>
+        showDetail(
+          results[Number(button.dataset.index)],
+          rules,
+          classifications
+        )
+      );
     });
   }
 
@@ -131,10 +146,9 @@ document.addEventListener("DOMContentLoaded", () => {
   function toolText(name) {
     return {
       search_bid_response: "检索投标响应",
-      retrieve_rule_source: "读取招标规则原文",
+      search_tender_source: "检索招标文件原文",
       request_evidence_review: "委派资料核验",
       search_evidence: "检索支撑资料",
-      retrieve_evidence_source: "读取支撑资料原文",
     }[name] || name || "未知工具";
   }
 
@@ -206,23 +220,45 @@ document.addEventListener("DOMContentLoaded", () => {
     }).join("");
   }
 
-  function showDetail(item) {
+  function showDetail(item, rules, classifications) {
     document.getElementById("dialog-title").textContent = item.file.file_name;
-    const findings = item.findings.length
-      ? item.findings.map((finding) => `
+    const findings = (item.findings || []).length
+      ? item.findings.map((finding) => {
+          const rule = rules[finding.rule_id] || {};
+          const sourceCount =
+            (finding.tender_chunk_ids || []).length +
+            (finding.bid_chunk_ids || []).length +
+            (finding.evidence_chunk_ids || []).length;
+          return `
           <article class="finding-detail">
-            <h3>${escapeHtml(finding.title)}</h3>
-            <p><strong>结论：</strong>${escapeHtml(enumText(finding.result))} · ${escapeHtml(enumText(finding.severity))}</p>
-            <p>${escapeHtml(finding.description)}</p>
-            <p><strong>规则来源：</strong>${escapeHtml(finding.rule_source.source_path)} / ${escapeHtml(finding.rule_source.section || "文件级")}</p>
-            ${finding.suggestion ? `<p><strong>建议：</strong>${escapeHtml(finding.suggestion)}</p>` : ""}
+            <h3>${escapeHtml(rule.requirement || finding.rule_id)}</h3>
+            <p><strong>结论：</strong>${escapeHtml(enumText(finding.result))}
+              · ${escapeHtml(enumText(rule.category))}
+              · ${escapeHtml(enumText(rule.priority))}</p>
+            <p>${escapeHtml(finding.summary)}</p>
+            <p><strong>引用片段：</strong>${sourceCount} 条</p>
           </article>
-        `).join("")
+        `;
+        }).join("")
       : "<p>该文件没有普通规则 Finding。</p>";
+    const categorySummaries = Object.entries(item.category_summaries || {})
+      .map(([category, summary]) =>
+        `<p><strong>${escapeHtml(enumText(category))}：</strong>${escapeHtml(summary)}</p>`
+      )
+      .join("");
+    const manualMaterials = classifications
+      .filter((record) => record.classification_status === "manual_review")
+      .map((record) =>
+        `<p><strong>${escapeHtml(record.file_name)}：</strong>${escapeHtml(record.reason)}</p>`
+      )
+      .join("");
     document.getElementById("dialog-body").innerHTML = `
       <p><strong>项目匹配：</strong>${escapeHtml(enumText(item.project_match.status))} · ${escapeHtml(item.project_match.reason)}</p>
       <p><strong>总体结论：</strong>${escapeHtml(enumText(item.overall_conclusion))}</p>
       ${item.document_summary?.summary ? `<p><strong>文件摘要：</strong>${escapeHtml(item.document_summary.summary)}</p>` : ""}
+      ${item.audit_summary ? `<p><strong>审核总结：</strong>${escapeHtml(item.audit_summary)}</p>` : ""}
+      ${categorySummaries}
+      ${manualMaterials ? `<h3>需人工核验的资料</h3>${manualMaterials}` : ""}
       ${findings}
     `;
     document.getElementById("detail-dialog").showModal();

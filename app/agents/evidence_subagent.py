@@ -1,31 +1,44 @@
-"""资料核验 Agent 模型节点、路由和结构化结果收口。"""
+"""资料核验子 Agent：最多三轮检索并返回轻量结论。"""
 
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.tools import BaseTool
 
-from app.llm.structured_output import validate_structured_content
-from app.models.evidence import EvidenceReviewResult
+from app.llm.structured_output import extract_json_value, validate_structured_content
+from app.models.evidence import EvidenceReviewDecision
 from app.prompts.loader import render_prompt
 from app.storage.repositories import AuditEventRepository
-from app.storage.ids import next_id
 
 
 def build_evidence_messages(state: dict[str, Any]) -> list[BaseMessage]:
-    claim = state["claim"]
-    instruction = f"当前 Claim：\n{claim.model_dump_json(indent=2)}"
+    task = state["review_task"]
     return [
         SystemMessage(
             content=render_prompt(
                 "evidence_subagent",
-                evidence_review_result_schema=(
-                    EvidenceReviewResult.model_json_schema()
+                evidence_review_schema=(
+                    EvidenceReviewDecision.model_json_schema()
                 ),
             )
         ),
-        HumanMessage(content=instruction),
+        HumanMessage(
+            content=render_prompt(
+                "evidence_subagent_input",
+                verification_request=task.verification_request,
+                evidence_type=task.evidence_type,
+                evidence_files=[
+                    item.model_dump(mode="json") for item in task.files
+                ],
+            )
+        ),
         *state["messages"],
     ]
 
@@ -37,37 +50,19 @@ async def evidence_agent_node(
     tools: list[BaseTool],
     event_repository: AuditEventRepository,
 ) -> dict[str, Any]:
-    claim = state["claim"]
+    task = state["review_task"]
     event_repository.append(
         state["task_id"],
         actor="evidence_agent",
         event_type="agent_turn_started",
-        title="资料核验子 Agent 分析 Claim",
+        title="资料核验子 Agent 分析资料",
         detail={
             "step": state["step_count"] + 1,
-            "claim_id": claim.claim_id,
-            "rule_id": claim.rule_id,
-            "statement": claim.statement[:300],
+            "rule_id": task.rule_id,
+            "evidence_type": str(task.evidence_type),
         },
     )
     response = await model.bind_tools(tools).ainvoke(build_evidence_messages(state))
-    if response.tool_calls:
-        event_repository.append(
-            state["task_id"],
-            actor="evidence_agent",
-            event_type="tool_plan",
-            title="资料核验子 Agent 请求调用工具",
-            detail={
-                "claim_id": claim.claim_id,
-                "tools": [
-                    {
-                        "name": call.get("name"),
-                        "call_id": call.get("id"),
-                    }
-                    for call in response.tool_calls
-                ],
-            },
-        )
     return {"messages": [response], "step_count": state["step_count"] + 1}
 
 
@@ -75,7 +70,7 @@ def can_parse_review_result(message: BaseMessage) -> bool:
     if not isinstance(message, AIMessage) or not isinstance(message.content, str):
         return False
     try:
-        validate_structured_content(message.content, EvidenceReviewResult)
+        validate_structured_content(message.content, EvidenceReviewDecision)
         return True
     except Exception:
         return False
@@ -95,61 +90,65 @@ def finalize_evidence_review(
     *,
     event_repository: AuditEventRepository,
 ) -> dict[str, Any]:
-    claim = state["claim"]
     last = state["messages"][-1] if state["messages"] else None
     if last is not None and can_parse_review_result(last):
-        result = validate_structured_content(last.content, EvidenceReviewResult)
-    else:
-        result = EvidenceReviewResult(
-            evidence_result_id="pending",
-            claim_id=claim.claim_id,
-            task_id=claim.task_id,
-            project_id=claim.project_id,
-            bidder_id=claim.bidder_id,
-            bid_file_id=claim.bid_file_id,
-            rule_id=claim.rule_id,
-            status="unverifiable",
-            evidence_found=[],
-            missing_evidence=[],
-            consistency_issues=[],
-            manual_review_reason="资料核验达到步数上限或未返回合法结构化结果",
-            summary="自动资料核验未能形成可靠结论，需人工复核",
+        decision = validate_structured_content(
+            last.content,
+            EvidenceReviewDecision,
         )
-    expected = (
-        claim.claim_id,
-        claim.task_id,
-        claim.project_id,
-        claim.bidder_id,
-        claim.bid_file_id,
-        claim.rule_id,
-    )
-    actual = (
-        result.claim_id,
-        result.task_id,
-        result.project_id,
-        result.bidder_id,
-        result.bid_file_id,
-        result.rule_id,
-    )
-    if actual != expected:
-        raise ValueError("EvidenceReviewResult 归属与 Claim 不一致")
-    # 结果 ID 由程序统一分配，不信任模型生成的随机长字符串。
-    result = result.model_copy(
-        update={"evidence_result_id": next_id("evidence-result")}
-    )
+        allowed_chunk_ids: set[str] = set()
+        for message in state["messages"]:
+            if not isinstance(message, ToolMessage) or not isinstance(
+                message.content, str
+            ):
+                continue
+            try:
+                value = extract_json_value(message.content)
+            except Exception:
+                continue
+            if isinstance(value, dict):
+                allowed_chunk_ids.update(
+                    str(chunk["chunk_id"])
+                    for chunk in value.get("chunks", [])
+                    if isinstance(chunk, dict) and chunk.get("chunk_id")
+                )
+        decision = decision.model_copy(
+            update={
+                "evidence_chunk_ids": [
+                    chunk_id
+                    for chunk_id in dict.fromkeys(
+                        decision.evidence_chunk_ids
+                    )
+                    if chunk_id in allowed_chunk_ids
+                ]
+            }
+        )
+        if (
+            str(decision.status)
+            in {"supported", "partially_supported", "contradicted"}
+            and not decision.evidence_chunk_ids
+        ):
+            decision = EvidenceReviewDecision(
+                status="unverifiable",
+                summary="子 Agent 未引用实际检索片段，自动核验结论无有效来源",
+                evidence_chunk_ids=[],
+            )
+    else:
+        decision = EvidenceReviewDecision(
+            status="unverifiable",
+            summary="资料核验达到步数上限或未返回合法结果，需要人工复核",
+            evidence_chunk_ids=[],
+        )
+    task = state["review_task"]
     event_repository.append(
         state["task_id"],
         actor="evidence_agent",
         event_type="evidence_decision",
         title="资料核验子 Agent 形成结论",
         detail={
-            "claim_id": claim.claim_id,
-            "rule_id": claim.rule_id,
-            "status": str(result.status),
-            "summary": result.summary,
-            "evidence_found_count": len(result.evidence_found),
-            "missing_evidence_count": len(result.missing_evidence),
-            "consistency_issue_count": len(result.consistency_issues),
+            "rule_id": task.rule_id,
+            "status": str(decision.status),
+            "evidence_count": len(decision.evidence_chunk_ids),
         },
     )
-    return {"review_result": result}
+    return {"review_decision": decision}

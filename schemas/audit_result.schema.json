@@ -2,101 +2,8 @@
   "$defs": {
     "BidDocumentSummary": {
       "additionalProperties": false,
-      "description": "投标文件进入索引和主 Agent 前的清洗摘要与路由结果。",
+      "description": "代码补充文件身份后的持久化摘要。",
       "properties": {
-        "file_id": {
-          "title": "File Id",
-          "type": "string"
-        },
-        "summary": {
-          "title": "Summary",
-          "type": "string"
-        },
-        "document_type": {
-          "title": "Document Type",
-          "type": "string"
-        },
-        "project_name": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Project Name"
-        },
-        "buyer": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Buyer"
-        },
-        "bidder_name": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Bidder Name"
-        },
-        "package_numbers": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Package Numbers",
-          "type": "array"
-        },
-        "material_categories": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Material Categories",
-          "type": "array"
-        },
-        "product_names": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Product Names",
-          "type": "array"
-        },
-        "model_numbers": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Model Numbers",
-          "type": "array"
-        },
-        "category_overview": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "propertyNames": {
-            "$ref": "#/$defs/RuleCategory"
-          },
-          "title": "Category Overview",
-          "type": "object"
-        },
-        "key_sections": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Key Sections",
-          "type": "array"
-        },
         "match_status": {
           "title": "Match Status",
           "type": "string"
@@ -105,20 +12,20 @@
           "title": "Match Reason",
           "type": "string"
         },
-        "confidence": {
-          "maximum": 1,
-          "minimum": 0,
-          "title": "Confidence",
-          "type": "number"
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
         }
       },
       "required": [
-        "file_id",
-        "summary",
-        "document_type",
         "match_status",
         "match_reason",
-        "confidence"
+        "summary",
+        "file_id"
       ],
       "title": "BidDocumentSummary",
       "type": "object"
@@ -211,20 +118,6 @@
             }
           ],
           "default": null
-        },
-        "classification_confidence": {
-          "anyOf": [
-            {
-              "maximum": 1,
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Classification Confidence"
         }
       },
       "required": [
@@ -237,104 +130,54 @@
       "title": "DocumentRef",
       "type": "object"
     },
-    "EvidenceReviewResult": {
+    "EvidenceClassificationRecord": {
       "additionalProperties": false,
+      "description": "代码补充文件 ID 后保存到最终结果，不进入主 Agent 输入。",
       "properties": {
-        "evidence_result_id": {
-          "title": "Evidence Result Id",
+        "evidence_type": {
+          "$ref": "#/$defs/EvidenceType"
+        },
+        "classification_status": {
+          "$ref": "#/$defs/ClassificationStatus"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 2,
+          "title": "Reason",
           "type": "string"
         },
-        "claim_id": {
-          "title": "Claim Id",
+        "bid_summary": {
+          "maxLength": 500,
+          "minLength": 2,
+          "title": "Bid Summary",
           "type": "string"
         },
-        "task_id": {
-          "title": "Task Id",
+        "evidence_summary": {
+          "maxLength": 2000,
+          "minLength": 2,
+          "title": "Evidence Summary",
           "type": "string"
         },
-        "project_id": {
-          "title": "Project Id",
+        "file_id": {
+          "title": "File Id",
           "type": "string"
         },
-        "bidder_id": {
-          "title": "Bidder Id",
-          "type": "string"
-        },
-        "bid_file_id": {
-          "title": "Bid File Id",
-          "type": "string"
-        },
-        "rule_id": {
-          "title": "Rule Id",
-          "type": "string"
-        },
-        "status": {
-          "$ref": "#/$defs/EvidenceReviewStatus"
-        },
-        "evidence_found": {
-          "items": {
-            "$ref": "#/$defs/SourceRef"
-          },
-          "title": "Evidence Found",
-          "type": "array"
-        },
-        "missing_evidence": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Missing Evidence",
-          "type": "array"
-        },
-        "consistency_issues": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Consistency Issues",
-          "type": "array"
-        },
-        "manual_review_reason": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Manual Review Reason"
-        },
-        "summary": {
-          "title": "Summary",
+        "file_name": {
+          "title": "File Name",
           "type": "string"
         }
       },
       "required": [
-        "evidence_result_id",
-        "claim_id",
-        "task_id",
-        "project_id",
-        "bidder_id",
-        "bid_file_id",
-        "rule_id",
-        "status",
-        "summary"
+        "evidence_type",
+        "classification_status",
+        "reason",
+        "bid_summary",
+        "evidence_summary",
+        "file_id",
+        "file_name"
       ],
-      "title": "EvidenceReviewResult",
+      "title": "EvidenceClassificationRecord",
       "type": "object"
-    },
-    "EvidenceReviewStatus": {
-      "enum": [
-        "supported",
-        "partially_supported",
-        "unsupported",
-        "contradicted",
-        "ocr_required",
-        "unverifiable",
-        "weakly_related"
-      ],
-      "title": "EvidenceReviewStatus",
-      "type": "string"
     },
     "EvidenceType": {
       "enum": [
@@ -393,18 +236,30 @@
         "overall_conclusion": {
           "$ref": "#/$defs/OverallConclusion"
         },
+        "audit_summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Summary"
+        },
+        "category_summaries": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Category Summaries",
+          "type": "object"
+        },
         "findings": {
           "items": {
             "$ref": "#/$defs/Finding"
           },
           "title": "Findings",
-          "type": "array"
-        },
-        "evidence_results": {
-          "items": {
-            "$ref": "#/$defs/EvidenceReviewResult"
-          },
-          "title": "Evidence Results",
           "type": "array"
         },
         "suggestions": {
@@ -427,166 +282,45 @@
     "Finding": {
       "additionalProperties": false,
       "properties": {
-        "finding_id": {
-          "title": "Finding Id",
-          "type": "string"
-        },
-        "task_id": {
-          "title": "Task Id",
-          "type": "string"
-        },
-        "project_id": {
-          "title": "Project Id",
-          "type": "string"
-        },
-        "bidder_id": {
-          "title": "Bidder Id",
-          "type": "string"
-        },
-        "bid_file_id": {
-          "title": "Bid File Id",
-          "type": "string"
-        },
         "rule_id": {
           "title": "Rule Id",
           "type": "string"
         },
-        "response_status": {
-          "$ref": "#/$defs/ResponseStatus"
-        },
-        "category": {
-          "$ref": "#/$defs/RuleCategory"
-        },
-        "severity": {
-          "$ref": "#/$defs/Severity"
-        },
         "result": {
           "$ref": "#/$defs/FindingResult"
         },
-        "title": {
-          "title": "Title",
+        "summary": {
+          "title": "Summary",
           "type": "string"
         },
-        "description": {
-          "title": "Description",
-          "type": "string"
-        },
-        "rule_source": {
-          "$ref": "#/$defs/SourceRef"
-        },
-        "bid_source": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "evidence_result_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Evidence Result Id"
-        },
-        "check_results": {
+        "tender_chunk_ids": {
           "items": {
-            "$ref": "#/$defs/FindingCheckResult"
+            "type": "string"
           },
-          "title": "Check Results",
+          "title": "Tender Chunk Ids",
           "type": "array"
         },
-        "suggestion": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Suggestion"
+        "bid_chunk_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Bid Chunk Ids",
+          "type": "array"
         },
-        "confidence": {
-          "maximum": 1,
-          "minimum": 0,
-          "title": "Confidence",
-          "type": "number"
+        "evidence_chunk_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Chunk Ids",
+          "type": "array"
         }
       },
       "required": [
-        "finding_id",
-        "task_id",
-        "project_id",
-        "bidder_id",
-        "bid_file_id",
         "rule_id",
-        "response_status",
-        "category",
-        "severity",
         "result",
-        "title",
-        "description",
-        "rule_source",
-        "confidence"
+        "summary"
       ],
       "title": "Finding",
-      "type": "object"
-    },
-    "FindingCheckResult": {
-      "additionalProperties": false,
-      "description": "复合规则中单个检查项的结论。",
-      "properties": {
-        "item_key": {
-          "title": "Item Key",
-          "type": "string"
-        },
-        "result": {
-          "$ref": "#/$defs/FindingResult"
-        },
-        "actual_value": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Actual Value"
-        },
-        "description": {
-          "title": "Description",
-          "type": "string"
-        },
-        "bid_source": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SourceRef"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "required": [
-        "item_key",
-        "result",
-        "description"
-      ],
-      "title": "FindingCheckResult",
       "type": "object"
     },
     "FindingResult": {
@@ -663,16 +397,6 @@
       "title": "ProjectMatchStatus",
       "type": "string"
     },
-    "ResponseStatus": {
-      "enum": [
-        "found",
-        "not_found",
-        "not_applicable",
-        "unreadable"
-      ],
-      "title": "ResponseStatus",
-      "type": "string"
-    },
     "RuleCategory": {
       "enum": [
         "format",
@@ -685,76 +409,65 @@
       "title": "RuleCategory",
       "type": "string"
     },
-    "Severity": {
+    "RulePriority": {
       "enum": [
-        "fatal",
-        "major",
-        "minor",
-        "info",
-        "unknown"
+        "critical",
+        "important",
+        "normal"
       ],
-      "title": "Severity",
+      "title": "RulePriority",
       "type": "string"
     },
-    "SourceRef": {
+    "RuleReportItem": {
       "additionalProperties": false,
+      "description": "最终 JSON 顶层保存的规则快照，供 Word 按 rule_id 展示。",
       "properties": {
-        "file_id": {
-          "title": "File Id",
+        "rule_id": {
+          "title": "Rule Id",
           "type": "string"
         },
-        "chunk_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Chunk Id"
+        "category": {
+          "$ref": "#/$defs/RuleCategory"
         },
-        "file_name": {
-          "title": "File Name",
+        "requirement": {
+          "maxLength": 500,
+          "minLength": 8,
+          "title": "Requirement",
           "type": "string"
         },
-        "source_path": {
-          "title": "Source Path",
-          "type": "string"
+        "priority": {
+          "$ref": "#/$defs/RulePriority"
         },
-        "section": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Section"
+        "verification": {
+          "$ref": "#/$defs/VerificationLevel"
         },
-        "quote": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Quote"
+        "evidence_types": {
+          "items": {
+            "$ref": "#/$defs/EvidenceType"
+          },
+          "title": "Evidence Types",
+          "type": "array"
         }
       },
       "required": [
-        "file_id",
-        "file_name",
-        "source_path"
+        "rule_id",
+        "category",
+        "requirement",
+        "priority",
+        "verification"
       ],
-      "title": "SourceRef",
+      "title": "RuleReportItem",
       "type": "object"
+    },
+    "VerificationLevel": {
+      "enum": [
+        "bid_only",
+        "source_check",
+        "evidence_check",
+        "cross_check"
+      ],
+      "title": "VerificationLevel",
+      "type": "string"
     }
   },
   "additionalProperties": false,
@@ -776,6 +489,20 @@
     "bidder_id": {
       "title": "Bidder Id",
       "type": "string"
+    },
+    "rules": {
+      "items": {
+        "$ref": "#/$defs/RuleReportItem"
+      },
+      "title": "Rules",
+      "type": "array"
+    },
+    "evidence_classifications": {
+      "items": {
+        "$ref": "#/$defs/EvidenceClassificationRecord"
+      },
+      "title": "Evidence Classifications",
+      "type": "array"
     },
     "file_results": {
       "items": {

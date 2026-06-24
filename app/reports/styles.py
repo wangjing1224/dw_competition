@@ -4,37 +4,6 @@ from docx.document import Document as WordDocument
 from docx.oxml.ns import qn
 from docx.shared import Pt
 
-from app.models.findings import Finding
-
-
-CATEGORY_ORDER = {
-    "format": 0,
-    "qualification": 1,
-    "commercial": 2,
-    "technical": 3,
-    "performance_capacity": 4,
-    "consistency_risk": 5,
-}
-SEVERITY_ORDER = {
-    "fatal": 0,
-    "major": 1,
-    "minor": 2,
-    "unknown": 3,
-    "info": 4,
-}
-
-
-def ordered_findings(findings: list[Finding]) -> list[Finding]:
-    return sorted(
-        findings,
-        key=lambda item: (
-            CATEGORY_ORDER.get(str(item.category), 99),
-            SEVERITY_ORDER.get(str(item.severity), 99),
-            item.rule_id,
-        ),
-    )
-
-
 def apply_document_styles(document: WordDocument) -> None:
     """统一设置中文字体；真实单位模板后续可在此处替换。"""
 
