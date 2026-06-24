@@ -47,7 +47,8 @@ bid_chat_model:
   temperature: 0.2
   timeout_seconds: 120
   max_retries: 2
-  max_output_tokens: 4096
+  # 30条轻量规则结论需要足够的完整 JSON 输出空间。
+  max_output_tokens: 16384
   enable_thinking: false
   structured_output_mode: prompt_only
 
