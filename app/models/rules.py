@@ -34,7 +34,7 @@ class RuleItem(StrictModel):
     category: RuleCategory
     priority: RulePriority = RulePriority.NORMAL
     verification: VerificationLevel = VerificationLevel.BID_ONLY
-    requirement: str = Field(min_length=8, max_length=500)
+    requirement: str = Field(min_length=8, max_length=10000)
     evidence_types: list[EvidenceType] = Field(default_factory=list)
     conflict_note: str | None = None
     source: SourceRef
@@ -61,7 +61,7 @@ class RuleModelView(StrictModel):
 
     rule_id: str
     category: RuleCategory
-    requirement: str = Field(min_length=8, max_length=500)
+    requirement: str = Field(min_length=8, max_length=10000)
     priority: RulePriority
     verification: VerificationLevel
     evidence_types: list[EvidenceType] = Field(default_factory=list)
@@ -76,7 +76,7 @@ class RuleDeltaOperation(StrictModel):
     rule_id: str | None = None
     merged_rule_ids: list[str] = Field(default_factory=list)
     category: RuleCategory | None = None
-    requirement: str | None = Field(default=None, min_length=8, max_length=500)
+    requirement: str | None = Field(default=None, min_length=8, max_length=2000)
     priority: RulePriority | None = None
     verification: VerificationLevel | None = None
     evidence_types: list[EvidenceType] = Field(default_factory=list)
@@ -117,6 +117,19 @@ class RuleSet(StrictModel):
             if source_file.project_id != self.project_id:
                 raise ValueError("RuleSet 不能引用其他项目文件")
         return self
+
+
+class RuleExtractionProgress(StrictModel):
+    """最近一次成功批次的规则快照，失败时保留用于排查。"""
+
+    project_id: str
+    document_index: int = Field(ge=1)
+    document_count: int = Field(ge=1)
+    batch_index: int = Field(ge=1)
+    batch_count: int = Field(ge=1)
+    source_file: str
+    rule_count: int = Field(ge=0)
+    rule_set: RuleSet
 
 
 def present_rule_for_model(rule: RuleItem) -> RuleModelView:

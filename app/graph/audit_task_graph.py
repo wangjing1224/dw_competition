@@ -1,6 +1,7 @@
 """组装主审核 ReAct 图，并提供后台任务可注入的 AuditExecutor。"""
 
 from functools import partial
+from uuid import uuid4
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
@@ -136,14 +137,19 @@ class LangGraphAuditExecutor(AuditExecutor):
                 evidence_classifications=context.evidence_classifications,
                 file_results=context.routed_file_results,
             )
+        # 业务 task_id 在清空本地 data 后可能从 audit-1 重新计数。
+        # LangSmith 会按 thread_id 聚合 Turn，因此追加运行级唯一后缀，
+        # 避免本次审核与历史上同名任务被错误归入同一个 Thread。
+        trace_thread_id = f"{context.task_id}-{uuid4().hex[:12]}"
         final_state = await self.graph.ainvoke(
             build_initial_audit_state(context),
             config={
-                "configurable": {"thread_id": context.task_id},
+                "configurable": {"thread_id": trace_thread_id},
                 "run_name": "bid_audit_agent",
                 "tags": ["audit", "bid-agent"],
                 "metadata": {
                     "task_id": context.task_id,
+                    "trace_thread_id": trace_thread_id,
                     "project_id": context.project_id,
                     "bidder_id": context.bidder_id,
                 },

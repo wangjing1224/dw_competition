@@ -8,7 +8,7 @@ from typing import BinaryIO
 from app.core.config import AppSettings
 from app.llm.factory import ModelRegistry
 from app.models.documents import document_ref_from_record
-from app.models.rules import RuleSet
+from app.models.rules import RuleExtractionProgress, RuleSet
 from app.parsers.service import parse_document
 from app.retrieval.index import build_document_index
 from app.retrieval.models import IndexScope
@@ -71,6 +71,7 @@ class ProjectService:
                 self.models.rule_extraction,
                 self.settings.rule_extraction_model,
                 maximum=self.settings.audit.rule_limit,
+                progress_callback=self._write_rule_progress,
             )
             rule_set = merge_rule_set(
                 extracted,
@@ -103,4 +104,28 @@ class ProjectService:
         temporary.write_text(rule_set.model_dump_json(indent=2), encoding="utf-8")
         RuleSet.model_validate_json(temporary.read_text("utf-8"))
         temporary.replace(path)
+        self._rule_progress_path(rule_set.project_id).unlink(missing_ok=True)
         return path
+
+    def _rule_progress_path(self, project_id: str) -> Path:
+        return (
+            self.settings.storage.data_root
+            / "parsed"
+            / "rules"
+            / f"{project_id}.progress.json"
+        )
+
+    def _write_rule_progress(self, progress: RuleExtractionProgress) -> None:
+        """每个成功批次原子写入规则快照，失败时保留最近进度。"""
+
+        path = self._rule_progress_path(progress.project_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f"{path.name}.tmp")
+        temporary.write_text(
+            progress.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        RuleExtractionProgress.model_validate_json(
+            temporary.read_text("utf-8")
+        )
+        temporary.replace(path)

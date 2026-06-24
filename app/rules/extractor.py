@@ -1,5 +1,8 @@
 """从招标文件串行抽取规则增量，并维护单一完整 RuleSet。"""
 
+import inspect
+from collections.abc import Awaitable, Callable
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.core.config import ChatModelSettings
@@ -9,11 +12,22 @@ from app.models.documents import ParsedDocument, SourceRef
 from app.models.rules import (
     ProjectProfile,
     RuleDeltaResult,
+    RuleExtractionProgress,
     RuleSet,
     present_rules_for_model,
 )
 from app.prompts.loader import render_prompt
-from app.rules.merger import apply_rule_delta_operations, finalize_rule_set
+from app.rules.merger import (
+    apply_rule_delta_operations,
+    compact_rule_set,
+    finalize_rule_set,
+)
+
+
+RuleProgressCallback = Callable[
+    [RuleExtractionProgress],
+    Awaitable[None] | None,
+]
 
 
 def _source_blocks(parsed: ParsedDocument) -> list[str]:
@@ -142,52 +156,15 @@ async def _invoke_delta(
     )
 
 
-async def _resolve_capacity(
-    *,
-    rule_set: RuleSet,
-    parsed: ParsedDocument,
-    context: str,
-    model: object,
-    settings: ChatModelSettings,
-    maximum: int,
-) -> RuleSet:
-    result = await invoke_structured(
-        model,
-        [
-            SystemMessage(
-                content=render_prompt(
-                    "rule_capacity_merge",
-                    rule_delta_schema=RuleDeltaResult.model_json_schema(),
-                    maximum=maximum,
-                )
-            ),
-            HumanMessage(
-                content=render_prompt(
-                    "rule_capacity_merge_input",
-                    current_rules=[
-                        item.model_dump(mode="json")
-                        for item in present_rules_for_model(rule_set)
-                    ],
-                    source_file=parsed.document.source_path,
-                    source_context=context,
-                )
-            ),
-        ],
-        RuleDeltaResult,
-        settings.structured_output_mode,
-    )
-    if any(operation.action != "merge" for operation in result.operations):
-        raise ValueError("容量合并只能返回 merge 操作")
-    merged = apply_rule_delta_operations(
-        rule_set,
-        result.operations,
-        source=_source_for_batch(parsed, context),
-    )
-    if len(merged.rules) > maximum:
-        raise ValueError(
-            f"容量合并后仍有 {len(merged.rules)} 条规则，超过上限 {maximum}"
-        )
-    return merged
+async def _report_progress(
+    callback: RuleProgressCallback | None,
+    progress: RuleExtractionProgress,
+) -> None:
+    if callback is None:
+        return
+    result = callback(progress)
+    if inspect.isawaitable(result):
+        await result
 
 
 async def extract_rule_set(
@@ -197,6 +174,7 @@ async def extract_rule_set(
     model_settings: ChatModelSettings,
     *,
     maximum: int = 30,
+    progress_callback: RuleProgressCallback | None = None,
 ) -> RuleSet:
     """严格串行执行每个文件批次，使模型始终看到最新规则集合。"""
 
@@ -204,7 +182,7 @@ async def extract_rule_set(
         project_id=project_id,
         source_files=[item.document for item in parsed_documents],
     )
-    for parsed in parsed_documents:
+    for document_index, parsed in enumerate(parsed_documents, start=1):
         contexts = build_rule_extraction_batches(parsed)
         for batch_index, context in enumerate(contexts, start=1):
             try:
@@ -237,12 +215,21 @@ async def extract_rule_set(
                 source=_source_for_batch(parsed, context),
             )
             if len(rule_set.rules) > maximum:
-                rule_set = await _resolve_capacity(
-                    rule_set=rule_set,
-                    parsed=parsed,
-                    context=context,
-                    model=model,
-                    settings=model_settings,
+                rule_set = compact_rule_set(
+                    rule_set,
                     maximum=maximum,
                 )
+            await _report_progress(
+                progress_callback,
+                RuleExtractionProgress(
+                    project_id=project_id,
+                    document_index=document_index,
+                    document_count=len(parsed_documents),
+                    batch_index=batch_index,
+                    batch_count=len(contexts),
+                    source_file=parsed.document.source_path,
+                    rule_count=len(rule_set.rules),
+                    rule_set=rule_set,
+                ),
+            )
     return finalize_rule_set(rule_set, maximum=maximum)

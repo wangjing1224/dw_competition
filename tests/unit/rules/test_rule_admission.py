@@ -7,16 +7,17 @@ from app.models.rules import (
     RuleSet,
     present_rules_for_model,
 )
-from app.rules.merger import apply_rule_delta_operations
+from app.rules.merger import apply_rule_delta_operations, compact_rule_set
 from app.rules.policies import (
     normalize_priority_verification,
     passes_rule_admission,
 )
 
 
-def source(file_id="file-1"):
+def source(file_id="file-1", chunk_id=None):
     return SourceRef(
         file_id=file_id,
+        chunk_id=chunk_id,
         file_name="招标文件.md",
         source_path="招标文件.md",
     )
@@ -104,3 +105,90 @@ def test_capacity_merge_removes_absorbed_rules_and_preserves_sources():
     assert {item.file_id for item in merged.rules[0].supporting_sources} == {
         "file-2"
     }
+
+
+def test_deterministic_capacity_merge_prefers_same_priority_and_verification():
+    rules = [
+        RuleItem(
+            rule_id="rule-1",
+            category="technical",
+            requirement="成像分辨率应满足技术规范要求",
+            priority="critical",
+            verification="source_check",
+            source=source("file-1", "chunk-1"),
+        ),
+        RuleItem(
+            rule_id="rule-2",
+            category="technical",
+            requirement="测温精度应满足技术规范要求",
+            priority="critical",
+            verification="source_check",
+            source=source("file-2", "chunk-2"),
+        ),
+        RuleItem(
+            rule_id="rule-3",
+            category="technical",
+            requirement="投标人应提供产品检测报告",
+            priority="important",
+            verification="evidence_check",
+            evidence_types=["test_report"],
+            source=source("file-3", "chunk-3"),
+        ),
+        RuleItem(
+            rule_id="rule-4",
+            category="commercial",
+            requirement="投标报价不得超过最高限价",
+            priority="critical",
+            verification="bid_only",
+            source=source("file-4", "chunk-4"),
+        ),
+    ]
+    compacted = compact_rule_set(
+        RuleSet(project_id="project-1", rules=rules),
+        maximum=3,
+    )
+    assert {rule.rule_id for rule in compacted.rules} == {
+        "rule-1",
+        "rule-3",
+        "rule-4",
+    }
+    merged = next(rule for rule in compacted.rules if rule.rule_id == "rule-1")
+    assert "成像分辨率" in merged.requirement
+    assert "测温精度" in merged.requirement
+    assert {
+        item.chunk_id for item in merged.supporting_sources
+    } == {"chunk-2"}
+
+
+def test_deterministic_merge_keeps_high_priority_and_upgrades_verification():
+    compacted = compact_rule_set(
+        RuleSet(
+            project_id="project-1",
+            rules=[
+                RuleItem(
+                    rule_id="rule-8",
+                    category="qualification",
+                    requirement="投标主体应具有合法有效的营业执照",
+                    priority="critical",
+                    verification="bid_only",
+                    source=source("file-8", "chunk-8"),
+                ),
+                RuleItem(
+                    rule_id="rule-9",
+                    category="qualification",
+                    requirement="营业执照主体应与投标主体保持一致",
+                    priority="important",
+                    verification="evidence_check",
+                    evidence_types=["business_license"],
+                    source=source("file-9", "chunk-9"),
+                ),
+            ],
+        ),
+        maximum=1,
+    )
+    merged = compacted.rules[0]
+    assert merged.rule_id == "rule-8"
+    assert merged.priority == "critical"
+    assert merged.verification == "evidence_check"
+    assert merged.evidence_types == ["business_license"]
+    assert {item.chunk_id for item in merged.supporting_sources} == {"chunk-9"}

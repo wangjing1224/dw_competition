@@ -39,10 +39,9 @@ DISALLOWED_PATTERNS = (
 
 
 def normalize_requirement(value: str) -> str:
-    """压缩空白并限制模型偶发的超长规则描述。"""
+    """压缩空白；归并后的规则必须保留全部原始审核要求。"""
 
-    normalized = re.sub(r"\s+", " ", value).strip(" ；;。")
-    return normalized[:500]
+    return re.sub(r"\s+", " ", value).strip(" ；;。")
 
 
 def passes_rule_admission(operation: RuleDeltaOperation) -> bool:
@@ -135,5 +134,5 @@ def limit_rules(rules: list[RuleItem], limit: int) -> list[RuleItem]:
     """兼容旧调用：只校验，不再按文件顺序静默截断。"""
 
     if len(rules) > limit:
-        raise ValueError(f"规则数量超过上限 {limit}，必须先执行容量合并")
+        raise ValueError(f"规则数量超过上限 {limit}，必须先执行确定性同类合并")
     return list(rules)

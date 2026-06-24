@@ -13,8 +13,6 @@
 |---|---|---|
 | `rule_extraction.md` | `${rule_delta_schema}` | `app/rules/extractor.py` |
 | `rule_extraction_input.md` | `${current_rules}`、`${source_file}`、`${batch_index}`、`${batch_count}`、`${source_context}` | `app/rules/extractor.py` |
-| `rule_capacity_merge.md` | `${maximum}`、`${rule_delta_schema}` | `app/rules/extractor.py` |
-| `rule_capacity_merge_input.md` | `${current_rules}`、`${source_file}`、`${source_context}` | `app/rules/extractor.py` |
 | `evidence_classification.md` | `${evidence_types}`、`${evidence_classification_schema}` | `app/evidence/classifier.py` |
 | `evidence_classification_input.md` | `${classification_input}` | `app/evidence/classifier.py` |
 | `bid_document_summary.md` | `${bid_document_summary_schema}` | `app/audit/bid_summary.py` |
