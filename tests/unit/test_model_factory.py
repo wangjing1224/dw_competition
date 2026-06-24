@@ -5,7 +5,7 @@ from pydantic import SecretStr
 from app.llm import factory
 
 
-def test_qwen_chat_model_disables_thinking(monkeypatch, temp_settings):
+def test_chat_model_uses_scnet_generation_parameters(monkeypatch, temp_settings):
     captured = {}
 
     class FakeChatOpenAI:
@@ -19,7 +19,10 @@ def test_qwen_chat_model_disables_thinking(monkeypatch, temp_settings):
 
     factory.build_chat_model(settings)
 
-    assert captured["extra_body"] == {"enable_thinking": False}
+    assert captured["extra_body"] == {
+        "max_tokens": settings.max_output_tokens,
+        "enable_thinking": False,
+    }
 
 
 def test_llama_cpp_embedding_does_not_send_dimensions(

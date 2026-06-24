@@ -3,8 +3,8 @@ rule_extraction_model:
   # URL 和 Key 从根目录 .env 读取；切换服务时只需替换环境变量。
   base_url: ${RULE_EXTRACTION_MODEL_BASE_URL}
   api_key: ${RULE_EXTRACTION_MODEL_API_KEY}
-  # 模型名可直接替换为百炼或本地 OpenAI 兼容服务提供的模型。
-  model: qwen3.7-plus
+  # 算力网 OpenAI 兼容接口提供的主力 Chat 模型。
+  model: DeepSeek-V4-Flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -18,7 +18,7 @@ rule_extraction_model:
 evidence_classification_model:
   base_url: ${EVIDENCE_CLASSIFICATION_MODEL_BASE_URL}
   api_key: ${EVIDENCE_CLASSIFICATION_MODEL_API_KEY}
-  model: qwen3.7-plus
+  model: DeepSeek-V4-Flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -31,7 +31,7 @@ bid_summary_model:
   # 默认复用主审核模型连接；如需独立部署，直接把下面两个占位符改成新的环境变量。
   base_url: ${BID_CHAT_MODEL_BASE_URL}
   api_key: ${BID_CHAT_MODEL_API_KEY}
-  model: qwen3.7-plus
+  model: DeepSeek-V4-Flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -43,7 +43,7 @@ bid_summary_model:
 bid_chat_model:
   base_url: ${BID_CHAT_MODEL_BASE_URL}
   api_key: ${BID_CHAT_MODEL_API_KEY}
-  model: qwen3.7-plus
+  model: DeepSeek-V4-Flash
   temperature: 0.2
   timeout_seconds: 120
   max_retries: 2
@@ -55,7 +55,7 @@ bid_chat_model:
 evidence_chat_model:
   base_url: ${EVIDENCE_CHAT_MODEL_BASE_URL}
   api_key: ${EVIDENCE_CHAT_MODEL_API_KEY}
-  model: qwen3.7-plus
+  model: DeepSeek-V4-Flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2

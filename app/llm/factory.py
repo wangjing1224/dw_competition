@@ -23,12 +23,15 @@ def build_chat_model(settings: ChatModelSettings) -> ChatOpenAI:
         base_url=settings.base_url.rstrip("/"),
         api_key=api_key,
         temperature=settings.temperature,
-        max_completion_tokens=settings.max_output_tokens,
         timeout=settings.timeout_seconds,
         max_retries=settings.max_retries,
-        # 百炼 Qwen3.7/Qwen3.5 使用该非标准参数控制混合思考模式。
-        # 关闭后直接生成答案，减少规则抽取延迟和 reasoning Token。
-        extra_body={"enable_thinking": settings.enable_thinking},
+        # 算力网文档使用 max_tokens，并通过 enable_thinking 控制
+        # Qwen3/DeepSeek-V4 的思考模式；extra_body 会把两项放到
+        # OpenAI 兼容请求的顶层。
+        extra_body={
+            "max_tokens": settings.max_output_tokens,
+            "enable_thinking": settings.enable_thinking,
+        },
     )
 
 
