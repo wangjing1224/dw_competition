@@ -58,6 +58,7 @@ class EvidenceReviewResult(StrictModel):
     """资料核验工具返回给主 Agent 的外层结果。"""
 
     rule_id: str
+    evidence_type: EvidenceType
     status: EvidenceReviewStatus
     summary: str = Field(min_length=2, max_length=500)
     evidence_chunk_ids: list[str] = Field(default_factory=list)

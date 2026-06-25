@@ -115,16 +115,31 @@ def _tool_chunk_ids(state: AuditState) -> dict[str, set[str]]:
             continue
         kind = tool_to_kind.get(message.name or "")
         if kind and isinstance(value, dict):
-            allowed[kind].update(
-                str(chunk["chunk_id"])
-                for chunk in value.get("chunks", [])
-                if isinstance(chunk, dict) and chunk.get("chunk_id")
-            )
+            groups = value.get("results", [])
+            if not groups and "chunks" in value:
+                groups = [{"chunks": value.get("chunks", [])}]
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                allowed[kind].update(
+                    str(chunk["chunk_id"])
+                    for chunk in group.get("chunks", [])
+                    if isinstance(chunk, dict) and chunk.get("chunk_id")
+                )
         if message.name == "request_evidence_review" and isinstance(value, dict):
-            allowed["evidence"].update(
-                str(chunk_id)
-                for chunk_id in value.get("evidence_chunk_ids", [])
-            )
+            review_results = value.get("results", [])
+            if not review_results and "evidence_chunk_ids" in value:
+                review_results = [value]
+            for review_result in review_results:
+                if not isinstance(review_result, dict):
+                    continue
+                allowed["evidence"].update(
+                    str(chunk_id)
+                    for chunk_id in review_result.get(
+                        "evidence_chunk_ids",
+                        [],
+                    )
+                )
     return allowed
 
 
@@ -149,13 +164,21 @@ def prepare_length_retry_node(state: AuditState) -> dict[str, Any]:
 def prepare_format_retry_node(state: AuditState) -> dict[str, Any]:
     last = state["messages"][-1]
     messages: list[Any] = []
+    validation_error = "未返回可解析的 AgentAuditDecision JSON"
+    try:
+        AgentAuditDecision.model_validate(extract_json_value(last.content))
+    except Exception as exc:
+        validation_error = str(exc).replace("\n", " ")[:800]
     if getattr(last, "id", None):
         messages.append(RemoveMessage(id=last.id))
     messages.append(
         HumanMessage(
             content=(
                 "上一次最终输出不是合法的 AgentAuditDecision JSON。"
+                f"校验错误：{validation_error}。"
                 "只修复 JSON 语法、字段层级、枚举和遗漏规则，不增加新事实，不调用工具。"
+                "字符串内部不得直接使用英文双引号；例如将\"十不准\"改为中文引号"
+                "“十不准”，或正确转义英文双引号。"
                 "必须完整覆盖全部规则，只返回 JSON。"
             )
         )

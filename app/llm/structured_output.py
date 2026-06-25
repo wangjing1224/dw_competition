@@ -13,6 +13,10 @@ FENCE_PATTERN = re.compile(
     r"^\s*```(?:json)?\s*(.*?)\s*```\s*$",
     re.IGNORECASE | re.DOTALL,
 )
+EMBEDDED_FENCE_PATTERN = re.compile(
+    r"```(?:json)?\s*(.*?)\s*```",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def strip_markdown_fence(content: str) -> str:
@@ -21,6 +25,21 @@ def strip_markdown_fence(content: str) -> str:
 
 
 def extract_json_value(content: str) -> Any:
+    fenced_blocks = EMBEDDED_FENCE_PATTERN.findall(content)
+    if fenced_blocks:
+        errors: list[str] = []
+        for block in fenced_blocks:
+            try:
+                return json.loads(block)
+            except json.JSONDecodeError as exc:
+                errors.append(
+                    f"第{exc.lineno}行第{exc.colno}列：{exc.msg}"
+                )
+        # 存在明确 JSON 代码块时，不再从损坏 JSON 的内部对象中误提取局部结果。
+        raise InvalidStructuredOutput(
+            "模型返回的 JSON 代码块语法错误：" + "；".join(errors)
+        )
+
     text = strip_markdown_fence(content)
     decoder = json.JSONDecoder()
     for index, character in enumerate(text):

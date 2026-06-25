@@ -1,23 +1,31 @@
 # 主审核 Agent：按当前 RuleItem 检索当前投标文件中的响应。
 search_bid_response: >-
   当摘要不足以判断重点规则时，检索当前正在审核的投标文件原文；只检索当前文件，不检索
-  其他投标文件。返回{"chunks":[{"chunk_id","file_id","section","content"}]}：
-  content是召回原文，chunk_id用于最终结论的bid_chunk_ids溯源；空chunks表示未找到有效原文。
+  其他投标文件。输入checks按核验事实分组，每个check包含topic和1至5个互补queries；
+  一个topic只表达一个事实。返回{"results":[{"topic","chunks":[{"chunk_id","file_id",
+  "section","content"}]}]}，每个topic独立保留召回片段；空chunks只表示当前topic没有找到
+  有效原文。content是召回原文，chunk_id用于最终结论的bid_chunk_ids溯源。
 
 # 主审核 Agent：规则要求或适用范围不清楚时检索招标原文。
 search_tender_source: >-
   仅当规则要求、适用范围或重要性无法从精简规则确认时，检索当前项目招标文件原文；不要用它
-  查询投标方如何响应规则。返回{"chunks":[{"chunk_id","file_id","section","content"}]}：
-  content是招标原文，chunk_id用于最终结论的tender_chunk_ids溯源；空chunks表示未找到有效原文。
+  查询投标方如何响应规则。输入checks按招标要求分组，每个check包含topic和1至5个互补
+  queries。返回{"results":[{"topic","chunks":[{"chunk_id","file_id","section","content"}]}]}，
+  每个topic独立保留召回片段；空chunks只表示当前topic没有找到有效原文。chunk_id用于最终
+  结论的tender_chunk_ids溯源。
 
 # 主审核 Agent：把单条明确核验任务交给资料核验子 Agent。
 request_evidence_review: >-
-  为一条明确规则启动投标方资料核验，由资料子Agent检索指定类别资料；一次调用只处理一条规则
-  和一个资料类别。返回{"rule_id","status","summary","evidence_chunk_ids"}：
-  summary是核验结论，evidence_chunk_ids用于最终结论溯源；unsupported表示没有可自动核验资料。
+  批量委派投标方资料核验。输入checks；每个check必须只包含一个rule_id、一个evidence_type
+  和该类别内的一个明确verification_request。同一规则需要多类资料时拆成多个check。
+  返回{"results":[{"rule_id","evidence_type","status","summary","evidence_chunk_ids"}]}。
+  unsupported表示当前资料目录没有对应的可自动核验类别，不等于投标方必然未提交材料；
+  ocr_required表示该类别资料存在但正文不可自动读取。
 
 # 资料核验子 Agent：按系统注入的投标方和资料类型检索原文。
 search_evidence: >-
   检索当前核验任务允许访问的投标方资料原文，只能查询主Agent指定的资料类别和允许的文件。
-  返回{"chunks":[{"chunk_id","file_id","section","content"}]}：只有content可以作为自动核验
-  依据，chunk_id用于evidence_chunk_ids溯源；空chunks表示没有找到可靠证据。
+  输入checks按核验事实分组，每个check包含topic和1至5个互补queries，并可用file_ids缩小
+  文件范围。返回{"results":[{"topic","chunks":[{"chunk_id","file_id","section","content"}]}]}。
+  只有content可以作为自动核验依据；空chunks只表示当前topic在允许范围内没有找到可靠证据，
+  不代表投标方在全部文件中未提交该材料。

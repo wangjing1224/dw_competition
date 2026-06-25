@@ -134,11 +134,17 @@ def finalize_evidence_review(
             except Exception:
                 continue
             if isinstance(value, dict):
-                allowed_chunk_ids.update(
-                    str(chunk["chunk_id"])
-                    for chunk in value.get("chunks", [])
-                    if isinstance(chunk, dict) and chunk.get("chunk_id")
-                )
+                groups = value.get("results", [])
+                if not groups and "chunks" in value:
+                    groups = [{"chunks": value.get("chunks", [])}]
+                for group in groups:
+                    if not isinstance(group, dict):
+                        continue
+                    allowed_chunk_ids.update(
+                        str(chunk["chunk_id"])
+                        for chunk in group.get("chunks", [])
+                        if isinstance(chunk, dict) and chunk.get("chunk_id")
+                    )
         decision = decision.model_copy(
             update={
                 "evidence_chunk_ids": [

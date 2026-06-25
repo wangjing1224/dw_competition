@@ -13,19 +13,38 @@ from app.retrieval.service import RetrievalService
 from app.storage.repositories import AuditEventRepository
 
 
-class SearchEvidenceInput(BaseModel):
-    """资料子 Agent 原文检索工具的模型可见输入。"""
+class EvidenceSearchCheck(BaseModel):
+    """当前资料类别内的单个待核验事实。"""
 
     model_config = ConfigDict(extra="forbid")
+    topic: str = Field(
+        min_length=2,
+        max_length=100,
+        description=(
+            "简短描述一个待核验事实，例如“证书有效期”或“合同金额”。"
+            "不要把多个无关事实合并为一个topic。"
+        ),
+    )
     queries: list[str] = Field(
         min_length=1,
         max_length=5,
         description=(
-            "围绕主Agent给出的verification_request，在当前evidence_type资料中执行的"
-            "1至5个互不重复查询。每个query只核验一个具体事实，并优先从资料摘要中提取"
-            "主体名称、证书或合同名称、产品型号、编号、日期、金额及技术参数等高辨识度"
-            "关键词。不要使用“核验是否符合”等宽泛表述；同一事实未召回有效原文后，"
-            "不要仅改写同义词再次检索。"
+            "围绕当前topic提供1至5个互补查询。优先包含主体名称、证书或合同名称、"
+            "产品型号、编号、日期、金额及技术参数等高辨识度信息。"
+        ),
+    )
+
+
+class SearchEvidenceInput(BaseModel):
+    """资料子 Agent 原文检索工具的模型可见输入。"""
+
+    model_config = ConfigDict(extra="forbid")
+    checks: list[EvidenceSearchCheck] = Field(
+        min_length=1,
+        max_length=8,
+        description=(
+            "当前资料类别中需要核验的1至8个独立事实。每个check使用topic说明一个"
+            "核验问题，并提供1至5个从资料摘要提取的互补query。"
         ),
     )
     file_ids: list[str] = Field(
@@ -40,29 +59,48 @@ class SearchEvidenceInput(BaseModel):
     state: Annotated[dict, InjectedState]
 
 
-def _compact(results: list[SearchResult], settings: AppSettings) -> dict:
-    chunks: list[dict[str, str]] = []
-    seen: set[str] = set()
-    used = 0
-    total_limit = min(settings.retrieval.max_source_chars * 2, 8000)
-    for result in sorted(results, key=lambda item: item.score, reverse=True):
-        if result.chunk_id in seen or len(chunks) >= 5:
-            continue
-        remaining = total_limit - used
-        if remaining <= 0:
-            break
-        content = result.content[: min(1800, remaining)]
-        chunks.append(
-            {
-                "chunk_id": result.chunk_id,
-                "file_id": result.source.file_id,
-                "section": result.source.section or "",
-                "content": content,
-            }
+def _compact_grouped(
+    grouped_results: list[tuple[str, list[SearchResult]]],
+    settings: AppSettings,
+) -> dict[str, list[dict[str, object]]]:
+    results: list[dict[str, object]] = []
+    global_seen: set[str] = set()
+    total_limit = min(settings.retrieval.max_source_chars * 3, 12000)
+    topic_budget = max(600, total_limit // max(len(grouped_results), 1))
+    for topic, search_results in grouped_results:
+        chunks: list[dict[str, str]] = []
+        local_seen: set[str] = set()
+        used = 0
+        ranked = sorted(
+            search_results,
+            key=lambda item: item.score,
+            reverse=True,
         )
-        seen.add(result.chunk_id)
-        used += len(content)
-    return {"chunks": chunks}
+        candidates = [
+            result for result in ranked if result.chunk_id not in global_seen
+        ]
+        if not candidates:
+            candidates = ranked
+        for result in candidates:
+            if result.chunk_id in local_seen or len(chunks) >= 2:
+                continue
+            remaining = topic_budget - used
+            if remaining <= 0:
+                break
+            content = result.content[: min(1800, remaining)]
+            chunks.append(
+                {
+                    "chunk_id": result.chunk_id,
+                    "file_id": result.source.file_id,
+                    "section": result.source.section or "",
+                    "content": content,
+                }
+            )
+            local_seen.add(result.chunk_id)
+            global_seen.add(result.chunk_id)
+            used += len(content)
+        results.append({"topic": topic, "chunks": chunks})
+    return {"results": results}
 
 
 class SearchEvidenceTool(BaseTool):
@@ -77,36 +115,46 @@ class SearchEvidenceTool(BaseTool):
 
     async def _arun(
         self,
-        queries: list[str],
+        checks: list[EvidenceSearchCheck],
         file_ids: list[str],
         state: Annotated[dict, InjectedState],
     ) -> dict:
         task = state["review_task"]
         allowed_file_ids = {item.file_id for item in task.files}
         if not allowed_file_ids:
-            return {"chunks": []}
+            return {
+                "results": [
+                    {"topic": check.topic, "chunks": []} for check in checks
+                ]
+            }
         selected = set(file_ids) if file_ids else allowed_file_ids
         if not selected <= allowed_file_ids:
             raise ToolException("资料检索请求包含未授权文件")
 
-        results: list[SearchResult] = []
-        for query in dict.fromkeys(item.strip() for item in queries if item.strip()):
-            results.extend(
-                await self.retrieval_service.search(
-                    query,
-                    IndexFilter(
-                        scope_id=f"evidence-{task.project_id}-{task.bidder_id}",
-                        project_id=task.project_id,
-                        bidder_id=task.bidder_id,
-                        data_role="evidence_material",
-                        evidence_types=[task.evidence_type],
-                        file_ids=sorted(selected),
-                    ),
-                    candidate_top_k=20,
-                    final_top_k=8,
+        query_filter = IndexFilter(
+            scope_id=f"evidence-{task.project_id}-{task.bidder_id}",
+            project_id=task.project_id,
+            bidder_id=task.bidder_id,
+            data_role="evidence_material",
+            evidence_types=[task.evidence_type],
+            file_ids=sorted(selected),
+        )
+        grouped_results: list[tuple[str, list[SearchResult]]] = []
+        for check in checks:
+            topic_results: list[SearchResult] = []
+            for query in dict.fromkeys(
+                item.strip() for item in check.queries if item.strip()
+            ):
+                topic_results.extend(
+                    await self.retrieval_service.search(
+                        query,
+                        query_filter,
+                        candidate_top_k=20,
+                        final_top_k=8,
+                    )
                 )
-            )
-        response = _compact(results, self.settings)
+            grouped_results.append((check.topic, topic_results))
+        response = _compact_grouped(grouped_results, self.settings)
         self.event_repository.append(
             task.task_id,
             actor="tool",
@@ -116,8 +164,11 @@ class SearchEvidenceTool(BaseTool):
                 "tool": self.name,
                 "rule_id": task.rule_id,
                 "evidence_type": str(task.evidence_type),
-                "query_count": len(queries),
-                "result_count": len(response["chunks"]),
+                "topic_count": len(checks),
+                "query_count": sum(len(check.queries) for check in checks),
+                "result_count": sum(
+                    len(item["chunks"]) for item in response["results"]
+                ),
             },
         )
         return response

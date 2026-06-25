@@ -31,3 +31,12 @@ def test_length_response_gets_one_compact_retry():
         response_metadata={"finish_reason": "length"},
     )
     assert route_bid_agent(_state(message), 8) == "retry_length"
+
+
+def test_invalid_final_json_gets_one_format_only_retry():
+    current = _state(AIMessage(content='{"summary":"损坏"'))
+    current["react_step_count"] = 8
+    assert route_bid_agent(current, 8) == "retry_format"
+
+    current["format_retry_count"] = 1
+    assert route_bid_agent(current, 8) == "limit_reached"
