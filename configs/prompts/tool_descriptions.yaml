@@ -1,19 +1,23 @@
 # 主审核 Agent：按当前 RuleItem 检索当前投标文件中的响应。
 search_bid_response: >-
-  当投标摘要不足以判断重点规则时，使用一个或多个精确 query 检索当前投标文件原文。
-  query 可包含规则 requirement 中的关键术语、产品型号、参数、主体或具体疑问。
+  当摘要不足以判断重点规则时，检索当前正在审核的投标文件原文；只检索当前文件，不检索
+  其他投标文件。返回{"chunks":[{"chunk_id","file_id","section","content"}]}：
+  content是召回原文，chunk_id用于最终结论的bid_chunk_ids溯源；空chunks表示未找到有效原文。
 
 # 主审核 Agent：规则要求或适用范围不清楚时检索招标原文。
 search_tender_source: >-
-  使用一个或多个精确 query 检索当前项目招标文件原文；仅在规则要求、适用范围或重要性
-  不能从精简规则中确认时调用。
+  仅当规则要求、适用范围或重要性无法从精简规则确认时，检索当前项目招标文件原文；不要用它
+  查询投标方如何响应规则。返回{"chunks":[{"chunk_id","file_id","section","content"}]}：
+  content是招标原文，chunk_id用于最终结论的tender_chunk_ids溯源；空chunks表示未找到有效原文。
 
 # 主审核 Agent：把单条明确核验任务交给资料核验子 Agent。
 request_evidence_review: >-
-  为一条规则启动资料核验。填写 rule_id、明确的 verification_request 和单个 evidence_type；
-  当前任务身份和可用资料由系统注入。
+  为一条明确规则启动投标方资料核验，由资料子Agent检索指定类别资料；一次调用只处理一条规则
+  和一个资料类别。返回{"rule_id","status","summary","evidence_chunk_ids"}：
+  summary是核验结论，evidence_chunk_ids用于最终结论溯源；unsupported表示没有可自动核验资料。
 
 # 资料核验子 Agent：按系统注入的投标方和资料类型检索原文。
 search_evidence: >-
-  使用一个或多个精确 query 检索当前核验任务允许的资料原文；可以用 file_ids 进一步限制
-  文件。返回的 chunks 才是可用于结论的证据。
+  检索当前核验任务允许访问的投标方资料原文，只能查询主Agent指定的资料类别和允许的文件。
+  返回{"chunks":[{"chunk_id","file_id","section","content"}]}：只有content可以作为自动核验
+  依据，chunk_id用于evidence_chunk_ids溯源；空chunks表示没有找到可靠证据。

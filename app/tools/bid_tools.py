@@ -20,17 +20,59 @@ from app.retrieval.service import RetrievalService
 from app.storage.repositories import AuditEventRepository
 
 
-class SearchQueriesInput(BaseModel):
+class SearchBidResponseInput(BaseModel):
+    """主 Agent 检索当前投标文件时的模型可见输入。"""
+
     model_config = ConfigDict(extra="forbid")
-    queries: list[str] = Field(min_length=1, max_length=5)
+    queries: list[str] = Field(
+        min_length=1,
+        max_length=5,
+        description=(
+            "本轮需要在当前投标文件中检索的1至5个互不重复查询。每个query只核对一个"
+            "投标响应事实，应包含响应文件名称、投标主体、产品型号、报价、承诺事项、"
+            "技术参数或具体缺失项。不要查询招标文件要求，不得重复此前没有新召回的事项。"
+        ),
+    )
+    state: Annotated[dict, InjectedState]
+
+
+class SearchTenderSourceInput(BaseModel):
+    """主 Agent 检索招标文件原文时的模型可见输入。"""
+
+    model_config = ConfigDict(extra="forbid")
+    queries: list[str] = Field(
+        min_length=1,
+        max_length=5,
+        description=(
+            "本轮需要在当前项目招标文件中检索的1至5个互不重复查询。每个query只核对一个"
+            "招标要求，应包含条款主题、适用范围、资格条件、技术指标、商务条件或否决条件。"
+            "不要查询投标方如何响应，不得重复已经确认或没有新召回的招标要求。"
+        ),
+    )
     state: Annotated[dict, InjectedState]
 
 
 class EvidenceReviewToolInput(BaseModel):
+    """主 Agent 委派资料核验时的模型可见输入。"""
+
     model_config = ConfigDict(extra="forbid")
-    rule_id: str
-    verification_request: str
-    evidence_type: EvidenceType
+    rule_id: str = Field(
+        description="需要核验的规则唯一标识，必须来自当前输入规则，例如rule-32。",
+    )
+    verification_request: str = Field(
+        min_length=2,
+        max_length=500,
+        description=(
+            "交给资料子Agent的具体核验要求。使用一句话明确说明核验对象、待确认事实"
+            "和通过标准；一次调用只核验当前rule_id对应的一个明确问题。"
+        ),
+    )
+    evidence_type: EvidenceType = Field(
+        description=(
+            "需要检索的单个投标方资料类别。必须选择当前资料目录中存在且状态为"
+            "classified的类别；只有manual_review资料时不要调用本工具。"
+        ),
+    )
     state: Annotated[dict, InjectedState]
 
 
@@ -85,7 +127,7 @@ async def _search_many(
 class SearchBidResponseTool(BaseTool):
     name: str = "search_bid_response"
     description: str = load_tool_description("search_bid_response")
-    args_schema: ClassVar[type[BaseModel]] = SearchQueriesInput
+    args_schema: ClassVar[type[BaseModel]] = SearchBidResponseInput
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     retrieval_service: RetrievalService
@@ -137,7 +179,7 @@ class SearchBidResponseTool(BaseTool):
 class SearchTenderSourceTool(BaseTool):
     name: str = "search_tender_source"
     description: str = load_tool_description("search_tender_source")
-    args_schema: ClassVar[type[BaseModel]] = SearchQueriesInput
+    args_schema: ClassVar[type[BaseModel]] = SearchTenderSourceInput
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     retrieval_service: RetrievalService

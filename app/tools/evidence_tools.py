@@ -14,9 +14,29 @@ from app.storage.repositories import AuditEventRepository
 
 
 class SearchEvidenceInput(BaseModel):
+    """资料子 Agent 原文检索工具的模型可见输入。"""
+
     model_config = ConfigDict(extra="forbid")
-    queries: list[str] = Field(min_length=1, max_length=5)
-    file_ids: list[str] = Field(default_factory=list, max_length=10)
+    queries: list[str] = Field(
+        min_length=1,
+        max_length=5,
+        description=(
+            "围绕主Agent给出的verification_request，在当前evidence_type资料中执行的"
+            "1至5个互不重复查询。每个query只核验一个具体事实，并优先从资料摘要中提取"
+            "主体名称、证书或合同名称、产品型号、编号、日期、金额及技术参数等高辨识度"
+            "关键词。不要使用“核验是否符合”等宽泛表述；同一事实未召回有效原文后，"
+            "不要仅改写同义词再次检索。"
+        ),
+    )
+    file_ids: list[str] = Field(
+        default_factory=list,
+        max_length=10,
+        description=(
+            "可选的资料文件范围，最多10个。资料摘要已经指向具体文件时，填写任务中提供的"
+            "对应file_id以缩小检索范围；无法确定具体文件时留空，系统将检索当前"
+            "evidence_type下全部可用文件。不得填写或猜测任务未提供的file_id。"
+        ),
+    )
     state: Annotated[dict, InjectedState]
 
 

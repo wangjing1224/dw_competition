@@ -12,21 +12,31 @@ from app.storage.repositories import AuditEventRepository
 from app.tools.bid_tools import (
     EvidenceReviewToolInput,
     SearchBidResponseTool,
-    SearchQueriesInput,
+    SearchBidResponseInput,
+    SearchTenderSourceInput,
 )
 from app.tools.evidence_tools import SearchEvidenceInput
 
 
 def test_search_schema_requires_queries():
-    schema = SearchQueriesInput.model_json_schema()
-    assert "queries" in schema["properties"]
+    bid_schema = SearchBidResponseInput.model_json_schema()
+    tender_schema = SearchTenderSourceInput.model_json_schema()
+    assert "queries" in bid_schema["properties"]
+    assert bid_schema["properties"]["queries"]["description"]
+    assert bid_schema["properties"]["queries"]["maxItems"] == 5
+    assert tender_schema["properties"]["queries"]["description"]
+    assert tender_schema["properties"]["queries"]["maxItems"] == 5
+    assert (
+        bid_schema["properties"]["queries"]["description"]
+        != tender_schema["properties"]["queries"]["description"]
+    )
 
 
 def test_injected_state_is_hidden_from_tool_call_schema():
     schema = SearchBidResponseTool.model_construct().tool_call_schema.model_json_schema()
     assert set(schema["properties"]) == {"queries"}
     # 输入 DTO 中保留状态注入点，但模型实际看到的工具 Schema 不包含它。
-    assert "state" in SearchQueriesInput.model_fields
+    assert "state" in SearchBidResponseInput.model_fields
 
 
 def test_evidence_review_input_is_business_only_except_injected_state():
@@ -36,6 +46,10 @@ def test_evidence_review_input_is_business_only_except_injected_state():
         "evidence_type",
         "state",
     }
+    schema = EvidenceReviewToolInput.model_json_schema()
+    assert schema["properties"]["rule_id"]["description"]
+    assert schema["properties"]["verification_request"]["description"]
+    assert schema["properties"]["evidence_type"]["description"]
 
 
 def test_evidence_search_can_optionally_limit_files():
@@ -44,6 +58,9 @@ def test_evidence_search_can_optionally_limit_files():
         "file_ids",
         "state",
     }
+    schema = SearchEvidenceInput.model_json_schema()
+    assert schema["properties"]["queries"]["description"]
+    assert schema["properties"]["file_ids"]["description"]
 
 
 class NoopEvents(AuditEventRepository):
