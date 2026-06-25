@@ -31,6 +31,7 @@ def build_evidence_graph(
             evidence_agent_node,
             model=model,
             tools=tools,
+            max_steps=max_steps,
             event_repository=events,
         ),
     )

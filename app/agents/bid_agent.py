@@ -56,28 +56,53 @@ def build_bid_agent_messages(state: AuditState) -> list[BaseMessage]:
     ]
 
 
+def build_force_finalize_message(current_step: int, max_steps: int) -> HumanMessage:
+    """最后一轮不再提供工具，只允许基于已有上下文形成完整结果。"""
+
+    return HumanMessage(
+        content=(
+            f"当前是第{current_step}轮，总轮次上限为{max_steps}轮，"
+            "你已经达到当前投标文件的审核循环上限。禁止继续调用任何工具。"
+            "请立即根据投标文件摘要、全部规则、资料目录和此前工具返回的有效信息，"
+            "对每条规则形成最终判断。信息不足的规则使用manual_review，"
+            "并在reason中简洁说明具体缺口。必须完整覆盖全部输入规则，"
+            "只返回符合AgentAuditDecision Schema的JSON。"
+        )
+    )
+
+
 async def bid_agent_node(
     state: AuditState,
     *,
     model: BaseChatModel,
     tools: list[BaseTool],
+    max_steps: int,
     event_repository: AuditEventRepository,
 ) -> dict[str, Any]:
     bid_file = current_file(state)
+    current_step = state["react_step_count"] + 1
+    is_final_step = current_step >= max_steps
     event_repository.append(
         state["task_id"],
         actor="main_agent",
         event_type="agent_turn_started",
         title="主 Agent 审核当前投标文件",
         detail={
-            "step": state["react_step_count"] + 1,
+            "step": current_step,
+            "max_steps": max_steps,
+            "force_finalize": is_final_step,
             "file_id": bid_file.file_id,
             "file_name": bid_file.file_name,
             "rule_count": len(state["rule_set"].rules),
         },
     )
-    response = await model.bind_tools(tools).ainvoke(build_bid_agent_messages(state))
+    messages = build_bid_agent_messages(state)
+    if is_final_step:
+        messages.append(build_force_finalize_message(current_step, max_steps))
+        response = await model.ainvoke(messages)
+    else:
+        response = await model.bind_tools(tools).ainvoke(messages)
     return {
         "messages": [response],
-        "react_step_count": state["react_step_count"] + 1,
+        "react_step_count": current_step,
     }

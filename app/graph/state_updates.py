@@ -9,8 +9,7 @@ from app.graph.audit_state import AuditState, current_file
 from app.graph.routing import can_parse_decision
 from app.llm.structured_output import extract_json_value
 from app.models.findings import Finding
-from app.models.results import AuditResult, FileAuditResult, ProjectMatch
-from app.models.rules import RuleReportItem, present_rule_for_model
+from app.models.results import FileAuditResult, ProjectMatch
 from app.models.tasks import AgentAuditDecision
 from app.storage.repositories import AuditEventRepository
 
@@ -228,25 +227,4 @@ def apply_bid_agent_output_node(
         "react_step_count": 0,
         "length_retry_count": 0,
         "format_retry_count": 0,
-    }
-
-
-def build_audit_result_node(state: AuditState) -> dict[str, AuditResult]:
-    by_file = {item.file.file_id: item for item in state["file_results"]}
-    return {
-        "audit_result": AuditResult(
-            task_id=state["task_id"],
-            project_id=state["project_id"],
-            bidder_id=state["bidder_id"],
-            rules=[
-                RuleReportItem.model_validate(
-                    present_rule_for_model(rule).model_dump(mode="json")
-                )
-                for rule in state["rule_set"].rules
-            ],
-            evidence_classifications=state["evidence_classifications"],
-            file_results=[
-                by_file[file_id] for file_id in state["bid_summaries"].keys()
-            ],
-        )
     }

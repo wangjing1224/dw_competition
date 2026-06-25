@@ -11,10 +11,9 @@ from app.agents.bid_agent import bid_agent_node
 from app.core.config import AppSettings
 from app.graph.audit_state import AuditState, build_initial_audit_state
 from app.graph.evidence_graph import build_evidence_graph
-from app.graph.routing import route_after_state_update, route_bid_agent
+from app.graph.routing import route_bid_agent
 from app.graph.state_updates import (
     apply_bid_agent_output_node,
-    build_audit_result_node,
     prepare_format_retry_node,
     prepare_length_retry_node,
 )
@@ -77,6 +76,7 @@ def build_audit_graph(
             bid_agent_node,
             model=models.bid_chat,
             tools=bid_tools,
+            max_steps=settings.audit.bid_agent_max_steps,
             event_repository=events,
         ),
     )
@@ -87,7 +87,6 @@ def build_audit_graph(
         "apply_output",
         partial(apply_bid_agent_output_node, event_repository=events),
     )
-    graph.add_node("build_result", build_audit_result_node)
     graph.set_entry_point("bid_agent")
     graph.add_conditional_edges(
         "bid_agent",
@@ -104,12 +103,7 @@ def build_audit_graph(
     graph.add_edge("tools", "bid_agent")
     graph.add_edge("retry_length", "bid_agent")
     graph.add_edge("retry_format", "bid_agent")
-    graph.add_conditional_edges(
-        "apply_output",
-        route_after_state_update,
-        {"continue": "bid_agent", "complete": "build_result"},
-    )
-    graph.add_edge("build_result", END)
+    graph.add_edge("apply_output", END)
     return graph.compile(checkpointer=InMemorySaver())
 
 
@@ -123,39 +117,57 @@ class LangGraphAuditExecutor(AuditExecutor):
         self.graph = build_audit_graph(settings, models, event_repository)
 
     async def run(self, context: AuditTaskContext):
-        if not context.bid_files:
-            return AuditResult(
-                task_id=context.task_id,
-                project_id=context.project_id,
-                bidder_id=context.bidder_id,
-                rules=[
-                    RuleReportItem.model_validate(
-                        present_rule_for_model(rule).model_dump(mode="json")
-                    )
-                    for rule in context.rule_set.rules
-                ],
-                evidence_classifications=context.evidence_classifications,
-                file_results=context.routed_file_results,
+        file_results = list(context.routed_file_results)
+        for bid_file in context.bid_files:
+            summary = context.bid_summaries[bid_file.file_id]
+            file_context = context.model_copy(
+                update={
+                    "bid_files": [bid_file],
+                    "bid_summaries": {bid_file.file_id: summary},
+                    "routed_file_results": [],
+                }
             )
-        # 业务 task_id 在清空本地 data 后可能从 audit-1 重新计数。
-        # LangSmith 会按 thread_id 聚合 Turn，因此追加运行级唯一后缀，
-        # 避免本次审核与历史上同名任务被错误归入同一个 Thread。
-        trace_thread_id = f"{context.task_id}-{uuid4().hex[:12]}"
-        final_state = await self.graph.ainvoke(
-            build_initial_audit_state(context),
-            config={
-                "configurable": {"thread_id": trace_thread_id},
-                "run_name": "bid_audit_agent",
-                "tags": ["audit", "bid-agent"],
-                "metadata": {
-                    "task_id": context.task_id,
-                    "trace_thread_id": trace_thread_id,
-                    "project_id": context.project_id,
-                    "bidder_id": context.bidder_id,
+            # 每份 matched 文件拥有独立 State、checkpointer thread 和 LangSmith Trace。
+            # 保持串行执行，避免未经验证的模型服务并发压力。
+            trace_thread_id = (
+                f"{context.task_id}-{bid_file.file_id}-{uuid4().hex[:12]}"
+            )
+            final_state = await self.graph.ainvoke(
+                build_initial_audit_state(file_context),
+                config={
+                    "configurable": {"thread_id": trace_thread_id},
+                    "run_name": "bid_audit_agent",
+                    "tags": ["audit", "bid-agent"],
+                    "metadata": {
+                        "task_id": context.task_id,
+                        "file_id": bid_file.file_id,
+                        "file_name": bid_file.file_name,
+                        "trace_thread_id": trace_thread_id,
+                        "project_id": context.project_id,
+                        "bidder_id": context.bidder_id,
+                    },
                 },
-            },
+            )
+            current_results = final_state.get("file_results") or []
+            if len(current_results) != 1:
+                raise ValueError(
+                    f"主审核图未生成唯一文件结果: {bid_file.file_id}"
+                )
+            file_results.append(current_results[0])
+
+        by_file = {item.file.file_id: item for item in file_results}
+        return AuditResult(
+            task_id=context.task_id,
+            project_id=context.project_id,
+            bidder_id=context.bidder_id,
+            rules=[
+                RuleReportItem.model_validate(
+                    present_rule_for_model(rule).model_dump(mode="json")
+                )
+                for rule in context.rule_set.rules
+            ],
+            evidence_classifications=context.evidence_classifications,
+            file_results=[
+                by_file[file_id] for file_id in context.bid_summaries
+            ],
         )
-        result = final_state.get("audit_result")
-        if result is None:
-            raise ValueError("主审核图没有生成 AuditResult")
-        return result

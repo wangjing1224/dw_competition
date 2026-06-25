@@ -43,27 +43,52 @@ def build_evidence_messages(state: dict[str, Any]) -> list[BaseMessage]:
     ]
 
 
+def build_force_finalize_message(current_step: int, max_steps: int) -> HumanMessage:
+    """子 Agent 最后一轮禁用检索工具并强制形成核验结论。"""
+
+    return HumanMessage(
+        content=(
+            f"当前是第{current_step}轮，总轮次上限为{max_steps}轮，"
+            "你已经达到本次资料核验的循环上限。禁止继续调用任何工具。"
+            "请立即根据核验要求、资料摘要和此前检索返回的原文片段形成最终结论。"
+            "证据不足时使用unverifiable；图片不可读时使用ocr_required。"
+            "只引用实际返回的evidence_chunk_ids，"
+            "只返回符合EvidenceReviewDecision Schema的JSON。"
+        )
+    )
+
+
 async def evidence_agent_node(
     state: dict[str, Any],
     *,
     model: BaseChatModel,
     tools: list[BaseTool],
+    max_steps: int,
     event_repository: AuditEventRepository,
 ) -> dict[str, Any]:
     task = state["review_task"]
+    current_step = state["step_count"] + 1
+    is_final_step = current_step >= max_steps
     event_repository.append(
         state["task_id"],
         actor="evidence_agent",
         event_type="agent_turn_started",
         title="资料核验子 Agent 分析资料",
         detail={
-            "step": state["step_count"] + 1,
+            "step": current_step,
+            "max_steps": max_steps,
+            "force_finalize": is_final_step,
             "rule_id": task.rule_id,
             "evidence_type": str(task.evidence_type),
         },
     )
-    response = await model.bind_tools(tools).ainvoke(build_evidence_messages(state))
-    return {"messages": [response], "step_count": state["step_count"] + 1}
+    messages = build_evidence_messages(state)
+    if is_final_step:
+        messages.append(build_force_finalize_message(current_step, max_steps))
+        response = await model.ainvoke(messages)
+    else:
+        response = await model.bind_tools(tools).ainvoke(messages)
+    return {"messages": [response], "step_count": current_step}
 
 
 def can_parse_review_result(message: BaseMessage) -> bool:
@@ -78,11 +103,13 @@ def can_parse_review_result(message: BaseMessage) -> bool:
 
 def route_evidence_agent(state: dict[str, Any], max_steps: int) -> str:
     last = state["messages"][-1]
-    if isinstance(last, AIMessage) and last.tool_calls:
-        return "limit_reached" if state["step_count"] >= max_steps else "tools"
     if can_parse_review_result(last):
         return "finalize"
-    return "limit_reached" if state["step_count"] >= max_steps else "agent"
+    if state["step_count"] >= max_steps:
+        return "limit_reached"
+    if isinstance(last, AIMessage) and last.tool_calls:
+        return "tools"
+    return "agent"
 
 
 def finalize_evidence_review(

@@ -49,21 +49,15 @@ def _decision_covers_state(state: AuditState, message: object) -> bool:
 
 def route_bid_agent(state: AuditState, max_steps: int) -> str:
     last = state["messages"][-1]
-    if isinstance(last, AIMessage) and last.tool_calls:
-        return "limit_reached" if state["react_step_count"] >= max_steps else "tools"
     if _decision_covers_state(state, last):
         return "apply_output"
+    if state["react_step_count"] >= max_steps:
+        return "limit_reached"
+    if isinstance(last, AIMessage) and last.tool_calls:
+        return "tools"
     retry_used = state["length_retry_count"] or state["format_retry_count"]
     if _finish_reason(last) == "length" and not retry_used:
         return "retry_length"
     if not retry_used:
         return "retry_format"
     return "limit_reached"
-
-
-def route_after_state_update(state: AuditState) -> str:
-    return (
-        "complete"
-        if state["current_bid_index"] >= len(state["bid_files"])
-        else "continue"
-    )
