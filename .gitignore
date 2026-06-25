@@ -22,6 +22,6 @@ models/
 
 .pytest_cache/
 
-# tasks/
+tasks*
 
 data-old*

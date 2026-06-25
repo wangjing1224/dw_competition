@@ -162,5 +162,3 @@ uv run pytest tests/e2e/test_competition_dataset.py -v
 
 运行时文件保存在 `data/`，包括 SQLite、上传文件、解析 JSON、NumPy 索引和
 最终报告。当前 SQLite 仅用于本地比赛演示，不设计长期数据迁移和备份。
-
-开发任务和验收顺序见 [tasks/README.md](tasks/README.md)。

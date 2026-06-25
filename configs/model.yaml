@@ -28,9 +28,9 @@ evidence_classification_model:
 
 # 投标文件详细摘要与项目相关性路由模型：每个投标文件进入索引前调用一次。
 bid_summary_model:
-  # 默认复用主审核模型连接；如需独立部署，直接把下面两个占位符改成新的环境变量。
-  base_url: ${BID_CHAT_MODEL_BASE_URL}
-  api_key: ${BID_CHAT_MODEL_API_KEY}
+  # 独立配置 URL 和 Key，允许与主审核 Agent 分别切换模型服务或账号。
+  base_url: ${BID_SUMMARY_MODEL_BASE_URL}
+  api_key: ${BID_SUMMARY_MODEL_API_KEY}
   model: DeepSeek-V4-Flash
   temperature: 0.1
   timeout_seconds: 120
