@@ -6,7 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from app.agents.bid_agent import bid_agent_node
-from app.agents.evidence_subagent import evidence_agent_node
+from app.agents.evidence_subagent import evidence_agent_node, route_evidence_agent
 from app.graph.audit_state import build_initial_audit_state
 from app.models.documents import BidDocumentSummary, DocumentRef, SourceRef
 from app.models.evidence import EvidenceFileSummary, EvidenceReviewTask
@@ -156,3 +156,32 @@ async def test_evidence_agent_final_step_does_not_bind_tools():
     assert model.bound is False
     assert "第3轮" in model.messages[-1].content
     assert "禁止继续调用任何工具" in model.messages[-1].content
+
+
+def test_evidence_tool_calls_must_be_closed_before_finalize():
+    state = {
+        "messages": [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "name": "search_evidence",
+                        "args": {"checks": []},
+                    }
+                ],
+            )
+        ],
+        "step_count": 3,
+    }
+
+    assert route_evidence_agent(state) == "tools"
+
+
+def test_evidence_invalid_text_finalizes_to_fallback():
+    state = {
+        "messages": [AIMessage(content="不是合法 JSON")],
+        "step_count": 3,
+    }
+
+    assert route_evidence_agent(state) == "finalize"

@@ -47,18 +47,15 @@ def _decision_covers_state(state: AuditState, message: object) -> bool:
     return actual == expected
 
 
-def route_bid_agent(state: AuditState, max_steps: int) -> str:
+def route_bid_agent(state: AuditState) -> str:
     last = state["messages"][-1]
+    if isinstance(last, AIMessage) and last.tool_calls:
+        return "tools"
     if _decision_covers_state(state, last):
         return "apply_output"
     retry_used = state["length_retry_count"] or state["format_retry_count"]
     if _finish_reason(last) == "length" and not retry_used:
         return "retry_length"
-    # 最后一轮已经禁用工具；若只是最终 JSON 格式错误，允许额外进行一次纯格式修复。
-    if state["react_step_count"] >= max_steps:
-        return "retry_format" if not retry_used else "limit_reached"
-    if isinstance(last, AIMessage) and last.tool_calls:
-        return "tools"
     if not retry_used:
         return "retry_format"
     return "limit_reached"

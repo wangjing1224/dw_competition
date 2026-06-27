@@ -4,7 +4,7 @@ rule_extraction_model:
   base_url: ${RULE_EXTRACTION_MODEL_BASE_URL}
   api_key: ${RULE_EXTRACTION_MODEL_API_KEY}
   # 算力网 OpenAI 兼容接口提供的主力 Chat 模型。
-  model: DeepSeek-V4-Flash
+  model: deepseek-v4-flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -18,7 +18,7 @@ rule_extraction_model:
 evidence_classification_model:
   base_url: ${EVIDENCE_CLASSIFICATION_MODEL_BASE_URL}
   api_key: ${EVIDENCE_CLASSIFICATION_MODEL_API_KEY}
-  model: DeepSeek-V4-Flash
+  model: deepseek-v4-flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -31,7 +31,7 @@ bid_summary_model:
   # 独立配置 URL 和 Key，允许与主审核 Agent 分别切换模型服务或账号。
   base_url: ${BID_SUMMARY_MODEL_BASE_URL}
   api_key: ${BID_SUMMARY_MODEL_API_KEY}
-  model: DeepSeek-V4-Flash
+  model: deepseek-v4-flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -43,7 +43,7 @@ bid_summary_model:
 bid_chat_model:
   base_url: ${BID_CHAT_MODEL_BASE_URL}
   api_key: ${BID_CHAT_MODEL_API_KEY}
-  model: DeepSeek-V4-Flash
+  model: deepseek-v4-flash
   temperature: 0.2
   timeout_seconds: 120
   max_retries: 2
@@ -56,7 +56,7 @@ bid_chat_model:
 evidence_chat_model:
   base_url: ${EVIDENCE_CHAT_MODEL_BASE_URL}
   api_key: ${EVIDENCE_CHAT_MODEL_API_KEY}
-  model: DeepSeek-V4-Flash
+  model: deepseek-v4-flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2

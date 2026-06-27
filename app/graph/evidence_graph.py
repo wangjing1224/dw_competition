@@ -43,7 +43,7 @@ def build_evidence_graph(
     graph.set_entry_point("agent")
     graph.add_conditional_edges(
         "agent",
-        partial(route_evidence_agent, max_steps=max_steps),
+        route_evidence_agent,
         {
             "agent": "agent",
             "tools": "tools",

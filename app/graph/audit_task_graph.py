@@ -90,7 +90,7 @@ def build_audit_graph(
     graph.set_entry_point("bid_agent")
     graph.add_conditional_edges(
         "bid_agent",
-        partial(route_bid_agent, max_steps=settings.audit.bid_agent_max_steps),
+        route_bid_agent,
         {
             "bid_agent": "bid_agent",
             "tools": "tools",

@@ -21,7 +21,6 @@ def test_valid_decision_is_applied():
     decision = AgentAuditDecision(summary="完成", categories=[])
     assert route_bid_agent(
         _state(AIMessage(content=decision.model_dump_json())),
-        8,
     ) == "apply_output"
 
 
@@ -30,13 +29,30 @@ def test_length_response_gets_one_compact_retry():
         content='{"summary":"截断"',
         response_metadata={"finish_reason": "length"},
     )
-    assert route_bid_agent(_state(message), 8) == "retry_length"
+    assert route_bid_agent(_state(message)) == "retry_length"
 
 
-def test_invalid_final_json_gets_one_format_only_retry():
+def test_invalid_json_gets_one_format_only_retry():
     current = _state(AIMessage(content='{"summary":"损坏"'))
     current["react_step_count"] = 8
-    assert route_bid_agent(current, 8) == "retry_format"
+    assert route_bid_agent(current) == "retry_format"
 
     current["format_retry_count"] = 1
-    assert route_bid_agent(current, 8) == "limit_reached"
+    assert route_bid_agent(current) == "limit_reached"
+
+
+def test_tool_calls_must_be_closed_before_retry():
+    current = _state(
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "name": "search_bid_response",
+                    "args": {"checks": []},
+                }
+            ],
+        )
+    )
+    current["react_step_count"] = 8
+    assert route_bid_agent(current) == "tools"

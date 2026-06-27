@@ -101,15 +101,13 @@ def can_parse_review_result(message: BaseMessage) -> bool:
         return False
 
 
-def route_evidence_agent(state: dict[str, Any], max_steps: int) -> str:
+def route_evidence_agent(state: dict[str, Any]) -> str:
     last = state["messages"][-1]
-    if can_parse_review_result(last):
-        return "finalize"
-    if state["step_count"] >= max_steps:
-        return "limit_reached"
     if isinstance(last, AIMessage) and last.tool_calls:
         return "tools"
-    return "agent"
+    if can_parse_review_result(last):
+        return "finalize"
+    return "finalize"
 
 
 def finalize_evidence_review(
