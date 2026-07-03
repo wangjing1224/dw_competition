@@ -36,6 +36,12 @@ def build_audit_graph(
     models: ModelRegistry,
     event_repository: AuditEventRepository | None = None,
 ):
+    """构建单个投标文件的主审核图。
+
+    这个图只处理一个 matched 投标文件。批量任务在 LangGraphAuditExecutor.run
+    里按文件串行调用本图，避免不同文件的 message 历史互相污染。
+    """
+
     events = event_repository or AuditEventRepository()
     retrieval = RetrievalService(models.embedding, models.rerank, settings)
     evidence_tools = [
@@ -100,7 +106,12 @@ def build_audit_graph(
             "limit_reached": "apply_output",
         },
     )
+    # ReAct 主循环：
+    # bid_agent 产出 tool_calls -> tools 执行 -> 回到 bid_agent。
+    # 如果 bid_agent 直接产出最终 JSON，route_bid_agent 会转到 apply_output。
     graph.add_edge("tools", "bid_agent")
+    # retry 节点只追加一条修复用 HumanMessage，然后回到 bid_agent。
+    # bid_agent 是否绑定工具仍由节点内部的轮次控制决定。
     graph.add_edge("retry_length", "bid_agent")
     graph.add_edge("retry_format", "bid_agent")
     graph.add_edge("apply_output", END)
@@ -129,6 +140,8 @@ class LangGraphAuditExecutor(AuditExecutor):
             )
             # 每份 matched 文件拥有独立 State、checkpointer thread 和 LangSmith Trace。
             # 保持串行执行，避免未经验证的模型服务并发压力。
+            # 这里不是并发 map，而是显式 for 循环。这样如果某个文件异常，trace、
+            # 日志和中间输出都能直接定位到单个 file_id。
             trace_thread_id = (
                 f"{context.task_id}-{bid_file.file_id}-{uuid4().hex[:12]}"
             )

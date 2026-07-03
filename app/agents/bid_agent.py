@@ -14,6 +14,12 @@ from app.storage.repositories import AuditEventRepository
 
 
 def _group_rules(state: AuditState) -> dict[str, list[dict[str, Any]]]:
+    """把 RuleSet 转成主 Agent 可读的轻量视图，并按规则大类分组。
+
+    注意：这里给模型看的不是完整持久化 RuleItem。来源文件、chunk 映射等溯源
+    信息由代码维护，避免把无助于推理的字段塞进上下文。
+    """
+
     grouped: dict[str, list[dict[str, Any]]] = {}
     for rule in state["rule_set"].rules:
         item = present_rule_for_model(rule).model_dump(mode="json")
@@ -23,6 +29,12 @@ def _group_rules(state: AuditState) -> dict[str, list[dict[str, Any]]]:
 
 
 def _catalog(state: AuditState) -> dict[str, list[dict[str, Any]]]:
+    """资料目录视图。
+
+    主 Agent 只需要知道“有哪些类别的资料、每份资料摘要是什么、是否可自动核验”。
+    真正的资料原文召回交给 request_evidence_review -> 子 Agent -> 检索工具。
+    """
+
     return {
         evidence_type: [item.model_dump(mode="json") for item in items]
         for evidence_type, items in state["evidence_catalog"].items()
@@ -30,6 +42,17 @@ def _catalog(state: AuditState) -> dict[str, list[dict[str, Any]]]:
 
 
 def build_bid_agent_messages(state: AuditState) -> list[BaseMessage]:
+    """构造一次主 Agent 调用的消息。
+
+    消息结构固定为：
+    1. SystemMessage：长期规则、输出 Schema、工具使用边界。
+    2. HumanMessage：当前文件独有输入，包括项目、当前投标文件摘要、规则分组和资料目录。
+    3. state["messages"]：当前文件本轮 ReAct 历史，包含 AIMessage 和 ToolMessage。
+
+    LangGraph 每个 matched 文件单独初始化 State，因此这里的历史只属于当前文件，
+    不会混入其他投标文件的工具结果。
+    """
+
     bid_file = current_file(state)
     profile = state["rule_set"].project_profile
     return [
@@ -79,6 +102,17 @@ async def bid_agent_node(
     max_steps: int,
     event_repository: AuditEventRepository,
 ) -> dict[str, Any]:
+    """主审核图的 Agent 节点。
+
+    最大轮次控制必须发生在调用模型之前，而不是写在 route 里。
+    route 是“上一条 AIMessage 已经产生之后”的行为分发；如果在 route 中拦截
+    最大轮次，可能会跳过尚未闭合的 tool_calls，触发 OpenAI 协议错误。
+
+    因此这里在调用模型前判断是否最后一轮：
+    - 普通轮：bind_tools，允许模型发起检索或资料核验。
+    - 最后一轮：不 bind_tools，并追加强制输出提示，只允许模型给最终 JSON。
+    """
+
     bid_file = current_file(state)
     current_step = state["react_step_count"] + 1
     is_final_step = current_step >= max_steps

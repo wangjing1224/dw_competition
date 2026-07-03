@@ -23,12 +23,24 @@ CONCLUSION_ORDER = {
 
 
 def summarize_conclusion(findings: list[Finding]) -> str:
+    """文件总体结论取最严重的 Finding。
+
+    这里不让模型直接决定 overall_conclusion，避免模型在单条规则已判不合规时，
+    总体结论又写成通过。
+    """
+
     if not findings:
         return "manual_review"
     return min((str(item.result) for item in findings), key=CONCLUSION_ORDER.__getitem__)
 
 
 def _fallback_findings(state: AuditState) -> list[Finding]:
+    """主 Agent 无法给出合法完整结果时的兜底。
+
+    兜底不是审核结论，只是保证报告结构完整：每条规则都有一条 manual_review，
+    后续 Word/JSON 输出不会因为缺规则而崩。
+    """
+
     return [
         Finding(
             rule_id=rule.rule_id,
@@ -43,6 +55,15 @@ def _materialize_findings(
     state: AuditState,
     decision: AgentAuditDecision,
 ) -> tuple[list[Finding], dict[str, str]]:
+    """把主 Agent 的 AgentAuditDecision 落成内部 Finding。
+
+    这里做两类确定性校验：
+    1. 覆盖校验：rule_id 不能缺、不能重复、不能放错分类。
+    2. 来源校验：模型返回的 chunk_id 必须来自当前文件本轮工具真实返回。
+
+    这样最终报告可以保留模型判断，但不会接受模型编造的规则 ID 或来源片段。
+    """
+
     rules = {rule.rule_id: rule for rule in state["rule_set"].rules}
     findings: list[Finding] = []
     category_summaries: dict[str, str] = {}
@@ -144,6 +165,12 @@ def _tool_chunk_ids(state: AuditState) -> dict[str, set[str]]:
 
 
 def prepare_length_retry_node(state: AuditState) -> dict[str, Any]:
+    """处理模型输出被 max_tokens 截断的情况。
+
+    这里删除上一条被截断的 AIMessage，再追加一条压缩重试提示。
+    删除旧消息可以避免模型在下一轮看到半截 JSON 后继续被污染。
+    """
+
     last = state["messages"][-1]
     messages: list[Any] = []
     if getattr(last, "id", None):
@@ -162,6 +189,13 @@ def prepare_length_retry_node(state: AuditState) -> dict[str, Any]:
 
 
 def prepare_format_retry_node(state: AuditState) -> dict[str, Any]:
+    """处理最终 JSON 语法或 Schema 不合法的情况。
+
+    这个节点只允许“修格式”，不允许补新事实或重新调用工具。
+    典型场景是 JSON 字符串里出现未转义英文双引号，或者字段层级不符合
+    AgentAuditDecision。
+    """
+
     last = state["messages"][-1]
     messages: list[Any] = []
     validation_error = "未返回可解析的 AgentAuditDecision JSON"
@@ -191,6 +225,13 @@ def apply_bid_agent_output_node(
     *,
     event_repository: AuditEventRepository | None = None,
 ) -> dict[str, Any]:
+    """主审核图的输出落地节点。
+
+    只有这里会真正把当前文件的结果写入 file_results。无论主 Agent 成功、
+    格式修复失败，还是覆盖校验失败，都要产出一个 FileAuditResult，保证批量任务
+    可以继续处理后续文件。
+    """
+
     last = state["messages"][-1] if state["messages"] else None
     decision = (
         AgentAuditDecision.model_validate(extract_json_value(last.content))
@@ -243,6 +284,8 @@ def apply_bid_agent_output_node(
             },
         )
     return {
+        # 当前文件已经结束，清空 message 历史。下一份投标文件会用新的 State 跑图，
+        # 这里清空是为了防止同一个 State 内后续步骤误读旧工具结果。
         "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)],
         "findings": [*state["findings"], *findings],
         "file_results": [*state["file_results"], file_result],

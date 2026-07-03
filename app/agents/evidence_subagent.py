@@ -19,6 +19,13 @@ from app.storage.repositories import AuditEventRepository
 
 
 def build_evidence_messages(state: dict[str, Any]) -> list[BaseMessage]:
+    """构造资料核验子 Agent 的消息。
+
+    子 Agent 不直接看到完整规则库，也不负责判断投标文件是否合规。
+    主 Agent 通过工具参数传入一个明确的 verification_request 和 evidence_type；
+    子 Agent 只围绕这个资料类别做原文检索和核验结论。
+    """
+
     task = state["review_task"]
     return [
         SystemMessage(
@@ -66,6 +73,12 @@ async def evidence_agent_node(
     max_steps: int,
     event_repository: AuditEventRepository,
 ) -> dict[str, Any]:
+    """资料核验子图的 Agent 节点。
+
+    和主 Agent 一样，最大轮次控制放在节点内部、模型调用之前。
+    最后一轮不绑定检索工具，避免模型在循环上限处继续发 tool_calls。
+    """
+
     task = state["review_task"]
     current_step = state["step_count"] + 1
     is_final_step = current_step >= max_steps
@@ -102,6 +115,16 @@ def can_parse_review_result(message: BaseMessage) -> bool:
 
 
 def route_evidence_agent(state: dict[str, Any]) -> str:
+    """根据子 Agent 已经返回的消息选择下一步。
+
+    这里不判断 max_steps。轮次预算属于“调用前策略”，已经在
+    evidence_agent_node 中处理。
+
+    如果 AIMessage 带 tool_calls，下一步必须先执行 tools，让 LangGraph 生成
+    对应 ToolMessage。否则后续再次调用 OpenAI 兼容接口时，会因为 tool_calls
+    没有闭合而 400。
+    """
+
     last = state["messages"][-1]
     if isinstance(last, AIMessage) and last.tool_calls:
         return "tools"
@@ -115,6 +138,13 @@ def finalize_evidence_review(
     *,
     event_repository: AuditEventRepository,
 ) -> dict[str, Any]:
+    """把子 Agent 的轻量 JSON 转成工具返回结果。
+
+    这里会做一个关键兜底：模型只能引用本次子图工具实际返回过的
+    evidence_chunk_ids。模型凭空编造的 chunk_id 会被过滤掉；如果支持性结论
+    过滤后没有任何真实片段，则降级为 unverifiable。
+    """
+
     last = state["messages"][-1] if state["messages"] else None
     if last is not None and can_parse_review_result(last):
         decision = validate_structured_content(
