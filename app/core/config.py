@@ -12,7 +12,6 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ENV_PATTERN = re.compile(r"^\$\{([A-Z0-9_]+)\}$")
 
@@ -103,6 +102,18 @@ class AuditSettings(ConfigModel):
     rule_limit: int = Field(default=30, gt=0)
 
 
+class ParsingSettings(ConfigModel):
+    """只控制解析资源，不承担 Agent Token 预算。视觉调用须显式启用。"""
+
+    vision_enabled: bool = False
+    max_image_bytes: int = Field(default=20_000_000, gt=0)
+    max_image_pixels: int = Field(default=40_000_000, gt=0)
+    vision_image_max_side: int = Field(default=2048, ge=256, le=8192)
+    pdf_render_dpi: int = Field(default=120, ge=72, le=300)
+    max_pdf_pages: int = Field(default=1000, gt=0)
+    max_sheet_cells: int = Field(default=500_000, gt=0)
+
+
 class AppSettings(ConfigModel):
     """应用启动后使用的完整已解析配置。"""
 
@@ -114,6 +125,8 @@ class AppSettings(ConfigModel):
     bid_summary_model: ChatModelSettings
     bid_chat_model: ChatModelSettings
     evidence_chat_model: ChatModelSettings
+    parser_vision_model: ChatModelSettings | None = None
+    parsing: ParsingSettings = Field(default_factory=ParsingSettings)
     embedding_model: EmbeddingSettings
     rerank_model: RerankSettings
     retrieval: RetrievalSettings
@@ -182,14 +195,10 @@ def get_settings() -> AppSettings:
                 "langsmith_tracing": os.getenv("LANGSMITH_TRACING", "false").lower()
                 == "true",
                 "langsmith_api_key": os.getenv("LANGSMITH_API_KEY") or None,
-                "langsmith_project": os.getenv(
-                    "LANGSMITH_PROJECT", "dw-competition"
-                ),
+                "langsmith_project": os.getenv("LANGSMITH_PROJECT", "dw-competition"),
             },
             "audit": {
-                "bid_agent_max_steps": int(
-                    os.getenv("BID_AGENT_MAX_STEPS", "8")
-                ),
+                "bid_agent_max_steps": int(os.getenv("BID_AGENT_MAX_STEPS", "8")),
                 "evidence_agent_max_steps": int(
                     os.getenv("EVIDENCE_AGENT_MAX_STEPS", "3")
                 ),
@@ -199,11 +208,7 @@ def get_settings() -> AppSettings:
     )
     # 数据路径统一转为绝对路径，后端从任意工作目录启动时行为一致。
     raw["storage"]["data_root"] = _resolve_path(raw["storage"]["data_root"])
-    raw["storage"]["database_path"] = _resolve_path(
-        raw["storage"]["database_path"]
-    )
+    raw["storage"]["database_path"] = _resolve_path(raw["storage"]["database_path"])
     # 模型缓存也固定到项目根目录，避免依赖可能被系统清理的用户缓存目录。
-    raw["rerank_model"]["cache_dir"] = _resolve_path(
-        raw["rerank_model"]["cache_dir"]
-    )
+    raw["rerank_model"]["cache_dir"] = _resolve_path(raw["rerank_model"]["cache_dir"])
     return AppSettings.model_validate(raw)

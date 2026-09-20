@@ -6,12 +6,83 @@ from pathlib import Path
 
 from charset_normalizer import from_bytes
 
-from app.models.documents import DocumentRef, ParsedDocument, ParsedSection
+from app.models.documents import DocumentRef, ParsedBlock, ParsedDocument, ParsedSection
+from app.parsers.common import finish_document
 
 
 def _section_id(file_id: str, index: int, title: str) -> str:
     digest = hashlib.sha1(f"{file_id}:{index}:{title}".encode()).hexdigest()[:20]
     return f"section-{digest}"
+
+
+def text_blocks(body: str, start_index: int) -> list[ParsedBlock]:
+    """识别 Markdown 表格/HTML 表格，按结构分隔而不是按字符截断。"""
+    lines = body.splitlines()
+    blocks, paragraph = [], []
+
+    def flush():
+        if paragraph:
+            blocks.append(
+                ParsedBlock(
+                    kind="text",
+                    content="\n".join(paragraph).strip(),
+                    source_block_index=start_index + len(blocks),
+                )
+            )
+            paragraph.clear()
+
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if re.match(r"\s*(```|~~~)", line):
+            flush()
+            marker = line.strip()[:3]
+            code = [line]
+            index += 1
+            while index < len(lines):
+                code.append(lines[index])
+                index += 1
+                if code[-1].strip().startswith(marker):
+                    break
+            paragraph.extend(code)
+            flush()
+            continue
+        markdown_table = (
+            index + 1 < len(lines)
+            and "|" in line
+            and re.fullmatch(
+                r"\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*", lines[index + 1]
+            )
+        )
+        html_table = line.lstrip().startswith("<table")
+        if markdown_table or html_table:
+            flush()
+            table = [line]
+            index += 1
+            while index < len(lines):
+                if html_table and "</table>" in table[-1]:
+                    break
+                if not html_table and (
+                    not lines[index].strip() or "|" not in lines[index]
+                ):
+                    break
+                table.append(lines[index])
+                index += 1
+            blocks.append(
+                ParsedBlock(
+                    kind="table",
+                    content="\n".join(table),
+                    source_block_index=start_index + len(blocks),
+                )
+            )
+            continue
+        if line.strip():
+            paragraph.append(line)
+        else:
+            flush()
+        index += 1
+    flush()
+    return blocks
 
 
 class TextParser:
@@ -39,18 +110,22 @@ class TextParser:
             if body:
                 sections.append(
                     ParsedSection(
-                        section_id=_section_id(
-                            document.file_id, start_index, title
-                        ),
+                        section_id=_section_id(document.file_id, start_index, title),
                         title=title,
-                        content=body,
+                        blocks=text_blocks(body, start_index),
                         source_block_index=start_index,
                     )
                 )
             content = []
 
+        fence = None
         for index, line in enumerate(text.splitlines()):
-            heading = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", line)
+            marker = re.match(r"^\s*(```|~~~)", line)
+            if marker:
+                fence = None if fence == marker.group(1) else marker.group(1)
+            heading = (
+                re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", line) if not fence else None
+            )
             if heading:
                 flush()
                 title = heading.group(1).strip()
@@ -58,10 +133,9 @@ class TextParser:
             else:
                 content.append(line.rstrip())
         flush()
-        status = "parsed" if sections else "manual_review"
-        return ParsedDocument(
-            document=document.model_copy(update={"parse_status": status}),
-            parse_status=status,
-            sections=sections,
-            warnings=[] if sections else ["文本文件没有可读取内容"],
+        return finish_document(
+            document,
+            stored_path,
+            sections,
+            [] if sections else ["文本文件没有可读取内容"],
         )

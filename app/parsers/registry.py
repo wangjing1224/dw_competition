@@ -3,6 +3,8 @@
 from app.parsers.base import DocumentParser
 from app.parsers.doc_converter import LegacyDocParser
 from app.parsers.docx_parser import DocxParser
+from app.parsers.image_parser import ImageParser
+from app.parsers.pdf_parser import PdfParser
 from app.parsers.text_parser import TextParser
 from app.parsers.xlsx_parser import XlsxParser
 
@@ -14,6 +16,8 @@ class ParserRegistry:
             XlsxParser(),
             TextParser(),
             LegacyDocParser(),
+            PdfParser(),
+            ImageParser(),
         ]
 
     def get(self, suffix: str) -> DocumentParser | None:

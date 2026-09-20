@@ -1,14 +1,5 @@
-"""解析器内部顺序 Block 和表格辅助模型。"""
+"""解析器与持久化共用一种有序块，保留原导入路径。"""
 
-from dataclasses import dataclass
-from typing import Literal
+from app.models.documents import PageSource, ParsedBlock, ParsedImage
 
-
-@dataclass(frozen=True)
-class ParsedBlock:
-    kind: Literal["paragraph", "table"]
-    index: int
-    text: str = ""
-    heading_level: int | None = None
-    table_markdown: str | None = None
-    image_count: int = 0
+__all__ = ["PageSource", "ParsedBlock", "ParsedImage"]

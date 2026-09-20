@@ -64,6 +64,29 @@ evidence_chat_model:
   enable_thinking: false
   structured_output_mode: prompt_only
 
+# 公共解析阶段的视觉辅助；不是 view_image 工具或业务 Agent 的模型配置。
+parser_vision_model:
+  base_url: ${PARSER_VISION_MODEL_BASE_URL}
+  api_key: ${PARSER_VISION_MODEL_API_KEY}
+  # 必须填写实际网关暴露的多模态模型 ID，不猜测服务端名称。
+  model: ${PARSER_VISION_MODEL_NAME}
+  temperature: 0
+  timeout_seconds: 120
+  max_retries: 2
+  max_output_tokens: 16384
+  enable_thinking: false
+  structured_output_mode: prompt_only
+
+parsing:
+  # prepare_document 才会按此开关调用视觉模型；parse_document 永远只做原生解析。
+  vision_enabled: false
+  max_image_bytes: 20000000
+  max_image_pixels: 40000000
+  vision_image_max_side: 2048
+  pdf_render_dpi: 120
+  max_pdf_pages: 1000
+  max_sheet_cells: 500000
+
 # 文本向量模型：为规则来源、投标文件和投标方资料生成 Embedding。
 embedding_model:
   base_url: ${EMBEDDING_BASE_URL}

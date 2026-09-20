@@ -58,6 +58,14 @@ def build_embedding_model(settings: EmbeddingSettings) -> EmbeddingModel:
     )
 
 
+def build_parser_vision_model(settings: AppSettings | None = None) -> ChatOpenAI:
+    """惰性创建，原生解析和旧 Agent 注册表不要求视觉 Key。"""
+    config = (settings or get_settings()).parser_vision_model
+    if config is None or not config.base_url.strip() or not config.model.strip():
+        raise ValueError("未配置 parser_vision_model 的连接地址或模型标识")
+    return build_chat_model(config)
+
+
 @dataclass(frozen=True)
 class ModelRegistry:
     rule_extraction: ChatOpenAI

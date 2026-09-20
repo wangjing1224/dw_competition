@@ -17,7 +17,18 @@ from app.storage.repositories import FileRecord, FileRepository
 from app.storage.ids import next_id
 
 
-ALLOWED_EXTENSIONS = {".doc", ".docx", ".xlsx", ".txt", ".md", ".zip"}
+ALLOWED_EXTENSIONS = {
+    ".doc",
+    ".docx",
+    ".xlsx",
+    ".txt",
+    ".md",
+    ".zip",
+    ".pdf",
+    ".png",
+    ".jpg",
+    ".jpeg",
+}
 
 
 @dataclass(frozen=True)
@@ -162,6 +173,11 @@ class FileStore:
                     continue
 
                 target = safe_join(destination, member.filename)
+                if target.suffix.lower() not in ALLOWED_EXTENSIONS - {".zip"}:
+                    raise BusinessError(
+                        "unsupported_file_extension",
+                        "ZIP 内包含不支持的文件格式或嵌套压缩包",
+                    )
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with zip_file.open(member) as source, target.open("wb") as output:
                     shutil.copyfileobj(source, output)

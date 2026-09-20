@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from app.models.documents import DocumentRef, ParsedDocument
+from app.parsers.common import finish_document
 from app.parsers.docx_parser import DocxParser
 
 
@@ -25,6 +26,7 @@ class LegacyDocParser:
             subprocess.run(
                 [
                     executable,
+                    f"-env:UserInstallation={Path(temporary).as_uri()}/profile",
                     "--headless",
                     "--convert-to",
                     "docx",
@@ -34,6 +36,11 @@ class LegacyDocParser:
                 ],
                 check=True,
                 capture_output=True,
+                timeout=120,
             )
             converted = Path(temporary) / f"{stored_path.stem}.docx"
-            return DocxParser().parse(document, converted)
+            result = DocxParser().parse(document, converted)
+            # 内容来自转换文件，缓存身份仍绑定用户上传的原始 DOC。
+            return finish_document(
+                document, stored_path, result.sections, result.warnings
+            )

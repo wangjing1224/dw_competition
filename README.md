@@ -23,7 +23,7 @@ app/api          HTTP 接口
 app/services     普通业务流程编排
 app/storage      SQLite 元数据和本地文件
 app/models       共享 Pydantic Schema
-app/parsers      DOCX/XLSX/TXT 解析
+app/parsers      DOC/DOCX/XLSX/TXT/Markdown/PDF/图片解析及可选视觉辅助
 app/llm          LangChain 模型适配
 app/retrieval    本地向量和关键词检索
 app/rules        规则抽取、合并和确定性判断
@@ -89,6 +89,57 @@ Rerank 模型固定下载到项目根目录的
 
 Embedding 模型、URL 或维度变化后，停止服务并删除 `data/indexes/` 和
 `data/app.db`，再依次重新调用项目、投标方和审核任务接口。
+
+## Task19：公共解析与视觉辅助
+
+当前先实现解析能力，**尚未改造规则/资料 Agent、检索消费逻辑或输入预算控制器**。
+原有业务调用 `parse_document()`，只做原生解析；新的异步入口
+`prepare_document()` 支持按需视觉辅助，后续任务再接入业务流程。
+
+解析 JSON 增加有序 `sections[].blocks`，保留正文、表格、图片、页面来源和读取限制。
+旧 `content/tables` 字段由新结构派生以兼容现有调用；旧 JSON 可以读取，但无法恢复
+历史丢失的图片和原始交错顺序，需要重新解析。复杂表格使用 HTML 保留行列合并。
+
+产物位于 `data/parsed/{file_id}.json` 和 `data/parsed/{file_id}/`：
+
+- `document.md`：便于浏览的最新 Markdown 副本。
+- `images/`：按内容哈希命名的图片，不在重解析时覆盖旧资产。
+- `versions/`：不可变的 JSON/Markdown 快照；入口 JSON 的 `markdown_path` 指向同版本内容。
+- `checkpoints/`、`vision-cache/`：原生解析及逐项处理检查点、成功视觉结果缓存，不保存 Base64。
+
+视觉辅助独立配置，不使用主 Agent 的 Key。在 `.env` 填写：
+
+```dotenv
+PARSER_VISION_MODEL_BASE_URL=https://your-provider.example/v1
+PARSER_VISION_MODEL_API_KEY=your-key
+PARSER_VISION_MODEL_NAME=实际网关提供的多模态模型ID
+```
+
+`configs/model.yaml` 中的 `parser_vision_model` 控制生成参数，`parsing` 控制图片/PDF
+资源限制；默认关闭自动视觉调用。配置目标为 DS V4.1 Flash，但模型 ID 按实际端点填写，
+不能假设平台使用相同命名。没有视觉配置仍可做原生解析；需要识图的范围会标记未完成，
+不会静默借用其他模型配置。
+
+对已上传文件独立验证（会更新该文件解析产物，不重新生成规则或索引）：
+
+```bash
+uv run python -m app.parsers file-42
+# 显式允许视觉调用，可能产生费用；只对必要图片/续表候选处理。
+uv run python -m app.parsers file-42 --vision
+```
+
+不要在正在审核同一文件时重解析。生成新解析版本后，旧索引不会自动更新。
+本地测试使用合成文件和 Mock 视觉响应，不向外部服务发送真实资料；真实网关的识图效果
+和图片工具消息支持仍需联调。`image_messages.py` 提供安全图片工具消息构造，暂未绑定业务 Agent。
+解析视觉调用默认关闭 LangSmith Trace 采集，避免 Base64 图片和原文被第三方采集。
+
+边界：PDF 的复杂排版与表格恢复不是无损保证；当前自动续表合并保守限制为最多三页，
+不确定/校验失败时保留各页原表和图片。DOCX 浮动对象按 XML 锚点保留并提示阅读顺序限制；
+无法解码的 WMF 等格式明确提示回查，未实现通用 Office 渲染兜底。XLSX 公式保留表达式，
+不把未计算结果假装成有效数值。图片尚未转写、转写成功与业务审核通过是不同状态。
+
+PDF 依赖 PyMuPDF；发布/分发项目前应核对其上游 AGPL/商业许可选项，见
+[PyMuPDF 许可说明](https://pymupdf.readthedocs.io/en/latest/about.html#license-and-copyright)。
 
 ## API
 
