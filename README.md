@@ -98,15 +98,18 @@ Embedding 模型、URL 或维度变化后，停止服务并删除 `data/indexes/
 迁移只改解析入口，文件之间仍按原顺序串行处理。
 
 解析 JSON 增加有序 `sections[].blocks`，保留正文、表格、图片、页面来源和读取限制。
-旧 `content/tables` 字段由新结构派生以兼容现有调用；旧 JSON 可以读取，但无法恢复
+旧 `content/tables` 字段由新结构派生以兼容现有调用；早期无图片引用的旧 JSON 可以读取，但无法恢复
 历史丢失的图片和原始交错顺序，需要重新解析。复杂表格使用 HTML 保留行列合并。
 
 产物位于 `data/parsed/{file_id}.json` 和 `data/parsed/{file_id}/`：
 
-- `document.md`：便于浏览的最新 Markdown 副本。
-- `images/`：文件内递增短名（如 `1.png`）；内部 `assets.json` 按内容哈希去重，旧编号不覆盖，历史哈希路径仍可读。
+- `document.md`：文件内的最新 Markdown 副本；直接预览请打开 `data/parsed/{file_id}.md`，其图片链接可按相对路径正常打开。
+- `images/`：文件内递增短名（如 `1.png`）；内部 `assets.json` 按内容哈希去重，旧编号不覆盖。JSON、Markdown（包括表格 HTML）和页面回查图统一使用 `{file_id}/images/1.png`，以 `data/parsed` 为资源根目录，不随版本目录改写。图片读取仍校验当前文件范围。
 - `versions/`：不可变的 JSON/Markdown 快照；入口 JSON 的 `markdown_path` 指向同版本内容。
 - `checkpoints/`、`vision-cache/`：原生解析及逐项处理检查点、成功视觉结果缓存，不保存 Base64。失败诊断位于 `checkpoints/diagnostics/`，包含页码、阶段和安全错误原因。
+
+仍使用 `images/1.png` 等文件内路径的旧解析 JSON 需要重新解析，读取时会明确提示。
+重新解析会复用已登记的图片（包括历史哈希文件名），生成带文件身份的新路径和快照，不改写旧版本文件。
 
 视觉辅助独立配置，不使用主 Agent 的 Key。在 `.env` 填写：
 

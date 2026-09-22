@@ -18,7 +18,7 @@ def image_block(text, *, status="readable", warning=None):
         source_block_index=0,
         images=[
             ParsedImage(
-                path="images/1.png",
+                path="file-1/images/1.png",
                 mime_type="image/png",
                 width=1,
                 height=1,

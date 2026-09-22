@@ -65,8 +65,10 @@ def test_docx_order_merged_cells_and_cell_images(setup_parser, tmp_path):
     assert blocks[3].content.count("跨行") == 1
     assert len(blocks[3].images) == 1
     assert blocks[3].images[0].path in blocks[3].content
+    assert 'src="file-42/images/1.png"' in blocks[3].content
     assert parsed.parse_status == "partial"
     md = render_document(parsed)
+    assert "![图片](file-42/images/1.png)" in md
     assert (
         md.index("前文")
         < md.index("后文")
@@ -93,6 +95,8 @@ def test_xlsx_images_merge_and_empty_fields(setup_parser, tmp_path):
     assert "[公式，未计算] =1+1" in table.content
     assert 'rowspan="1" colspan="1"></td>' in table.content
     assert "行 4 列 3" in picture.images[0].description
+    assert picture.images[0].path == "file-42/images/1.png"
+    assert "![图片](file-42/images/1.png)" in render_document(result)
     assert result.parse_status == "partial"
 
 
@@ -165,7 +169,7 @@ def test_asset_security_and_tool_payload(setup_parser, tmp_path):
     target = assets.root / "images" / "link.png"
     target.symlink_to(outside)
     with pytest.raises(ValueError):
-        assets.read_image(image.model_copy(update={"path": "images/link.png"}))
+        assets.read_image(image.model_copy(update={"path": "file-42/images/link.png"}))
     with pytest.raises(ValueError):
         build_image_content(parsed, image.path, AssetStore(tmp_path / "file-other"))
 
@@ -216,6 +220,7 @@ def test_pdf_native_table_and_page_locations(setup_parser, tmp_path):
     assert "Row0" in table.content and "10" in table.content
     assert table.page_sources[0].page_number == 1
     assert table.page_sources[0].image_path == table.images[0].path
+    assert table.images[0].path.startswith("file-42/images/")
     assert table.images[0].purpose == "reference"
     assert parsed.parse_status == "parsed"
 
@@ -290,7 +295,7 @@ async def test_vision_failure_keeps_original_and_can_retry(setup_parser, reply):
     image = failed.sections[0].blocks[0].images[0]
     assert image.read_status == "failed" and image.transcription == ""
     assert "图片读取状态：转写处理失败" in render_document(failed)
-    assert (assets.root / image.path).exists()
+    assert assets.resolve_path(image.path).exists()
     retried = await vision.enrich_document(
         failed,
         assets,
@@ -415,7 +420,7 @@ async def test_failed_reading_persists_as_failure_with_image_scope(setup_parser)
     assert "private-source-text" not in json.dumps(data)
     markdown = (settings.storage.data_root / "parsed" / saved.markdown_path).read_text()
     assert "转写处理失败" in markdown and "模型未能读清" not in markdown
-    assert (assets.root / image.path).exists()
+    assert assets.resolve_path(image.path).exists()
 
 
 @pytest.mark.asyncio
@@ -644,7 +649,7 @@ def test_short_assets_reuse_and_concurrent_allocation(setup_parser):
 
     assets, path, _ = setup_parser
     first = assets.save_image(path.read_bytes())
-    assert first.path == "images/1.png"
+    assert first.path == "file-42/images/1.png"
     payloads = []
     for color in ["red", "green", "blue"]:
         buffer = io.BytesIO()
@@ -652,7 +657,11 @@ def test_short_assets_reuse_and_concurrent_allocation(setup_parser):
         payloads.append(buffer.getvalue())
     with ThreadPoolExecutor(max_workers=6) as pool:
         images = list(pool.map(assets.save_image, payloads * 2))
-    assert {i.path for i in images} == {"images/2.png", "images/3.png", "images/4.png"}
+    assert {i.path for i in images} == {
+        "file-42/images/2.png",
+        "file-42/images/3.png",
+        "file-42/images/4.png",
+    }
     assert assets.save_image(path.read_bytes()).path == first.path
     assert assets.read_image(first)
 
@@ -815,7 +824,7 @@ def test_pdf_image_adaptive_resolution_keeps_page_overlay(setup_parser, tmp_path
         if i.purpose == "content"
     )
     assert picture.width >= 1000 and picture.height >= 500
-    with Image.open(assets.root / picture.path) as result:
+    with Image.open(assets.resolve_path(picture.path)) as result:
         assert result.getpixel((50, 50)) == (255, 0, 0)
     assert path.read_bytes() == before
 
@@ -830,8 +839,8 @@ def test_legacy_hash_asset_readable_and_failed_registration_never_overwrites(
     assets, path, _ = setup_parser
     first = assets.save_image(path.read_bytes())
     payload = assets.read_image(first)
-    old_path = f"images/{hashlib.sha256(payload).hexdigest()}.png"
-    (assets.root / old_path).write_bytes(payload)
+    old_path = f"file-42/images/{hashlib.sha256(payload).hexdigest()}.png"
+    assets.resolve_path(old_path).write_bytes(payload)
     assert assets.read_image(first.model_copy(update={"path": old_path})) == payload
     real_write = asset_module.atomic_write
 
@@ -847,7 +856,7 @@ def test_legacy_hash_asset_readable_and_failed_registration_never_overwrites(
         assets.save_image(changed.read_bytes())
     assert assets.read_image(first) == payload
     monkeypatch.setattr(asset_module, "atomic_write", real_write)
-    assert assets.save_image(changed.read_bytes()).path == "images/3.png"
+    assert assets.save_image(changed.read_bytes()).path == "file-42/images/3.png"
 
 
 @pytest.mark.parametrize(

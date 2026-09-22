@@ -22,7 +22,7 @@ def file_asset_root(data_root: Path, file_id: str) -> Path:
         raise ValueError("不安全的 file_id")
     root = (data_root / "parsed").resolve()
     target = (root / file_id).resolve()
-    if not target.is_relative_to(root):
+    if target.parent != root or target.name != file_id:
         raise ValueError("文件资源目录越界")
     return target
 
@@ -96,36 +96,49 @@ class AssetStore:
             )
             relative = state["images"].get(digest)
             if relative:
-                path = self._path(relative)
+                # 只在重新解析并复用旧资产时升级登记路径，不移动图片或改写旧快照。
+                canonical = (
+                    f"{self.root.name}/{relative}"
+                    if relative.startswith("images/")
+                    else relative
+                )
+                path = self.resolve_path(canonical)
                 # 资产缺失或被篡改不能静默复用损坏链接。
                 if path.exists():
                     if path.read_bytes() != payload:
                         raise ValueError("已登记图片内容与哈希不一致")
-                    return relative
+                    if canonical != relative:
+                        state["images"][digest] = canonical
+                        atomic_write(manifest, json.dumps(state, sort_keys=True).encode())
+                    return canonical
             existing = [
                 int(p.stem)
                 for p in (self.root / "images").glob("*.png")
                 if p.stem.isdigit()
             ]
             number = max([state["last_id"], *existing]) + 1
-            relative = f"images/{number}.png"
+            relative = f"{self.root.name}/images/{number}.png"
+            path = self.resolve_path(relative)
             # 先保留序号；崩溃最多跳号，不让旧版本指向新内容。
             state["last_id"] = number
             atomic_write(manifest, json.dumps(state, sort_keys=True).encode())
-            atomic_write(self._path(relative), payload)
+            atomic_write(path, payload)
             state["images"][digest] = relative
             atomic_write(manifest, json.dumps(state, sort_keys=True).encode())
             return relative
 
-    def _path(self, relative: str) -> Path:
+    def resolve_path(self, relative: str) -> Path:
+        """将模型可见的完整资源路径解析到当前文件；禁止跨文件和软链越界。"""
         validate_asset_path(relative)
-        path = (self.root / relative).resolve()
+        if relative.split("/", 1)[0] != self.root.name:
+            raise ValueError("图片路径的 file_id 与当前文件资源目录不一致")
+        path = (self.root.parent / relative).resolve()
         if not path.is_relative_to(self.root):
             raise ValueError("图片路径越过当前文件资源目录")
         return path
 
     def read_image(self, image: ParsedImage) -> bytes:
-        with self._path(image.path).open("rb") as stream:
+        with self.resolve_path(image.path).open("rb") as stream:
             data = stream.read(self.max_bytes + 1)
         if len(data) > self.max_bytes:
             raise ValueError("图片字节数超限")

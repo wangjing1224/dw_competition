@@ -26,16 +26,16 @@ def persist_parse_result(
     result: ParsedDocument,
     repository: FileRepository | None = None,
 ) -> ParsedDocument:
-    path = _parsed_path(result.document.file_id)
-    root = file_asset_root(get_settings().storage.data_root, result.document.file_id)
-    assets = assets_for(result.document)
-    for section in result.sections:
+    payload = result.model_dump(exclude={"markdown_path"})
+    checked = ParsedDocument.model_validate(payload)
+    path = _parsed_path(checked.document.file_id)
+    root = file_asset_root(get_settings().storage.data_root, checked.document.file_id)
+    assets = assets_for(checked.document)
+    for section in checked.sections:
         for block in section.blocks:
             for image in block.images:
                 assets.read_image(image)  # 未登记/损坏图片不能进入已发布产物。
     # 版本目录不可变，JSON 入口最后原子切换。失败不覆盖旧图片/旧版本。
-    payload = result.model_dump(exclude={"markdown_path"})
-    checked = ParsedDocument.model_validate(payload)
     markdown = render_document(checked)
     # 渲染规则变化也要生成新快照，不能用相同解析 JSON 的摘要覆盖旧 Markdown。
     version = hashlib.sha256(
@@ -43,14 +43,14 @@ def persist_parse_result(
     ).hexdigest()
     version_dir = root / "versions" / version
     checked.markdown_path = f"{result.document.file_id}/versions/{version}/document.md"
-    linked_markdown = markdown.replace("](images/", "](../../images/").replace(
-        'src="images/', 'src="../../images/'
-    )
-    atomic_write(version_dir / "document.md", linked_markdown.encode())
+    # 所有产物共用 parsed 根目录相对路径，版本目录不能重写模型可见的图片路径。
+    atomic_write(version_dir / "document.md", markdown.encode())
     content = checked.model_dump_json(indent=2).encode()
     atomic_write(version_dir / "parsed.json", content)
-    # 便于人工浏览的副本；程序按 JSON 的 markdown_path 读取同版本内容。
+    # 保留文件内最新副本；普通 Markdown 预览用根目录副本才能直接解析图片链接。
+    # 程序仍按 JSON 的 markdown_path 读取同版本内容，以 parsed 目录为图片资源根。
     atomic_write(root / "document.md", markdown.encode())
+    atomic_write(root.with_suffix(".md"), markdown.encode())
     atomic_write(path, content)
     (repository or FileRepository()).update_parse_status(
         checked.document.file_id, checked.parse_status

@@ -62,7 +62,16 @@ async def test_upload_native_parse_and_persist_new_formats(environment, extensio
     loaded = load_parsed_document(record.file_id)
     assert loaded.model_dump() == result.model_dump()
     assert store.repository.require(record.file_id).parse_status == result.parse_status
-    assert (environment.storage.data_root / "parsed" / result.markdown_path).is_file()
+    parsed_root = environment.storage.data_root / "parsed"
+    snapshot = parsed_root / result.markdown_path
+    preview = parsed_root / f"{record.file_id}.md"
+    assert snapshot.read_bytes() == preview.read_bytes()
+    for section in loaded.sections:
+        for block in section.blocks:
+            for image in block.images:
+                assert image.path.startswith(f"{record.file_id}/images/")
+                assert (preview.parent / image.path).is_file()
+                assert image.path in snapshot.read_text()
 
 
 def test_zip_accepts_nested_paths_for_new_formats_and_rejects_unsupported(

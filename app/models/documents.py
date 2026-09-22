@@ -1,5 +1,6 @@
 """文件引用、来源引用和统一文档解析结果模型。"""
 
+import re
 from pathlib import PurePosixPath
 from typing import Literal
 
@@ -73,7 +74,7 @@ class RetrievedSource(StrictModel):
 
 
 def validate_asset_path(value: str) -> str:
-    """持久化路径只允许当前文件资源目录内的相对 POSIX 路径。"""
+    """图片统一相对 parsed 根目录寻址：{file_id}/images/{文件名}。"""
     path = PurePosixPath(value)
     if (
         not value
@@ -81,10 +82,17 @@ def validate_asset_path(value: str) -> str:
         or ".." in path.parts
         or "\\" in value
         or ":" in value
+        or path.as_posix() != value
     ):
         raise ValueError("图片路径必须是文件内的安全相对路径")
-    if not value.startswith("images/") or len(path.parts) != 2:
-        raise ValueError("图片必须位于 images/ 目录")
+    if value.startswith("images/"):
+        raise ValueError("旧图片路径缺少 file_id，请重新解析原文件")
+    if (
+        len(path.parts) != 3
+        or not re.fullmatch(r"[A-Za-z0-9_-]+", path.parts[0])
+        or path.parts[1] != "images"
+    ):
+        raise ValueError("图片路径必须为 {file_id}/images/{文件名}")
     return value
 
 
@@ -197,6 +205,11 @@ class ParsedDocument(StrictModel):
 
     @model_validator(mode="after")
     def project_v2_sections(self):
+        for section in self.sections:
+            for block in section.blocks:
+                for image in block.images:
+                    if PurePosixPath(image.path).parts[0] != self.document.file_id:
+                        raise ValueError("图片路径的 file_id 与当前解析文件不一致")
         if self.schema_version == 2:
             for section in self.sections:
                 section.project_blocks()
