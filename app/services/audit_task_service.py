@@ -6,23 +6,26 @@ from typing import BinaryIO, Protocol
 
 from pydantic import Field
 
-from app.core.config import AppSettings
-from app.core.errors import BusinessError
-from app.llm.embedding_model import EmbeddingModel
 from app.audit.bid_summary import (
     load_bid_summary,
     summarize_and_route_bid_document,
     write_bid_summary,
 )
-from app.core.config import ChatModelSettings
-from app.models.common import StrictModel
-from app.models.documents import BidDocumentSummary, DocumentRef, document_ref_from_record
-from app.models.results import AuditResult, FileAuditResult, ProjectMatch
-from app.models.evidence import EvidenceCatalogItem, EvidenceClassificationRecord
+from app.core.config import AppSettings, ChatModelSettings
+from app.core.errors import BusinessError
 from app.evidence.catalog import build_evidence_catalog
 from app.evidence.storage import load_evidence_classification
+from app.llm.embedding_model import EmbeddingModel
+from app.models.common import StrictModel
+from app.models.documents import (
+    BidDocumentSummary,
+    DocumentRef,
+    document_ref_from_record,
+)
+from app.models.evidence import EvidenceCatalogItem, EvidenceClassificationRecord
+from app.models.results import AuditResult, FileAuditResult, ProjectMatch
 from app.models.rules import RuleSet
-from app.parsers.service import parse_document
+from app.parsers.service import prepare_document
 from app.retrieval.index import build_document_index
 from app.retrieval.models import IndexScope
 from app.services.background_runner import BackgroundRunner
@@ -166,7 +169,9 @@ class AuditTaskService:
             )
             records = [self.file_repository.require(file_id) for file_id in file_ids]
             documents = [document_ref_from_record(record) for record in records]
-            parsed_documents = [parse_document(document) for document in documents]
+            parsed_documents = [
+                await prepare_document(document) for document in documents
+            ]
 
             task = self.task_repository.require(task_id)
             project = ProjectRepository().require(task.project_id)

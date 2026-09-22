@@ -7,7 +7,7 @@ from app.core.config import get_settings
 from app.models.documents import DocumentRef, ParsedDocument, ParsedSection
 from app.parsers.assets import AssetStore, file_asset_root
 
-PARSER_VERSION = "task19-v1"
+PARSER_VERSION = "task20-v1"
 
 
 def assets_for(document: DocumentRef) -> AssetStore:
@@ -44,6 +44,9 @@ def refresh_status(result: ParsedDocument) -> ParsedDocument:
     result.sections = [
         ParsedSection.model_validate(s.model_dump()) for s in result.sections
     ]
+    if result.schema_version == 2:
+        for section in result.sections:
+            section.project_blocks()
     blocks = [b for s in result.sections for b in s.blocks]
     images = [i for b in blocks for i in b.images if i.purpose == "content"]
     has_text = any(b.content.strip() for b in blocks) or any(

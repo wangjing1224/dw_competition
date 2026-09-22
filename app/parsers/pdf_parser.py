@@ -1,6 +1,7 @@
 """PDF 原生解析与受控页面/表格截图；此层不调用远程模型。"""
 
 from html import escape
+from math import ceil, sqrt
 from pathlib import Path
 
 import pymupdf
@@ -12,10 +13,23 @@ from app.parsers.common import assets_for, finish_document
 from app.parsers.docx_parser import stable_section_id
 
 
-def render_region(page, bbox, assets, *, purpose="reference"):
-    dpi = get_settings().parsing.pdf_render_dpi
-    rect = pymupdf.Rect(bbox)
-    if rect.width * rect.height * (dpi / 72) ** 2 > assets.max_pixels:
+def render_region(page, bbox, assets, *, purpose="reference", native_size=None):
+    settings = get_settings().parsing
+    dpi = settings.pdf_render_dpi
+    rect = pymupdf.Rect(bbox) & page.rect
+    if rect.is_empty:
+        raise ValueError("截图区域在可见页面之外")
+    if native_size:
+        # 不直接导出可能包含被裁切/遮盖内容的裸资源；按原像素提高合成截图精度。
+        requested = ceil(
+            72 * max(native_size[0] / rect.width, native_size[1] / rect.height)
+        )
+        dpi = max(dpi, min(requested, settings.pdf_render_max_dpi))
+        safe_dpi = int(
+            72 * sqrt(assets.max_pixels / ((rect.width + 1) * (rect.height + 1)))
+        )
+        dpi = min(dpi, safe_dpi)
+    if dpi < 1 or rect.width * rect.height * (dpi / 72) ** 2 > assets.max_pixels:
         raise ValueError("页面渲染超过像素上限")
     data = page.get_pixmap(clip=rect, dpi=dpi, alpha=False).tobytes("png")
     return assets.save_image(
@@ -156,7 +170,13 @@ class PdfParser:
             elif item["type"] == 1:
                 try:
                     # 渲染区域保留旋转、透明蒙版和叠字，不只取压缩资源裸图。
-                    image = render_region(page, bbox, assets, purpose="content")
+                    image = render_region(
+                        page,
+                        bbox,
+                        assets,
+                        purpose="content",
+                        native_size=(item["width"], item["height"]),
+                    )
                     if table_block:
                         table_block.images.append(image)
                     else:

@@ -9,7 +9,7 @@ from app.core.config import AppSettings
 from app.llm.factory import ModelRegistry
 from app.models.documents import document_ref_from_record
 from app.models.rules import RuleExtractionProgress, RuleSet
-from app.parsers.service import parse_document
+from app.parsers.service import prepare_document
 from app.retrieval.index import build_document_index
 from app.retrieval.models import IndexScope
 from app.rules.extractor import extract_rule_set
@@ -51,7 +51,7 @@ class ProjectService:
                 for file_name, relative_path, stream in uploads
             ]
             documents = [document_ref_from_record(record) for record in records]
-            parsed = [parse_document(document) for document in documents]
+            parsed = [await prepare_document(document) for document in documents]
             if not any(item.sections for item in parsed):
                 raise ValueError("招标文件没有可用于规则抽取的文本")
 

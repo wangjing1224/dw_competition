@@ -90,11 +90,12 @@ Rerank 模型固定下载到项目根目录的
 Embedding 模型、URL 或维度变化后，停止服务并删除 `data/indexes/` 和
 `data/app.db`，再依次重新调用项目、投标方和审核任务接口。
 
-## Task19：公共解析与视觉辅助
+## 公共解析与视觉辅助
 
 当前先实现解析能力，**尚未改造规则/资料 Agent、检索消费逻辑或输入预算控制器**。
-原有业务调用 `parse_document()`，只做原生解析；新的异步入口
-`prepare_document()` 支持按需视觉辅助，后续任务再接入业务流程。
+三条业务解析路径统一调用异步 `prepare_document()`：先做原生解析，再按配置进行视觉辅助。
+原同步公开入口 `parse_document()` 已删除；各格式解析器内部的 `.parse()` 仍保留。
+迁移只改解析入口，文件之间仍按原顺序串行处理。
 
 解析 JSON 增加有序 `sections[].blocks`，保留正文、表格、图片、页面来源和读取限制。
 旧 `content/tables` 字段由新结构派生以兼容现有调用；旧 JSON 可以读取，但无法恢复
@@ -103,9 +104,9 @@ Embedding 模型、URL 或维度变化后，停止服务并删除 `data/indexes/
 产物位于 `data/parsed/{file_id}.json` 和 `data/parsed/{file_id}/`：
 
 - `document.md`：便于浏览的最新 Markdown 副本。
-- `images/`：按内容哈希命名的图片，不在重解析时覆盖旧资产。
+- `images/`：文件内递增短名（如 `1.png`）；内部 `assets.json` 按内容哈希去重，旧编号不覆盖，历史哈希路径仍可读。
 - `versions/`：不可变的 JSON/Markdown 快照；入口 JSON 的 `markdown_path` 指向同版本内容。
-- `checkpoints/`、`vision-cache/`：原生解析及逐项处理检查点、成功视觉结果缓存，不保存 Base64。
+- `checkpoints/`、`vision-cache/`：原生解析及逐项处理检查点、成功视觉结果缓存，不保存 Base64。失败诊断位于 `checkpoints/diagnostics/`，包含页码、阶段和安全错误原因。
 
 视觉辅助独立配置，不使用主 Agent 的 Key。在 `.env` 填写：
 
@@ -120,12 +121,19 @@ PARSER_VISION_MODEL_NAME=实际网关提供的多模态模型ID
 不能假设平台使用相同命名。没有视觉配置仍可做原生解析；需要识图的范围会标记未完成，
 不会静默借用其他模型配置。
 
+`parsing.vision_enabled` 是调用许可开关，不是让模型决定是否启动；普通图片逐张串行，
+随图发送已知来源与邻近原文，续表每次比较一个相邻页边界的文字和两张回查图。
+PDF 内容图片按原像素自适应提高区域渲染精度，保留页面遮盖/裁切语义；
+`pdf_render_dpi` 是基础精度，`pdf_render_max_dpi` 是自适应精度上限，仍受像素和发送尺寸限制。
+
 对已上传文件独立验证（会更新该文件解析产物，不重新生成规则或索引）：
 
 ```bash
 uv run python -m app.parsers file-42
 # 显式允许视觉调用，可能产生费用；只对必要图片/续表候选处理。
 uv run python -m app.parsers file-42 --vision
+# 显式关闭视觉；不传任一开关时跟随 YAML 配置。
+uv run python -m app.parsers file-42 --no-vision
 ```
 
 不要在正在审核同一文件时重解析。生成新解析版本后，旧索引不会自动更新。
@@ -133,8 +141,10 @@ uv run python -m app.parsers file-42 --vision
 和图片工具消息支持仍需联调。`image_messages.py` 提供安全图片工具消息构造，暂未绑定业务 Agent。
 解析视觉调用默认关闭 LangSmith Trace 采集，避免 Base64 图片和原文被第三方采集。
 
-边界：PDF 的复杂排版与表格恢复不是无损保证；当前自动续表合并保守限制为最多三页，
-不确定/校验失败时保留各页原表和图片。DOCX 浮动对象按 XML 锚点保留并提示阅读顺序限制；
+边界：PDF 的复杂排版与表格恢复不是无损保证；续表逐相邻页处理，不再限制整表最多三页。
+模型只输出局部边界决定，代码保留原文单元格并拼接；复杂跨行/跨列、关系不确定或校验失败时
+保留各页原表、图片和明确限制。图例配对仍可能出错，不能把视觉读取成功当作事实核实。
+DOCX 浮动对象按 XML 锚点保留并提示阅读顺序限制；
 无法解码的 WMF 等格式明确提示回查，未实现通用 Office 渲染兜底。XLSX 公式保留表达式，
 不把未计算结果假装成有效数值。图片尚未转写、转写成功与业务审核通过是不同状态。
 

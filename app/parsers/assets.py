@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
 import io
+import json
 import os
 import re
 import tempfile
@@ -71,11 +73,7 @@ class AssetStore:
         if len(payload) > self.max_bytes:
             raise ValueError("规范化图片字节数超限")
         digest = hashlib.sha256(payload).hexdigest()
-        relative = f"images/{digest}.png"
-        path = self._path(relative)
-        # 内容寻址，重解析不覆盖旧版本的图片。
-        if not path.exists():
-            atomic_write(path, payload)
+        relative = self._register_image(digest, payload)
         return ParsedImage(
             path=relative,
             mime_type="image/png",
@@ -84,6 +82,40 @@ class AssetStore:
             purpose=purpose,
             description=description,
         )
+
+    def _register_image(self, digest: str, payload: bytes) -> str:
+        """文件内短名。锁覆盖分配与发布，进程中断留下的编号不覆盖、不复用。"""
+        self.root.mkdir(parents=True, exist_ok=True)
+        with (self.root / ".assets.lock").open("a+b") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            manifest = self.root / "assets.json"
+            state = (
+                json.loads(manifest.read_text("utf-8"))
+                if manifest.exists()
+                else {"last_id": 0, "images": {}}
+            )
+            relative = state["images"].get(digest)
+            if relative:
+                path = self._path(relative)
+                # 资产缺失或被篡改不能静默复用损坏链接。
+                if path.exists():
+                    if path.read_bytes() != payload:
+                        raise ValueError("已登记图片内容与哈希不一致")
+                    return relative
+            existing = [
+                int(p.stem)
+                for p in (self.root / "images").glob("*.png")
+                if p.stem.isdigit()
+            ]
+            number = max([state["last_id"], *existing]) + 1
+            relative = f"images/{number}.png"
+            # 先保留序号；崩溃最多跳号，不让旧版本指向新内容。
+            state["last_id"] = number
+            atomic_write(manifest, json.dumps(state, sort_keys=True).encode())
+            atomic_write(self._path(relative), payload)
+            state["images"][digest] = relative
+            atomic_write(manifest, json.dumps(state, sort_keys=True).encode())
+            return relative
 
     def _path(self, relative: str) -> Path:
         validate_asset_path(relative)

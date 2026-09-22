@@ -78,12 +78,14 @@ parser_vision_model:
   structured_output_mode: prompt_only
 
 parsing:
-  # prepare_document 才会按此开关调用视觉模型；parse_document 永远只做原生解析。
+  # 统一 prepare_document 入口；调用方显式参数优先，不传则使用此开关。
   vision_enabled: false
   max_image_bytes: 20000000
   max_image_pixels: 40000000
   vision_image_max_side: 2048
   pdf_render_dpi: 120
+  # 嵌入图片区域按原图像素提高渲染分辨率，仍保留叠字/裁切；上限控制内存。
+  pdf_render_max_dpi: 300
   max_pdf_pages: 1000
   max_sheet_cells: 500000
 

@@ -8,12 +8,15 @@ def render_block(block: ParsedBlock) -> str:
     if block.content_origin == "vision_assisted":
         parts.insert(0, "[视觉辅助恢复，必要时回查原图]")
     for image in block.images:
+        if image.purpose == "reference":
+            parts.append(f"[表格原图：{image.description or '回查区域'}]({image.path})")
+            continue
         if image.path not in block.content:
             parts.append(f"![图片]({image.path})")
         if image.description:
             parts.append(f"图片说明：{image.description}")
         if image.transcription:
-            parts.append(f"[图片转写，非原生文本：{image.path}]\n{image.transcription}")
+            parts.append(f"[图片解读，非原生文本]\n{image.transcription}")
         if image.purpose == "content" and image.read_status != "readable":
             parts.append(f"图片读取状态：{image.read_status}")
         if image.warning:
@@ -29,8 +32,10 @@ def render_document(parsed: ParsedDocument) -> str:
             "[旧解析结果：正文与表格原始交错顺序、图片资产可能缺失，必要时重新解析]"
         )
     for section in parsed.sections:
+        if parsed.schema_version == 2 and not section.blocks:
+            continue
         parts.append(f"## {section.title}")
-        if section.blocks:
+        if parsed.schema_version == 2:
             parts.extend(render_block(block) for block in section.blocks)
         else:
             parts.extend([section.content, *section.tables])

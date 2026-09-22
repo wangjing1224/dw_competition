@@ -110,6 +110,7 @@ class ParsingSettings(ConfigModel):
     max_image_pixels: int = Field(default=40_000_000, gt=0)
     vision_image_max_side: int = Field(default=2048, ge=256, le=8192)
     pdf_render_dpi: int = Field(default=120, ge=72, le=300)
+    pdf_render_max_dpi: int = Field(default=300, ge=72, le=600)
     max_pdf_pages: int = Field(default=1000, gt=0)
     max_sheet_cells: int = Field(default=500_000, gt=0)
 

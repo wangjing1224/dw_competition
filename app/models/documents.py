@@ -165,23 +165,22 @@ class ParsedSection(StrictModel):
     def project_legacy_fields(self):
         # 新块是唯一事实源；旧消费端暂时仍读取 content/tables，不能反向拼块。
         if self.blocks:
-            text = [b.content for b in self.blocks if b.kind == "text" and b.content]
-            text.extend(
-                i.transcription
-                for b in self.blocks
-                for i in b.images
-                if i.transcription
-            )
-            object.__setattr__(self, "content", "\n".join(text))
-            object.__setattr__(
-                self,
-                "tables",
-                [b.content for b in self.blocks if b.kind == "table" and b.content],
-            )
-            object.__setattr__(
-                self, "image_count", sum(len(b.images) for b in self.blocks)
-            )
+            self.project_blocks()
         return self
+
+    def project_blocks(self) -> None:
+        """v2 显式投影，空块也清空旧字段；v1 不应调用此方法。"""
+        text = [b.content for b in self.blocks if b.kind == "text" and b.content]
+        text.extend(
+            i.transcription for b in self.blocks for i in b.images if i.transcription
+        )
+        object.__setattr__(self, "content", "\n".join(text))
+        object.__setattr__(
+            self,
+            "tables",
+            [b.content for b in self.blocks if b.kind == "table" and b.content],
+        )
+        object.__setattr__(self, "image_count", sum(len(b.images) for b in self.blocks))
 
 
 class ParsedDocument(StrictModel):
@@ -194,6 +193,13 @@ class ParsedDocument(StrictModel):
     parse_status: ParseStatus
     sections: list[ParsedSection] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def project_v2_sections(self):
+        if self.schema_version == 2:
+            for section in self.sections:
+                section.project_blocks()
+        return self
 
 
 class BidRouteDecision(StrictModel):

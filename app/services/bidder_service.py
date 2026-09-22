@@ -9,7 +9,7 @@ from app.evidence.classifier import classify_evidence_document
 from app.evidence.storage import write_evidence_classification
 from app.llm.factory import ModelRegistry
 from app.models.documents import document_ref_from_record
-from app.parsers.service import parse_document
+from app.parsers.service import prepare_document
 from app.retrieval.index import build_document_index
 from app.retrieval.models import IndexScope
 from app.storage.file_store import FileOwner, FileStore
@@ -59,7 +59,7 @@ class BidderService:
                     relative_path=relative_path,
                 )
                 document = document_ref_from_record(record)
-                parsed = parse_document(document)
+                parsed = await prepare_document(document)
                 classification = await classify_evidence_document(
                     document,
                     parsed,

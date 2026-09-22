@@ -13,9 +13,17 @@ def main():
         description="重新解析一个已上传文件；不执行规则抽取或审核"
     )
     parser.add_argument("file_id")
-    parser.add_argument(
-        "--vision", action="store_true", help="允许调用独立视觉端点（可能计费）"
+    switches = parser.add_mutually_exclusive_group()
+    switches.add_argument(
+        "--vision",
+        dest="vision",
+        action="store_true",
+        help="允许调用独立视觉端点（可能计费）",
     )
+    switches.add_argument(
+        "--no-vision", dest="vision", action="store_false", help="本次仅原生解析"
+    )
+    parser.set_defaults(vision=None)
     args = parser.parse_args()
     document = document_ref_from_record(FileRepository().require(args.file_id))
     result = asyncio.run(prepare_document(document, vision_enabled=args.vision))

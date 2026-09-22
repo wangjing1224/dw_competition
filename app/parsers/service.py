@@ -11,7 +11,7 @@ from app.models.documents import DocumentRef, ParsedDocument
 from app.parsers.assets import atomic_write, file_asset_root
 from app.parsers.base import RecoverableParseError
 from app.parsers.common import assets_for
-from app.parsers.registry import ParserRegistry, parser_registry
+from app.parsers.registry import parser_registry
 from app.parsers.render import render_document
 from app.storage.file_store import FileStore
 from app.storage.repositories import FileRepository
@@ -61,22 +61,6 @@ def load_parsed_document(file_id: str) -> ParsedDocument:
     )
 
 
-def parse_document(
-    document: DocumentRef,
-    *,
-    file_store: FileStore | None = None,
-    registry: ParserRegistry | None = None,
-    repository: FileRepository | None = None,
-) -> ParsedDocument:
-    """兼容现有同步入口：只做原生解析，不暗中发起付费视觉请求。"""
-    return persist_parse_result(
-        _parse_native(
-            document, file_store=file_store, registry=registry, repository=repository
-        ),
-        repository,
-    )
-
-
 def _parse_native(document, *, file_store=None, registry=None, repository=None):
     store = file_store or FileStore(repository)
     selected_registry = registry or parser_registry
@@ -117,7 +101,7 @@ async def prepare_document(
     vision_enabled: bool | None = None,
     vision_model=None,
 ) -> ParsedDocument:
-    """Task19 公共异步入口；Task21/22 再接入业务循环，不在这里实现 Agent。"""
+    """统一异步解析入口：原生解析在线程中执行，显式参数优先于视觉默认配置。"""
     result = await asyncio.to_thread(
         _parse_native,
         document,

@@ -9,7 +9,7 @@ from PIL import Image
 
 from app.core.errors import BusinessError
 from app.models.documents import document_ref_from_record
-from app.parsers.service import load_parsed_document, parse_document
+from app.parsers.service import load_parsed_document, prepare_document
 from app.storage.database import initialize_database
 from app.storage.file_store import FileOwner, FileStore
 from app.storage.repositories import ProjectRepository
@@ -33,7 +33,8 @@ def environment(monkeypatch, temp_settings):
 
 
 @pytest.mark.parametrize("extension", [".pdf", ".png", ".jpg", ".jpeg"])
-def test_upload_native_parse_and_persist_new_formats(environment, extension):
+@pytest.mark.asyncio
+async def test_upload_native_parse_and_persist_new_formats(environment, extension):
     if extension == ".pdf":
         with pymupdf.open() as pdf:
             pdf.new_page().insert_text((30, 40), "Native PDF")
@@ -53,7 +54,9 @@ def test_upload_native_parse_and_persist_new_formats(environment, extension):
         file_name="材料" + extension,
         relative_path="目录/材料" + extension,
     )
-    result = parse_document(document_ref_from_record(record), file_store=store)
+    result = await prepare_document(
+        document_ref_from_record(record), file_store=store, vision_enabled=False
+    )
     assert result.schema_version == 2
     assert result.parse_status == ("parsed" if extension == ".pdf" else "ocr_required")
     loaded = load_parsed_document(record.file_id)
