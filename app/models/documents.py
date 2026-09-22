@@ -95,9 +95,10 @@ class ParsedImage(StrictModel):
     height: int = Field(gt=0)
     description: str = ""
     transcription: str = ""
-    read_status: Literal["pending", "readable", "partial", "unreadable", "skipped"] = (
-        "pending"
-    )
+    # failed 是程序处理失败；unreadable 是模型返回的读取结论，二者不混用。
+    read_status: Literal[
+        "pending", "readable", "partial", "unreadable", "skipped", "failed"
+    ] = "pending"
     # 回查截图不自动转写，防止把原生表格再入库一遍。
     purpose: Literal["content", "reference"] = "content"
     warning: str | None = None

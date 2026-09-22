@@ -18,7 +18,14 @@ def render_block(block: ParsedBlock) -> str:
         if image.transcription:
             parts.append(f"[图片解读，非原生文本]\n{image.transcription}")
         if image.purpose == "content" and image.read_status != "readable":
-            parts.append(f"图片读取状态：{image.read_status}")
+            status_label = {
+                "pending": "待转写",
+                "partial": "部分可读",
+                "unreadable": "模型未能读清",
+                "skipped": "已跳过",
+                "failed": "转写处理失败",
+            }[image.read_status]
+            parts.append(f"图片读取状态：{status_label}")
         if image.warning:
             parts.append(f"读取限制：{image.warning}")
     parts.extend(f"读取限制：{warning}" for warning in block.warnings)

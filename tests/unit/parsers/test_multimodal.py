@@ -274,6 +274,13 @@ async def test_vision_cached_and_no_base64_persisted(setup_parser):
             response_metadata={"finish_reason": "length"},
         ),
         {"status": "readable", "content": "<script>bad()</script>", "reason": ""},
+        AIMessage(content='{"status":', response_metadata={"finish_reason": "stop"}),
+        {"status": "readable", "content": "缺少约定字段的响应"},
+        {
+            "status": "unreadable",
+            "content": "<script>bad()</script>",
+            "reason": "看不清",
+        },
     ],
 )
 async def test_vision_failure_keeps_original_and_can_retry(setup_parser, reply):
@@ -281,7 +288,8 @@ async def test_vision_failure_keeps_original_and_can_retry(setup_parser, reply):
     native = ImageParser().parse(reference(path), path, assets=assets)
     failed = await vision.enrich_document(native, assets, model=FakeModel([reply]))
     image = failed.sections[0].blocks[0].images[0]
-    assert image.read_status == "unreadable" and image.transcription == ""
+    assert image.read_status == "failed" and image.transcription == ""
+    assert "图片读取状态：转写处理失败" in render_document(failed)
     assert (assets.root / image.path).exists()
     retried = await vision.enrich_document(
         failed,
@@ -289,6 +297,150 @@ async def test_vision_failure_keeps_original_and_can_retry(setup_parser, reply):
         model=FakeModel([{"status": "readable", "content": "成功", "reason": ""}]),
     )
     assert retried.parse_status == "parsed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply,expected_status,expected_label",
+    [
+        (
+            {
+                "status": "unreadable",
+                "content": "能看出是一张统计图，但数值无法辨认",
+                "reason": "图中标注模糊",
+            },
+            "unreadable",
+            "模型未能读清",
+        ),
+        (
+            {
+                "status": "unreadable",
+                "content": "图中文字看不清，无法确认具体数值",
+                "reason": "",
+            },
+            "unreadable",
+            "模型未能读清",
+        ),
+        (
+            {"status": "unreadable", "content": "", "reason": "整张图模糊，无法辨认"},
+            "unreadable",
+            "模型未能读清",
+        ),
+        (
+            {
+                "status": "partial",
+                "content": "",
+                "reason": "只能确认是图表，分类与数值对应不清",
+            },
+            "partial",
+            "部分可读",
+        ),
+        (
+            {
+                "status": "partial",
+                "content": "标题为统计情况，其他文字无法辨认",
+                "reason": "",
+            },
+            "partial",
+            "部分可读",
+        ),
+        (
+            {
+                "status": "readable",
+                "content": "编号：[无法辨认]；可读标题：统计情况",
+                "reason": "",
+            },
+            "partial",
+            "部分可读",
+        ),
+        (
+            {"status": "readable", "content": "", "reason": "图片内容过于模糊"},
+            "partial",
+            "部分可读",
+        ),
+        (
+            {"status": "skipped", "content": "装饰用图形，没有业务文字", "reason": ""},
+            "skipped",
+            "已跳过",
+        ),
+    ],
+)
+async def test_model_reading_limitations_are_preserved_not_errors(
+    setup_parser, reply, expected_status, expected_label
+):
+    assets, path, settings = setup_parser
+    native = ImageParser().parse(reference(path), path, assets=assets)
+    result = await vision.enrich_document(native, assets, model=FakeModel([reply]))
+    saved = service.persist_parse_result(result, FakeRepository())
+    loaded = service.load_parsed_document("file-42")
+    image = loaded.sections[0].blocks[0].images[0]
+    assert image.read_status == expected_status
+    assert image.transcription == reply["content"]
+    if reply["reason"]:
+        assert image.warning == reply["reason"]
+    markdown = (settings.storage.data_root / "parsed" / saved.markdown_path).read_text()
+    assert expected_label in markdown
+    assert reply["content"] in markdown and reply["reason"] in markdown
+    assert not list((assets.root / "checkpoints/diagnostics").glob("*.json"))
+    if expected_status != "skipped":
+        assert loaded.parse_status != "parsed"
+
+
+@pytest.mark.parametrize("status", ["readable", "partial", "unreadable", "skipped"])
+def test_empty_reading_without_any_explanation_still_rejected(status):
+    with pytest.raises(ValueError, match="读取内容或未能读取的说明"):
+        vision.ImageReading.model_validate(
+            {"status": status, "content": " ", "reason": ""}
+        )
+
+
+@pytest.mark.asyncio
+async def test_failed_reading_persists_as_failure_with_image_scope(setup_parser):
+    assets, path, settings = setup_parser
+    native = ImageParser().parse(reference(path), path, assets=assets)
+    result = await vision.enrich_document(
+        native, assets, model=FakeModel([{"content": "private-source-text"}])
+    )
+    saved = service.persist_parse_result(result, FakeRepository())
+    image = service.load_parsed_document("file-42").sections[0].blocks[0].images[0]
+    assert image.read_status == "failed" and image.transcription == ""
+    data = json.loads(
+        next((assets.root / "checkpoints/diagnostics").glob("*.json")).read_text()
+    )
+    assert data["stage"] == "image_request" and data["image_path"] == image.path
+    assert {tuple(error["fields"]) for error in data["validation"]} == {
+        ("status",),
+        ("reason",),
+    }
+    assert "private-source-text" not in json.dumps(data)
+    markdown = (settings.storage.data_root / "parsed" / saved.markdown_path).read_text()
+    assert "转写处理失败" in markdown and "模型未能读清" not in markdown
+    assert (assets.root / image.path).exists()
+
+
+@pytest.mark.asyncio
+async def test_cache_write_failure_does_not_discard_valid_reading(
+    setup_parser, monkeypatch
+):
+    assets, path, _ = setup_parser
+    native = ImageParser().parse(reference(path), path, assets=assets)
+    real_write = vision.atomic_write
+
+    def fail_cache_write(target, content):
+        if target.parent.name == "vision-cache":
+            raise OSError("simulated cache failure")
+        real_write(target, content)
+
+    monkeypatch.setattr(vision, "atomic_write", fail_cache_write)
+    result = await vision.enrich_document(
+        native,
+        assets,
+        model=FakeModel([{"status": "readable", "content": "编号123", "reason": ""}]),
+    )
+    image = result.sections[0].blocks[0].images[0]
+    assert image.transcription == "编号123" and image.read_status == "readable"
+    assert "缓存保存失败" in image.warning
+    assert "编号123" in render_document(result)
 
 
 @pytest.mark.asyncio

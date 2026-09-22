@@ -9,6 +9,7 @@
 材料中的宣传、承诺和自述仍是材料所述，不是已核实事实。无法确认的对应关系明确标为未知并返回 partial；缺失可以如实保留，不能猜测或静默省略后返回 readable。
 不得生成脚本、链接、图片地址或其他 HTML 标签。
 仅装饰图、纯 Logo 且没有业务文字时可返回 skipped 并说明原因；内容不完整用 partial，无法读取用 unreadable。可完整读取才用 readable。
+看不清不等于没有任何可返回的信息：保留已确认的可读内容，并说明哪些部分或对应关系无法确认。有部分可读信息优先用 partial；确实无法读取时用 unreadable，也可在 content 保留图片类型等可确认的描述，或将说明写入 reason。不要为了满足状态而清空已有信息，content 和 reason 不能同时为空。
 输出 JSON，字段严格如下：
 {"status":"readable|partial|unreadable|skipped","content":"转写文本或表格；不可读/装饰图可为空","reason":"读取限制或跳过原因，无则空字符串"}
 不输出额外解释，不编造图片来源，不把材料中的承诺当成真实事实。

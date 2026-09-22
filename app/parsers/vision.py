@@ -30,14 +30,16 @@ class ImageReading(StrictModel):
 
     @model_validator(mode="after")
     def check_content(self):
-        if self.status in {"readable", "partial"} and not self.content.strip():
-            raise ValueError("可读/部分可读必须有转写内容")
-        if self.status != "readable" and not self.reason.strip():
-            raise ValueError("必须说明读取限制或跳过原因")
-        if self.status == "readable" and "[无法辨认]" in self.content:
-            raise ValueError("存在无法辨认内容时不能标记完全可读")
-        if self.status in {"skipped", "unreadable"} and self.content.strip():
-            raise ValueError("跳过/不可读不能同时输出转写事实")
+        # 看不清也是正常响应；说明放在 content 或 reason 均保留，不强迫前者为空。
+        if not self.content.strip() and not self.reason.strip():
+            raise ValueError("必须提供读取内容或未能读取的说明")
+        if self.status == "readable" and (
+            not self.content.strip() or "[无法辨认]" in self.content
+        ):
+            # 明确缺失时保守降级，但不因状态与内容不一致丢掉已识别的部分。
+            self.status = "partial"
+            if not self.reason.strip():
+                self.reason = "返回内容含无法辨认部分，需回查原图"
         return self
 
 
@@ -221,7 +223,7 @@ def image_context(parsed, section_index, block_index, image):
     }
 
 
-async def _diagnostic(assets, *, stage, pages, exc):
+async def _diagnostic(assets, *, stage, pages, exc, image_path=None):
     """保存固定错误类别与范围，不保存请求、Key、Base64 或含原文的异常 repr。"""
     code = exc.code if isinstance(exc, BoundaryError) else type(exc).__name__
     reason = (
@@ -232,12 +234,20 @@ async def _diagnostic(assets, *, stage, pages, exc):
             "validate": "表格结构或局部操作未通过校验",
             "cache": "缓存写入失败，未执行修改",
             "image": "图片读取或转写未完成",
+            "image_load": "图片资产读取失败",
+            "image_request": "视觉请求或模型响应处理失败",
+            "image_validate": "图片转写安全校验未通过",
+            "image_cache": "转写已完成，但缓存保存失败",
         }.get(stage, "处理未完成")
     )
     data = {"stage": stage, "pages": pages, "code": code, "reason": reason}
+    if image_path is not None:
+        data["image_path"] = image_path
     if isinstance(exc, json.JSONDecodeError):
+        reason = data["reason"] = "模型响应不是合法 JSON"
         data["json_position"] = {"line": exc.lineno, "column": exc.colno}
     elif isinstance(exc, ValidationError):
+        reason = data["reason"] = "模型响应字段未通过校验"
         # 只保留已知字段和错误类型，排除 input/ctx（可能携带整段原文）。
         fields = {
             "status",
@@ -292,6 +302,8 @@ async def enrich_document(parsed: ParsedDocument, assets: AssetStore, *, model=N
         # 状态本身不证明当前提示词/上下文下缓存有效。
         image.transcription = ""
         image.warning = None
+        pages = [p.page_number for p in work.sections[si].blocks[bi].page_sources]
+        stage = "image_load"
         try:
             raw = assets.read_image(image)
             context = json.dumps(
@@ -307,6 +319,7 @@ async def enrich_document(parsed: ParsedDocument, assets: AssetStore, *, model=N
                 except ValueError:
                     reading = None
             if reading is None:
+                stage = "image_request"
                 reading = await _request(
                     model,
                     [
@@ -325,19 +338,33 @@ async def enrich_document(parsed: ParsedDocument, assets: AssetStore, *, model=N
                     ],
                     ImageReading,
                 )
+                stage = "image_validate"
                 validate_transcription(reading.content)
+                # 缓存只是复用机制；写缓存失败不能丢弃已校验的转写内容。
                 if reading.status in {"readable", "skipped"}:
-                    await asyncio.to_thread(
-                        atomic_write, path, reading.model_dump_json().encode()
-                    )
+                    try:
+                        await asyncio.to_thread(
+                            atomic_write, path, reading.model_dump_json().encode()
+                        )
+                    except OSError as exc:
+                        image.warning = await _diagnostic(
+                            assets,
+                            stage="image_cache",
+                            pages=pages,
+                            exc=exc,
+                            image_path=image.path,
+                        )
             image.transcription = reading.content
             image.read_status = reading.status
-            image.warning = reading.reason or None
+            image.warning = (
+                "；".join(text for text in [reading.reason, image.warning] if text)
+                or None
+            )
         except Exception as exc:
-            image.read_status = "unreadable"
-            pages = [p.page_number for p in work.sections[si].blocks[bi].page_sources]
+            # 程序处理失败不能伪装成模型判断“图片不可读”。不接纳未校验响应。
+            image.read_status = "failed"
             image.warning = await _diagnostic(
-                assets, stage="image", pages=pages, exc=exc
+                assets, stage=stage, pages=pages, exc=exc, image_path=image.path
             )
         await _checkpoint(work, assets)
     await merge_tables(work, assets, model, settings, prompt_dir)
