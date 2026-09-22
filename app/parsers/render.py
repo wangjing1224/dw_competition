@@ -1,6 +1,45 @@
 """同一份有序结构派生 Markdown，旧 JSON 不伪造阅读顺序。"""
 
+import re
+
 from app.models.documents import ParsedBlock, ParsedDocument
+
+
+def _render_transcription(text: str) -> str:
+    """图片内的 # 标题放在章节（二级）之下；只调整显示，不改原始转写。"""
+    lines = text.splitlines(keepends=True)
+    headings = []
+    fence = None
+    in_table = False
+    for index, line in enumerate(lines):
+        # 代码和 HTML 表格中的 # 是内容，不能当作文档标题改写。
+        if fence:
+            if re.fullmatch(
+                r" {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*",
+                line.rstrip("\r\n"),
+            ):
+                fence = None
+            continue
+        marker = re.match(r" {0,3}(`{3,}|~{3,})", line)
+        if marker:
+            fence = marker.group(1)
+            continue
+        if in_table or re.search(r"<table\b", line, re.I):
+            in_table = not bool(re.search(r"</table\s*>", line, re.I))
+            continue
+        heading = re.match(r" {0,3}(#{1,6})(?=[ \t\r\n]|$)", line)
+        if heading:
+            headings.append((index, heading))
+    if not headings:
+        return text
+    # 同一张图整体平移层级，保留父子关系；已有三级及以下标题不再加深。
+    offset = max(0, 3 - min(len(match.group(1)) for _, match in headings))
+    for index, match in headings:
+        level = min(6, len(match.group(1)) + offset)
+        lines[index] = (
+            lines[index][: match.start(1)] + "#" * level + lines[index][match.end(1) :]
+        )
+    return "".join(lines)
 
 
 def render_block(block: ParsedBlock) -> str:
@@ -16,7 +55,9 @@ def render_block(block: ParsedBlock) -> str:
         if image.description:
             parts.append(f"图片说明：{image.description}")
         if image.transcription:
-            parts.append(f"[图片解读，非原生文本]\n{image.transcription}")
+            parts.append(
+                f"[图片解读，非原生文本]\n\n{_render_transcription(image.transcription)}"
+            )
         if image.purpose == "content" and image.read_status != "readable":
             status_label = {
                 "pending": "待转写",
@@ -27,7 +68,13 @@ def render_block(block: ParsedBlock) -> str:
             }[image.read_status]
             parts.append(f"图片读取状态：{status_label}")
         if image.warning:
-            parts.append(f"读取限制：{image.warning}")
+            # reason 也可能是一般识别说明；不把正常读取依据统一标为限制。
+            label = {
+                "readable": "读取说明",
+                "skipped": "跳过原因",
+                "failed": "处理失败原因",
+            }.get(image.read_status, "读取限制")
+            parts.append(f"{label}：{image.warning}")
     parts.extend(f"读取限制：{warning}" for warning in block.warnings)
     return "\n\n".join(parts)
 

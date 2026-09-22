@@ -36,8 +36,11 @@ def persist_parse_result(
     # 版本目录不可变，JSON 入口最后原子切换。失败不覆盖旧图片/旧版本。
     payload = result.model_dump(exclude={"markdown_path"})
     checked = ParsedDocument.model_validate(payload)
-    version = hashlib.sha256(checked.model_dump_json().encode()).hexdigest()
     markdown = render_document(checked)
+    # 渲染规则变化也要生成新快照，不能用相同解析 JSON 的摘要覆盖旧 Markdown。
+    version = hashlib.sha256(
+        checked.model_dump_json().encode() + b"\0" + markdown.encode()
+    ).hexdigest()
     version_dir = root / "versions" / version
     checked.markdown_path = f"{result.document.file_id}/versions/{version}/document.md"
     linked_markdown = markdown.replace("](images/", "](../../images/").replace(
