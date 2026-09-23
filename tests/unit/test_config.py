@@ -1,7 +1,10 @@
 """配置加载测试。"""
 
+import pytest
 import yaml
+from pydantic import ValidationError
 
+from app.core import config
 from app.core.config import get_settings
 
 
@@ -20,6 +23,30 @@ def test_settings_load_yaml_and_environment(monkeypatch):
     assert "test-secret" not in repr(settings.bid_chat_model)
     assert settings.storage.database_path.is_absolute()
     assert settings.rerank_model.cache_dir == settings.project_root / "models"
+    assert settings.rule_limit == raw["rule_limit"]
+    assert config.AppSettings.model_fields["rule_limit"].default == 10_000
+
+
+@pytest.mark.parametrize("limit", [30, 10_000, 100_000])
+def test_rule_limit_reads_yaml(monkeypatch, limit):
+    original_load = config._load_yaml
+
+    def load_yaml(path):
+        value = original_load(path)
+        if path.name == "model.yaml":
+            value["rule_limit"] = limit
+        return value
+
+    monkeypatch.setattr(config, "_load_yaml", load_yaml)
+    assert get_settings().rule_limit == limit
+
+
+@pytest.mark.parametrize("limit", [0, -1, 1.5, True])
+def test_rule_limit_requires_positive_integer(limit):
+    values = get_settings().model_dump()
+    values["rule_limit"] = limit
+    with pytest.raises(ValidationError, match="rule_limit"):
+        config.AppSettings.model_validate(values)
 
 
 def test_parser_vision_has_independent_environment(monkeypatch):

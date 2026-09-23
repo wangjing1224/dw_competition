@@ -177,6 +177,7 @@ async def extract_rule_set(
             history=dict(history),
             persist=persist,
             retrieval=retrieval_service,
+            rule_limit=resolved.rule_limit,
             commits=list(commits),
         )
         try:

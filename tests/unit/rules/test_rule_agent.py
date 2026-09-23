@@ -133,6 +133,98 @@ async def extract(env, model, files, callback=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("limit, warned", [(1, True), (2, False), (10_000, False)])
+async def test_rule_limit_hook_warns_but_does_not_change_rules(
+    env, caplog, limit, warned
+):
+    settings = env.model_copy(update={"rule_limit": limit})
+    model = ScriptModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    tool_call(
+                        "submit_rule_delta",
+                        "write",
+                        submit_args(
+                            [
+                                add_operation(),
+                                {
+                                    **add_operation(),
+                                    "requirement": "报价不得超过最高限价。",
+                                },
+                            ],
+                            view="all",
+                        ),
+                    )
+                ],
+            ),
+            AIMessage(content="处理完毕"),
+        ]
+    )
+    result = await extract(settings, model, [parsed_file(1)])
+    assert len(result.rules) == 2
+    path = settings.storage.data_root / "parsed/rules/project-1.progress.json"
+    progress = RuleExtractionProgress.model_validate_json(path.read_text())
+    assert len(progress.rule_set.rules) == 2 and progress.error is None
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "app.rules.policies"
+    ]
+    assert len(warnings) == int(warned)
+    if warned:
+        assert "project=project-1 count=2 limit=1" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_rule_limit_hook_skips_read_replay_and_invalid_batch(env, caplog):
+    parsed = parsed_file(1)
+    writer = AsyncMock()
+    session = RuleSession(
+        RuleSet(
+            project_id="project-1",
+            source_files=[RuleSourceFile.from_document(parsed.document)],
+        ),
+        parsed,
+        {},
+        writer,
+        SimpleNamespace(settings=env),
+        rule_limit=1,
+    )
+    request = SubmitRuleDeltaInput(
+        **submit_args(
+            [
+                add_operation(),
+                {**add_operation(), "requirement": "报价不得超过最高限价。"},
+            ],
+            view="all",
+        )
+    )
+    await session.submit(request, "write")
+    assert "count=2 limit=1" in caplog.text
+    caplog.clear()
+
+    await session.submit(SubmitRuleDeltaInput(**submit_args()), "read")
+    await session.submit(request, "write")
+    invalid = SubmitRuleDeltaInput(
+        **submit_args(
+            [
+                add_operation(),
+                {"action": "merge", "rule_id": "missing", "reason": ""},
+            ],
+            view="all",
+        )
+    )
+    with pytest.raises(ValueError, match="不存在"):
+        await session.submit(invalid, "invalid")
+    assert not [
+        record for record in caplog.records if record.name == "app.rules.policies"
+    ]
+    assert len(session.rule_set.rules) == 2 and writer.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_serial_files_have_fresh_messages_and_latest_rules(env):
     first = tool_call(
         "submit_rule_delta",
@@ -275,7 +367,14 @@ async def test_write_failure_does_not_publish_and_call_id_replay_is_idempotent(e
         source_files=[RuleSourceFile.from_document(parsed.document)],
     )
     writer = AsyncMock(side_effect=OSError("磁盘故障"))
-    session = RuleSession(rules, parsed, {}, writer, SimpleNamespace(settings=env))
+    session = RuleSession(
+        rules,
+        parsed,
+        {},
+        writer,
+        SimpleNamespace(settings=env),
+        rule_limit=env.rule_limit,
+    )
     request = SubmitRuleDeltaInput(**submit_args([add_operation()], "简介", "changed"))
     with pytest.raises(OSError):
         await session.submit(request, "write")
@@ -346,6 +445,7 @@ async def test_group_search_enforces_history_scope_and_version(env):
         {"file-1": old},
         AsyncMock(),
         retrieval,
+        rule_limit=env.rule_limit,
     )
     search, submit = build_rule_tools(session)
     assert set(search.tool_call_schema.model_json_schema()["properties"]) == {
@@ -412,7 +512,14 @@ async def test_read_only_and_profile_only_do_not_rewrite_provenance(env):
         project_id="project-1",
         source_files=[RuleSourceFile.from_document(parsed.document)],
     )
-    session = RuleSession(rules, parsed, {}, writer, SimpleNamespace(settings=env))
+    session = RuleSession(
+        rules,
+        parsed,
+        {},
+        writer,
+        SimpleNamespace(settings=env),
+        rule_limit=env.rule_limit,
+    )
     await session.submit(
         SubmitRuleDeltaInput(**submit_args([add_operation()], view="all")), "add"
     )
@@ -434,7 +541,12 @@ async def test_replace_requires_read_access_to_new_historical_source(env):
         source_files=[RuleSourceFile.from_document(p.document) for p in [old, current]],
     )
     session = RuleSession(
-        rules, current, {"file-1": old}, AsyncMock(), SimpleNamespace(settings=env)
+        rules,
+        current,
+        {"file-1": old},
+        AsyncMock(),
+        SimpleNamespace(settings=env),
+        rule_limit=env.rule_limit,
     )
     await session.submit(
         SubmitRuleDeltaInput(**submit_args([add_operation()], view="changed")), "add"

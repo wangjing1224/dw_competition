@@ -15,6 +15,7 @@ from app.retrieval.models import IndexFilter
 from app.retrieval.service import RetrievalService
 from app.rules.context import build_rule_view
 from app.rules.merger import apply_rule_delta_operations
+from app.rules.policies import handle_rule_limit_exceeded
 
 
 class RuleSearchGroup(StrictModel):
@@ -48,6 +49,7 @@ class RuleSession:
     history: dict[str, ParsedDocument]
     persist: Callable[[RuleSet, list[RuleCommitRecord]], Awaitable[None]]
     retrieval: RetrievalService
+    rule_limit: int
     commits: list[RuleCommitRecord] = field(default_factory=list)
     model_calls: int = 0
     unresolved_write_error: str | None = None
@@ -85,6 +87,9 @@ class RuleSession:
             allowed_file_ids={current_id, *self.history},
             project_profile=request.project_profile,
         )
+        # 检查整批执行后的数量，不在中间 add 时提前触发；后续 merge 可能减少条数。
+        if len(applied.rule_set.rules) > self.rule_limit:
+            handle_rule_limit_exceeded(applied.rule_set, limit=self.rule_limit)
         record = RuleCommitRecord(
             tool_call_id=call_id,
             before=[

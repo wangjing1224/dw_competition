@@ -122,6 +122,12 @@ class AppSettings(ConfigModel):
     project_root: Path = PROJECT_ROOT
     rule_extraction_model: ChatModelSettings
     rule_agent_max_steps: int = Field(default=8, ge=2)
+    rule_limit: int = Field(
+        default=10_000,
+        gt=0,
+        strict=True,
+        description="规则库总条数上限；超过时调用预留处理函数，当前只警告并继续保存。",
+    )
     evidence_classification_model: ChatModelSettings
     bid_summary_model: ChatModelSettings
     bid_chat_model: ChatModelSettings

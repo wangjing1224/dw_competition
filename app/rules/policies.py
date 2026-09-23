@@ -1,9 +1,12 @@
 """确定性等级组合与稳定排序；语义准入交给规则 Agent，不按关键词静默丢弃。"""
 
+import logging
 import re
 
 from app.models.common import RuleCategory, RulePriority, VerificationLevel
 from app.models.rules import RuleItem, RuleSet
+
+logger = logging.getLogger(__name__)
 
 CATEGORY_ORDER = {category: index for index, category in enumerate(RuleCategory)}
 PRIORITY_ORDER = {
@@ -11,6 +14,20 @@ PRIORITY_ORDER = {
     RulePriority.IMPORTANT: 1,
     RulePriority.NORMAL: 2,
 }
+
+
+def handle_rule_limit_exceeded(rule_set: RuleSet, *, limit: int) -> None:
+    """超限策略预留入口：整批增量校验后、保存前调用，目前只打印警告。
+
+    后续超限处理从这里接入；当前不修改候选规则、不拒绝提交，仍保存全部内容。
+    """
+    logger.warning(
+        "规则数量超过配置上限：project=%s count=%d limit=%d；"
+        "超限处理暂未实现，继续保存全部规则。",
+        rule_set.project_id,
+        len(rule_set.rules),
+        limit,
+    )
 
 
 def max_priority(current, incoming):
