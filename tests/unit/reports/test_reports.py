@@ -90,6 +90,8 @@ def test_word_renders_markdown_and_enums_as_chinese(monkeypatch, temp_settings):
                 requirement="投标函应填写明确报价",
                 priority="critical",
                 verification="bid_only",
+                reason="报价要求",
+                source_file_ids=["rule-file"],
             )
         ],
         file_results=[file_result],

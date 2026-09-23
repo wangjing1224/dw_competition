@@ -21,9 +21,7 @@ class StrictModel(BaseModel):
             if not field_name.endswith("_id"):
                 continue
             value = getattr(self, field_name)
-            if value is not None and (
-                not isinstance(value, str) or not value.strip()
-            ):
+            if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise ValueError(f"{field_name} 不能为空")
         return self
 
@@ -67,10 +65,10 @@ class ClassificationStatus(StrEnum):
     MANUAL_REVIEW = "manual_review"
 
 
-class RuleStatus(StrEnum):
-    ACTIVE = "active"
-    RULE_CONFLICT = "rule_conflict"
-    MANUAL_REVIEW = "manual_review"
+class RuleProvenance(StrEnum):
+    AI_GENERATED = "ai_generated"
+    HUMAN_ADDED = "human_added"
+    HUMAN_MODIFIED = "human_modified"
 
 
 class RuleCategory(StrEnum):
@@ -90,9 +88,7 @@ class RulePriority(StrEnum):
 
 class VerificationLevel(StrEnum):
     BID_ONLY = "bid_only"
-    SOURCE_CHECK = "source_check"
     EVIDENCE_CHECK = "evidence_check"
-    CROSS_CHECK = "cross_check"
 
 
 class Severity(StrEnum):

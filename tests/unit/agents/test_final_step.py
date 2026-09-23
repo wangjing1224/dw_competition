@@ -8,9 +8,9 @@ from langchain_core.messages import AIMessage
 from app.agents.bid_agent import bid_agent_node
 from app.agents.evidence_subagent import evidence_agent_node, route_evidence_agent
 from app.graph.audit_state import build_initial_audit_state
-from app.models.documents import BidDocumentSummary, DocumentRef, SourceRef
+from app.models.documents import BidDocumentSummary, DocumentRef
 from app.models.evidence import EvidenceFileSummary, EvidenceReviewTask
-from app.models.rules import RuleItem, RuleSet
+from app.models.rules import RuleItem, RuleSet, RuleSourceFile
 from app.models.tasks import AgentAuditDecision
 from app.services.audit_task_service import AuditTaskContext
 from app.storage.repositories import AuditEventRepository
@@ -53,18 +53,24 @@ def _bid_state():
         requirement="探测器分辨率不低于640x480",
         priority="critical",
         verification="bid_only",
-        source=SourceRef(
-            file_id="rule-file",
-            file_name="规则.docx",
-            source_path="规则.docx",
-        ),
+        provenance="ai_generated",
+        reason="技术规范明确要求",
+        sources=[
+            RuleSourceFile(
+                file_id="rule-file",
+                file_name="规则.docx",
+                source_path="规则.docx",
+            )
+        ],
     )
     state = build_initial_audit_state(
         AuditTaskContext(
             task_id="audit-1",
             project_id="project-1",
             bidder_id="bidder-1",
-            rule_set=RuleSet(project_id="project-1", rules=[rule]),
+            rule_set=RuleSet(
+                project_id="project-1", rules=[rule], source_files=rule.sources
+            ),
             bid_files=[bid_file],
             bid_summaries={
                 "bid-file": BidDocumentSummary(
@@ -117,8 +123,7 @@ async def test_bid_agent_final_step_does_not_bind_tools():
 @pytest.mark.asyncio
 async def test_evidence_agent_final_step_does_not_bind_tools():
     model = FinalOnlyModel(
-        '{"status":"unverifiable","summary":"现有资料不足",'
-        '"evidence_chunk_ids":[]}'
+        '{"status":"unverifiable","summary":"现有资料不足","evidence_chunk_ids":[]}'
     )
     state = {
         "messages": [],

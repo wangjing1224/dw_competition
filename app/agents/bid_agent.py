@@ -16,8 +16,7 @@ from app.storage.repositories import AuditEventRepository
 def _group_rules(state: AuditState) -> dict[str, list[dict[str, Any]]]:
     """把 RuleSet 转成主 Agent 可读的轻量视图，并按规则大类分组。
 
-    注意：这里给模型看的不是完整持久化 RuleItem。来源文件、chunk 映射等溯源
-    信息由代码维护，避免把无助于推理的字段塞进上下文。
+    只保留判断所需字段和来源文件 ID；完整文件快照与 provenance 留在代码侧。
     """
 
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -59,15 +58,14 @@ def build_bid_agent_messages(state: AuditState) -> list[BaseMessage]:
         SystemMessage(
             content=render_prompt(
                 "bid_agent",
-                agent_audit_decision_schema=(
-                    AgentAuditDecision.model_json_schema()
-                ),
+                agent_audit_decision_schema=(AgentAuditDecision.model_json_schema()),
             )
         ),
         HumanMessage(
             content=render_prompt(
                 "bid_agent_input",
-                project_name=profile.project_name or state["project_id"],
+                project_name=state["project_id"],
+                project_profile=profile,
                 bid_file=bid_file.file_name,
                 bidder=state["bidder_id"],
                 bid_summary=state["bid_summaries"][bid_file.file_id].summary,

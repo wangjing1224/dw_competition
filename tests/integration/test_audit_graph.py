@@ -6,8 +6,8 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from app.graph.audit_task_graph import LangGraphAuditExecutor
-from app.models.documents import BidDocumentSummary, DocumentRef, SourceRef
-from app.models.rules import RuleItem, RuleSet
+from app.models.documents import BidDocumentSummary, DocumentRef
+from app.models.rules import RuleItem, RuleSet, RuleSourceFile
 from app.models.tasks import AgentAuditDecision
 from app.services.audit_task_service import AuditTaskContext
 from app.storage.repositories import AuditEventRepository
@@ -65,7 +65,7 @@ async def test_main_graph_builds_audit_result(temp_settings):
         bidder_id="bidder-1",
         task_id="audit-1",
     )
-    source = SourceRef(
+    source = RuleSourceFile(
         file_id="rule-file",
         file_name="规则.docx",
         source_path="规则.docx",
@@ -76,6 +76,7 @@ async def test_main_graph_builds_audit_result(temp_settings):
         bidder_id="bidder-1",
         rule_set=RuleSet(
             project_id="project-1",
+            source_files=[source],
             rules=[
                 RuleItem(
                     rule_id="rule-1",
@@ -83,7 +84,9 @@ async def test_main_graph_builds_audit_result(temp_settings):
                     priority="critical",
                     verification="bid_only",
                     requirement="探测器分辨率不低于640x480",
-                    source=source,
+                    sources=[source],
+                    provenance="ai_generated",
+                    reason="技术规范明确要求",
                 )
             ],
         ),
@@ -135,7 +138,7 @@ async def test_each_bid_file_runs_in_an_independent_graph(temp_settings):
         embedding=object(),
         rerank=object(),
     )
-    source = SourceRef(
+    source = RuleSourceFile(
         file_id="rule-file",
         file_name="规则.docx",
         source_path="规则.docx",
@@ -159,6 +162,7 @@ async def test_each_bid_file_runs_in_an_independent_graph(temp_settings):
         bidder_id="bidder-1",
         rule_set=RuleSet(
             project_id="project-1",
+            source_files=[source],
             rules=[
                 RuleItem(
                     rule_id="rule-1",
@@ -166,7 +170,9 @@ async def test_each_bid_file_runs_in_an_independent_graph(temp_settings):
                     priority="critical",
                     verification="bid_only",
                     requirement="探测器分辨率不低于640x480",
-                    source=source,
+                    sources=[source],
+                    provenance="ai_generated",
+                    reason="技术规范明确要求",
                 )
             ],
         ),

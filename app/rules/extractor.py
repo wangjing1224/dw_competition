@@ -1,235 +1,207 @@
-"""从招标文件串行抽取规则增量，并维护单一完整 RuleSet。"""
+"""逐文件启动规则 Agent；每次提交原子落盘，后续文件只共享规则库。"""
 
 import inspect
+import logging
 from collections.abc import Awaitable, Callable
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langsmith import traceable, tracing_context
+from langsmith.run_helpers import get_tracing_context
+from langsmith.utils import tracing_is_enabled
 
-from app.core.config import ChatModelSettings
-from app.llm.chat_model import invoke_structured
-from app.llm.errors import InvalidStructuredOutput
-from app.models.documents import ParsedDocument, SourceRef
-from app.models.rules import (
-    ProjectProfile,
-    RuleDeltaResult,
-    RuleExtractionProgress,
-    RuleSet,
-    present_rules_for_model,
-)
+from app.core.config import AppSettings, get_settings
+from app.graph.rule_graph import build_rule_graph
+from app.models.documents import ParsedDocument
+from app.models.rules import RuleExtractionProgress, RuleSet, RuleSourceFile
+from app.parsers.assets import atomic_write
 from app.prompts.loader import render_prompt
-from app.rules.merger import (
-    apply_rule_delta_operations,
-    compact_rule_set,
-    finalize_rule_set,
+from app.retrieval.service import RetrievalService
+from app.rules.context import build_document_context, build_rule_view
+from app.rules.merger import finalize_rule_set
+from app.tools.common_tools import CommonTool
+from app.tools.rule_tools import RuleSession, build_rule_tools
+
+RuleProgressCallback = Callable[[RuleExtractionProgress], Awaitable[None] | None]
+logger = logging.getLogger(__name__)
+
+
+@traceable(
+    name="rule_extraction_agent",
+    process_inputs=lambda inputs: {
+        "file_id": inputs["session"].current.document.file_id,
+        "project_id": inputs["session"].rule_set.project_id,
+        "initial_rule_count": len(inputs["session"].rule_set.rules),
+    },
+    process_outputs=lambda _: {"session_finished": True},
 )
-
-
-RuleProgressCallback = Callable[
-    [RuleExtractionProgress],
-    Awaitable[None] | None,
-]
-
-
-def _source_blocks(parsed: ParsedDocument) -> list[str]:
-    blocks: list[str] = []
-    for section in parsed.sections:
-        for unit_index, body in enumerate(
-            part for part in [section.content, *section.tables] if part
-        ):
-            blocks.append(
-                f"[章节:{section.section_id}][单元:{unit_index + 1}]\n"
-                f"## {section.title}\n{body}"
-            )
-    return blocks
-
-
-def _split_oversized_block(
-    block: str,
-    *,
-    max_chars: int,
-    overlap_chars: int,
-) -> list[str]:
-    if len(block) <= max_chars:
-        return [block]
-    chunks: list[str] = []
-    step = max_chars - overlap_chars
-    for start in range(0, len(block), step):
-        chunks.append(block[start : start + max_chars])
-        if start + max_chars >= len(block):
-            break
-    return chunks
-
-
-def build_rule_extraction_batches(
-    parsed: ParsedDocument,
-    *,
-    max_chars: int = 12_000,
-    overlap_chars: int = 600,
-) -> list[str]:
-    """按章节和表格组批；超长单元才使用带重叠的字符切分。"""
-
-    if overlap_chars >= max_chars:
-        raise ValueError("overlap_chars 必须小于 max_chars")
-    units = [
-        chunk
-        for block in _source_blocks(parsed)
-        for chunk in _split_oversized_block(
-            block,
-            max_chars=max_chars,
-            overlap_chars=overlap_chars,
-        )
-    ]
-    batches: list[str] = []
-    current: list[str] = []
-    current_chars = 0
-    for unit in units:
-        additional = len(unit) + (2 if current else 0)
-        if current and current_chars + additional > max_chars:
-            batches.append("\n\n".join(current))
-            current = []
-            current_chars = 0
-        current.append(unit)
-        current_chars += additional
-    if current:
-        batches.append("\n\n".join(current))
-    return batches
-
-
-def _source_for_batch(parsed: ParsedDocument, context: str) -> SourceRef:
-    first_line = next(
-        (line.removeprefix("## ").strip() for line in context.splitlines() if line.startswith("## ")),
-        None,
-    )
-    return SourceRef(
-        file_id=parsed.document.file_id,
-        file_name=parsed.document.file_name,
-        source_path=parsed.document.source_path,
-        section=first_line,
-        quote=context[:500],
-    )
-
-
-def _merge_profile(current: ProjectProfile, incoming: ProjectProfile) -> ProjectProfile:
-    values = current.model_dump()
-    for key, value in incoming.model_dump().items():
-        if values.get(key) in {None, ""} and value not in {None, ""}:
-            values[key] = value
-    return ProjectProfile.model_validate(values)
-
-
-async def _invoke_delta(
-    *,
-    model: object,
-    settings: ChatModelSettings,
-    rule_set: RuleSet,
-    parsed: ParsedDocument,
-    context: str,
-    batch_index: int,
-    batch_count: int,
-) -> RuleDeltaResult:
-    messages = [
+async def _run_file(*, model, session, settings):
+    initial = [
         SystemMessage(
             content=render_prompt(
-                "rule_extraction",
-                rule_delta_schema=RuleDeltaResult.model_json_schema(),
+                "rule_extraction", rule_view=build_rule_view(session.rule_set)
             )
         ),
         HumanMessage(
             content=render_prompt(
                 "rule_extraction_input",
-                current_rules=[
-                    item.model_dump(mode="json")
-                    for item in present_rules_for_model(rule_set)
-                ],
-                source_file=parsed.document.source_path,
-                batch_index=batch_index,
-                batch_count=batch_count,
-                source_context=context,
+                file_id=session.current.document.file_id,
+                file_name=session.current.document.file_name,
+                source_path=session.current.document.source_path,
+                history_files="\n".join(
+                    f"- {key}：{item.document.file_name}"
+                    for key, item in session.history.items()
+                )
+                or "暂无已处理历史文件",
+                source_context=build_document_context(session.current),
             )
         ),
     ]
-    return await invoke_structured(
-        model,
-        messages,
-        RuleDeltaResult,
-        settings.structured_output_mode,
+    tools = [
+        *build_rule_tools(session),
+        *CommonTool(
+            parsed_documents={
+                **session.history,
+                session.current.document.file_id: session.current,
+            },
+            settings=settings,
+        ).tools(),
+    ]
+    trace_context = get_tracing_context()
+    trace_context["enabled"] = tracing_is_enabled(trace_context)
+    graph = build_rule_graph(
+        model=model,
+        tools=tools,
+        session=session,
+        max_steps=settings.rule_agent_max_steps,
+        trace_context=trace_context,
     )
-
-
-async def _report_progress(
-    callback: RuleProgressCallback | None,
-    progress: RuleExtractionProgress,
-) -> None:
-    if callback is None:
-        return
-    result = callback(progress)
-    if inspect.isawaitable(result):
-        await result
+    # 图的默认 tracing 会上传原始 State，故关闭自动采集。模型/工具调用
+    # 单独记录脱敏 span：保留文本、参数、调用 ID 和结果，去掉图片 Base64。
+    with tracing_context(enabled=False):
+        final = await graph.ainvoke(
+            {"messages": initial, "model_calls": 0},
+            config={
+                "recursion_limit": settings.rule_agent_max_steps * 2 + 2,
+                "run_name": "rule_extraction_agent",
+                "metadata": {
+                    "project_id": session.rule_set.project_id,
+                    "file_id": session.current.document.file_id,
+                    "session_id": uuid4().hex,
+                },
+            },
+        )
+    response = final["messages"][-1]
+    if session.unresolved_write_error:
+        raise RuntimeError("规则提交尚未成功：" + session.unresolved_write_error)
+    if getattr(response, "invalid_tool_calls", None):
+        raise RuntimeError("模型返回无法解析的工具调用，当前文件未完成")
+    if response.response_metadata.get("finish_reason") == "length":
+        raise RuntimeError("模型输出被截断，当前文件未完成")
+    # 不新造收尾 JSON；仅接受约定的普通文本完成信号，不把任意无工具回复当成功。
+    if (
+        not isinstance(response.content, str)
+        or response.content.strip().rstrip("。.!！") != "处理完毕"
+    ):
+        raise RuntimeError(f"当前文件未完成：{response.content}")
+    return session.rule_set
 
 
 async def extract_rule_set(
     project_id: str,
     parsed_documents: list[ParsedDocument],
     model: object,
-    model_settings: ChatModelSettings,
     *,
-    maximum: int = 30,
+    retrieval_service: RetrievalService,
+    settings: AppSettings | None = None,
     progress_callback: RuleProgressCallback | None = None,
 ) -> RuleSet:
-    """严格串行执行每个文件批次，使模型始终看到最新规则集合。"""
-
+    """完整文件输入，不做固定字符切分或自动压缩；真实超限由调用失败如实暴露。"""
+    resolved = settings or get_settings()
+    if not parsed_documents:
+        raise ValueError("没有待处理招标文件")
+    for parsed in parsed_documents:
+        if (
+            parsed.document.project_id != project_id
+            or str(parsed.document.data_role) != "rule_source"
+        ):
+            raise ValueError("招标文件不属于当前项目或文件角色不符")
+        if parsed.parse_status not in {"parsed", "partial", "ocr_required"}:
+            raise ValueError(
+                f"{parsed.document.file_id} 解析未完成：{parsed.parse_status}"
+            )
     rule_set = RuleSet(
         project_id=project_id,
-        source_files=[item.document for item in parsed_documents],
+        source_files=[
+            RuleSourceFile.from_document(item.document) for item in parsed_documents
+        ],
     )
-    for document_index, parsed in enumerate(parsed_documents, start=1):
-        contexts = build_rule_extraction_batches(parsed)
-        for batch_index, context in enumerate(contexts, start=1):
+    history = {}
+    commits = []
+    versions = {
+        item.document.file_id: item.markdown_path or item.parser_version or ""
+        for item in parsed_documents
+    }
+
+    for index, parsed in enumerate(parsed_documents, 1):
+
+        async def persist(candidate, records, error=None, completed=None):
+            progress = RuleExtractionProgress(
+                project_id=project_id,
+                document_index=index,
+                document_count=len(parsed_documents),
+                current_file_id=parsed.document.file_id,
+                completed_file_ids=list(history) if completed is None else completed,
+                parser_versions=versions,
+                model_calls=session.model_calls,
+                rule_set=candidate,
+                commits=records,
+                error=error,
+            )
+            if progress_callback:
+                response = progress_callback(progress)
+                if inspect.isawaitable(response):
+                    await response
+            else:
+                path = (
+                    resolved.storage.data_root
+                    / "parsed"
+                    / "rules"
+                    / f"{project_id}.progress.json"
+                )
+                atomic_write(path, progress.model_dump_json(indent=2).encode("utf-8"))
+
+        session = RuleSession(
+            rule_set=rule_set,
+            current=parsed,
+            history=dict(history),
+            persist=persist,
+            retrieval=retrieval_service,
+            commits=list(commits),
+        )
+        try:
+            await persist(rule_set, commits)
+            rule_set = await _run_file(model=model, session=session, settings=resolved)
+            await persist(
+                rule_set, session.commits, completed=[*history, parsed.document.file_id]
+            )
+        except Exception as exc:
+            # 不覆盖正式结果；记录最近实际提交成功的规则以及当前失败范围。
             try:
-                delta = await _invoke_delta(
-                    model=model,
-                    settings=model_settings,
-                    rule_set=rule_set,
-                    parsed=parsed,
-                    context=context,
-                    batch_index=batch_index,
-                    batch_count=len(contexts),
+                await persist(
+                    session.rule_set,
+                    session.commits,
+                    error=f"{type(exc).__name__}: {exc}",
                 )
-            except InvalidStructuredOutput as exc:
-                raise InvalidStructuredOutput(
-                    "规则抽取失败："
-                    f"file={parsed.document.source_path}，"
-                    f"batch={batch_index}/{len(contexts)}；{exc}"
-                ) from exc
-            rule_set = rule_set.model_copy(
-                update={
-                    "project_profile": _merge_profile(
-                        rule_set.project_profile,
-                        delta.project_profile,
-                    )
-                }
-            )
-            rule_set = apply_rule_delta_operations(
-                rule_set,
-                delta.operations,
-                source=_source_for_batch(parsed, context),
-            )
-            if len(rule_set.rules) > maximum:
-                rule_set = compact_rule_set(
-                    rule_set,
-                    maximum=maximum,
+            except Exception as save_error:
+                # 保留此前落盘文件和原始异常，不在普通日志重复输出原文/消息。
+                logger.error(
+                    "规则失败进度未能保存：project=%s file=%s error=%s",
+                    project_id,
+                    parsed.document.file_id,
+                    type(save_error).__name__,
                 )
-            await _report_progress(
-                progress_callback,
-                RuleExtractionProgress(
-                    project_id=project_id,
-                    document_index=document_index,
-                    document_count=len(parsed_documents),
-                    batch_index=batch_index,
-                    batch_count=len(contexts),
-                    source_file=parsed.document.source_path,
-                    rule_count=len(rule_set.rules),
-                    rule_set=rule_set,
-                ),
-            )
-    return finalize_rule_set(rule_set, maximum=maximum)
+            raise
+        commits = session.commits
+        history[parsed.document.file_id] = parsed
+    return finalize_rule_set(rule_set)

@@ -3,7 +3,10 @@
 import hashlib
 import json
 
+import numpy as np
+
 from app.core.config import AppSettings, EmbeddingSettings, get_settings
+from app.evidence.storage import load_evidence_classification
 from app.llm.embedding_model import EmbeddingModel
 from app.models.documents import DocumentRef
 from app.parsers.service import load_parsed_document
@@ -11,7 +14,6 @@ from app.retrieval.chunker import chunk_parsed_document
 from app.retrieval.keyword import build_keyword_index
 from app.retrieval.models import IndexManifest, IndexScope
 from app.retrieval.store import atomic_index_directory, write_index
-from app.evidence.storage import load_evidence_classification
 
 
 def embedding_config_fingerprint(settings: EmbeddingSettings) -> str:
@@ -34,9 +36,17 @@ async def build_document_index(
     resolved = settings or get_settings()
     chunks = []
     for document in documents:
-        if document.data_role != scope.data_role:
+        if (
+            document.data_role != scope.data_role
+            or document.project_id != scope.project_id
+            or document.bidder_id != scope.bidder_id
+            or document.task_id != scope.task_id
+        ):
             raise ValueError("文档角色与索引范围不一致")
         parsed = load_parsed_document(document.file_id)
+        for key in ("file_id", "project_id", "bidder_id", "task_id", "data_role"):
+            if getattr(parsed.document, key) != getattr(document, key):
+                raise ValueError("解析文件身份与上传记录不一致")
         # 解析 JSON 中的 parse_status 是解析完成后的最新值；资料分类则发生在
         # 解析之后，因此只覆盖分类字段，不能用上传阶段的 pending 状态回退它。
         indexed_document = parsed.document.model_copy(
@@ -62,27 +72,29 @@ async def build_document_index(
                 retrieval_hint=retrieval_hint,
             )
         )
-    vectors = await embedding_model.embed(
-        [
-            "\n".join(
-                part
-                for part in [
-                    chunk.section,
-                    chunk.retrieval_hint,
-                    chunk.content,
-                ]
-                if part
-            )
-            for chunk in chunks
-        ]
+    vectors = (
+        await embedding_model.embed(
+            [
+                "\n".join(
+                    part
+                    for part in [
+                        chunk.section,
+                        chunk.retrieval_hint,
+                        chunk.content,
+                    ]
+                    if part
+                )
+                for chunk in chunks
+            ]
+        )
+        if chunks
+        else np.empty((0, resolved.embedding_model.dimension), dtype=np.float32)
     )
     manifest = IndexManifest(
         dimension=resolved.embedding_model.dimension,
         chunk_count=len(chunks),
         embedding_model=resolved.embedding_model.model,
-        embedding_fingerprint=embedding_config_fingerprint(
-            resolved.embedding_model
-        ),
+        embedding_fingerprint=embedding_config_fingerprint(resolved.embedding_model),
     )
     with atomic_index_directory(scope.scope_id) as directory:
         write_index(

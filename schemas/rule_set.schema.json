@@ -1,203 +1,5 @@
 {
   "$defs": {
-    "ClassificationStatus": {
-      "enum": [
-        "classified",
-        "manual_review"
-      ],
-      "title": "ClassificationStatus",
-      "type": "string"
-    },
-    "DataRole": {
-      "enum": [
-        "rule_source",
-        "evidence_material",
-        "bid_document"
-      ],
-      "title": "DataRole",
-      "type": "string"
-    },
-    "DocumentRef": {
-      "additionalProperties": false,
-      "properties": {
-        "file_id": {
-          "title": "File Id",
-          "type": "string"
-        },
-        "file_name": {
-          "title": "File Name",
-          "type": "string"
-        },
-        "source_path": {
-          "title": "Source Path",
-          "type": "string"
-        },
-        "data_role": {
-          "$ref": "#/$defs/DataRole"
-        },
-        "parse_status": {
-          "$ref": "#/$defs/ParseStatus",
-          "default": "pending"
-        },
-        "project_id": {
-          "title": "Project Id",
-          "type": "string"
-        },
-        "bidder_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Bidder Id"
-        },
-        "task_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Task Id"
-        },
-        "evidence_type": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EvidenceType"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "classification_status": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ClassificationStatus"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "required": [
-        "file_id",
-        "file_name",
-        "source_path",
-        "data_role",
-        "project_id"
-      ],
-      "title": "DocumentRef",
-      "type": "object"
-    },
-    "EvidenceType": {
-      "enum": [
-        "contract",
-        "invoice",
-        "invoice_verification",
-        "certificate",
-        "business_license",
-        "technical_parameter",
-        "test_report",
-        "performance_table",
-        "production_capacity",
-        "personnel",
-        "after_sales",
-        "other"
-      ],
-      "title": "EvidenceType",
-      "type": "string"
-    },
-    "ParseStatus": {
-      "enum": [
-        "pending",
-        "parsed",
-        "partial",
-        "ocr_required",
-        "unsupported",
-        "manual_review"
-      ],
-      "title": "ParseStatus",
-      "type": "string"
-    },
-    "ProjectProfile": {
-      "additionalProperties": false,
-      "properties": {
-        "project_name": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Project Name"
-        },
-        "buyer": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Buyer"
-        },
-        "material_category": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Material Category"
-        },
-        "bid_deadline": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Bid Deadline"
-        },
-        "bid_validity_days": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Bid Validity Days"
-        }
-      },
-      "title": "ProjectProfile",
-      "type": "object"
-    },
     "RuleCategory": {
       "enum": [
         "format",
@@ -212,68 +14,50 @@
     },
     "RuleItem": {
       "additionalProperties": false,
-      "description": "持久化规则。\n\n模型调用只读取 ``RuleModelView``；来源字段仅供代码做溯源和报告拼接。",
       "properties": {
         "rule_id": {
           "title": "Rule Id",
           "type": "string"
         },
-        "status": {
-          "$ref": "#/$defs/RuleStatus",
-          "default": "active"
+        "provenance": {
+          "$ref": "#/$defs/RuleProvenance"
         },
         "category": {
           "$ref": "#/$defs/RuleCategory"
         },
-        "priority": {
-          "$ref": "#/$defs/RulePriority",
-          "default": "normal"
-        },
-        "verification": {
-          "$ref": "#/$defs/VerificationLevel",
-          "default": "bid_only"
-        },
         "requirement": {
-          "maxLength": 500,
-          "minLength": 8,
+          "pattern": "\\S",
           "title": "Requirement",
           "type": "string"
         },
-        "evidence_types": {
+        "priority": {
+          "$ref": "#/$defs/RulePriority"
+        },
+        "verification": {
+          "$ref": "#/$defs/VerificationLevel"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "sources": {
           "items": {
-            "$ref": "#/$defs/EvidenceType"
+            "$ref": "#/$defs/RuleSourceFile"
           },
-          "title": "Evidence Types",
-          "type": "array"
-        },
-        "conflict_note": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Conflict Note"
-        },
-        "source": {
-          "$ref": "#/$defs/SourceRef"
-        },
-        "supporting_sources": {
-          "items": {
-            "$ref": "#/$defs/SourceRef"
-          },
-          "title": "Supporting Sources",
+          "minItems": 1,
+          "title": "Sources",
           "type": "array"
         }
       },
       "required": [
         "rule_id",
+        "provenance",
         "category",
         "requirement",
-        "source"
+        "priority",
+        "verification",
+        "reason",
+        "sources"
       ],
       "title": "RuleItem",
       "type": "object"
@@ -287,65 +71,33 @@
       "title": "RulePriority",
       "type": "string"
     },
-    "RuleStatus": {
+    "RuleProvenance": {
       "enum": [
-        "active",
-        "rule_conflict",
-        "manual_review"
+        "ai_generated",
+        "human_added",
+        "human_modified"
       ],
-      "title": "RuleStatus",
+      "title": "RuleProvenance",
       "type": "string"
     },
-    "SourceRef": {
+    "RuleSourceFile": {
       "additionalProperties": false,
+      "description": "从上传记录投影出的只读文件快照，不包含业务归属或切片。",
       "properties": {
         "file_id": {
+          "pattern": "\\S",
           "title": "File Id",
           "type": "string"
         },
-        "chunk_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Chunk Id"
-        },
         "file_name": {
+          "pattern": "\\S",
           "title": "File Name",
           "type": "string"
         },
         "source_path": {
+          "pattern": "\\S",
           "title": "Source Path",
           "type": "string"
-        },
-        "section": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Section"
-        },
-        "quote": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Quote"
         }
       },
       "required": [
@@ -353,15 +105,13 @@
         "file_name",
         "source_path"
       ],
-      "title": "SourceRef",
+      "title": "RuleSourceFile",
       "type": "object"
     },
     "VerificationLevel": {
       "enum": [
         "bid_only",
-        "source_check",
-        "evidence_check",
-        "cross_check"
+        "evidence_check"
       ],
       "title": "VerificationLevel",
       "type": "string"
@@ -374,7 +124,9 @@
       "type": "string"
     },
     "project_profile": {
-      "$ref": "#/$defs/ProjectProfile"
+      "default": "",
+      "title": "Project Profile",
+      "type": "string"
     },
     "rules": {
       "items": {
@@ -385,7 +137,7 @@
     },
     "source_files": {
       "items": {
-        "$ref": "#/$defs/DocumentRef"
+        "$ref": "#/$defs/RuleSourceFile"
       },
       "title": "Source Files",
       "type": "array"

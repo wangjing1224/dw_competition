@@ -6,12 +6,12 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from langchain_core.messages import AIMessage
 
-from app.models.documents import SourceRef
 from app.models.evidence import EvidenceClassification
 from app.models.findings import Finding
 from app.models.results import AuditResult, FileAuditResult, ProjectMatch
-from app.models.rules import ProjectProfile, RuleDeltaResult, RuleReportItem, present_rule_for_model
+from app.models.rules import RuleReportItem, present_rule_for_model
 from app.parsers.service import load_parsed_document
 from app.reports.service import ReportService
 from app.services.audit_task_service import AuditTaskService, query_audit_task
@@ -20,7 +20,6 @@ from app.services.bidder_service import BidderService
 from app.services.project_service import ProjectService
 from app.storage.database import initialize_database
 from app.storage.file_store import FileStore
-
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "test-datas"
 
@@ -80,9 +79,7 @@ class MockDatasetAuditExecutor:
                 Finding(
                     rule_id=rule.rule_id,
                     result=(
-                        "risk"
-                        if str(rule.category) == "commercial"
-                        else "compliant"
+                        "risk" if str(rule.category) == "commercial" else "compliant"
                     ),
                     summary=(
                         "投标总价未填写，需要补充"
@@ -133,39 +130,48 @@ async def test_mock_dataset_full_pipeline(monkeypatch, temp_settings):
     monkeypatch.setattr("app.reports.word_report.get_settings", lambda: temp_settings)
     initialize_database(temp_settings.storage.database_path)
 
-    extraction_calls = 0
+    class RuleModel:
+        submitted = False
 
-    async def mock_rule_extraction(*_args, **_kwargs):
-        nonlocal extraction_calls
-        extraction_calls += 1
-        if extraction_calls > 1:
-            return RuleDeltaResult()
-        return RuleDeltaResult(
-            project_profile=ProjectProfile(
-                project_name="某省电网2026年红外热成像仪公开招标采购",
-                buyer="某省电网有限公司",
-                material_category="红外热成像仪",
-            ),
-            operations=[
-                {
-                    "action": "add",
-                    "category": "technical",
-                    "priority": "critical",
-                    "verification": "evidence_check",
-                    "requirement": "探测器分辨率不得低于640x480",
-                    "evidence_types": ["technical_parameter"],
-                    "reason": "技术规范明确要求",
-                },
-                {
-                    "action": "add",
-                    "category": "commercial",
-                    "priority": "important",
-                    "verification": "bid_only",
-                    "requirement": "投标文件必须填写投标总价",
-                    "reason": "报价要求明确",
-                },
-            ],
-        )
+        def bind_tools(self, tools):
+            return self
+
+        async def ainvoke(self, messages):
+            if self.submitted:
+                return AIMessage(content="处理完毕")
+            self.submitted = True
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    dict(
+                        name="submit_rule_delta",
+                        id="call-1",
+                        args=dict(
+                            project_profile="某省电网有限公司采购红外热成像仪",
+                            return_view="changed",
+                            operations=[
+                                {
+                                    "action": "add",
+                                    "category": "technical",
+                                    "priority": "critical",
+                                    "verification": "evidence_check",
+                                    "requirement": "探测器分辨率不得低于640x480",
+                                    "reason": "技术规范明确要求",
+                                },
+                                {
+                                    "action": "add",
+                                    "category": "commercial",
+                                    "priority": "important",
+                                    "verification": "bid_only",
+                                    "requirement": "投标文件必须填写投标总价",
+                                    "reason": "报价要求明确",
+                                },
+                            ],
+                        ),
+                        type="tool_call",
+                    )
+                ],
+            )
 
     async def mock_classification(_model, messages, *_args, **_kwargs):
         prompt = "\n".join(str(message.content) for message in messages)
@@ -186,7 +192,6 @@ async def test_mock_dataset_full_pipeline(monkeypatch, temp_settings):
             ),
         )
 
-    monkeypatch.setattr("app.rules.extractor.invoke_structured", mock_rule_extraction)
     monkeypatch.setattr(
         "app.evidence.classifier.invoke_structured",
         mock_classification,
@@ -194,7 +199,8 @@ async def test_mock_dataset_full_pipeline(monkeypatch, temp_settings):
 
     embedding = MockEmbedding(temp_settings.embedding_model.dimension)
     models = SimpleNamespace(
-        rule_extraction=object(),
+        rule_extraction=RuleModel(),
+        rerank=object(),
         evidence_classification=object(),
         embedding=embedding,
     )

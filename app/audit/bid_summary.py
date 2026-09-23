@@ -10,7 +10,6 @@ from app.models.documents import BidDocumentSummary, BidRouteDecision, ParsedDoc
 from app.models.rules import RuleSet
 from app.prompts.loader import render_prompt
 
-
 RULE_CATEGORY_GUIDE = {
     "format": "签字盖章、文件组成、授权和格式完整性",
     "qualification": "主体资格、证照、资质和准入条件",
@@ -30,9 +29,7 @@ def build_bid_summary_context(
 
     blocks = [
         f"## {section.title}\n"
-        + "\n".join(
-            part for part in [section.content, *section.tables] if part
-        )
+        + "\n".join(part for part in [section.content, *section.tables] if part)
         for section in parsed.sections
         if section.content or section.tables
     ]
@@ -63,9 +60,7 @@ async def summarize_and_route_bid_document(
             SystemMessage(
                 content=render_prompt(
                     "bid_document_summary",
-                    bid_document_summary_schema=(
-                        BidRouteDecision.model_json_schema()
-                    ),
+                    bid_document_summary_schema=(BidRouteDecision.model_json_schema()),
                 )
             ),
             HumanMessage(
@@ -75,9 +70,7 @@ async def summarize_and_route_bid_document(
                         "file_name": parsed.document.file_name,
                         "source_path": parsed.document.source_path,
                     },
-                    project_profile=rule_set.project_profile.model_dump(
-                        mode="json"
-                    ),
+                    project_profile=rule_set.project_profile,
                     rule_categories=RULE_CATEGORY_GUIDE,
                     document_context=build_bid_summary_context(parsed),
                 )
@@ -93,12 +86,7 @@ async def summarize_and_route_bid_document(
 
 
 def summary_path(file_id: str, settings: AppSettings) -> Path:
-    return (
-        settings.storage.data_root
-        / "parsed"
-        / "bid_summaries"
-        / f"{file_id}.json"
-    )
+    return settings.storage.data_root / "parsed" / "bid_summaries" / f"{file_id}.json"
 
 
 def write_bid_summary(

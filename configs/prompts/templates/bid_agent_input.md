@@ -4,6 +4,10 @@
 - 投标文件：${bid_file}
 - 投标方：${bidder}
 
+## 招标项目简介
+
+${project_profile}
+
 ## 投标文件详细摘要
 
 ${bid_summary}

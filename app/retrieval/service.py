@@ -71,17 +71,13 @@ class RetrievalService:
                     keyword_score=score,
                 )
             else:
-                recalls[row_index] = current.model_copy(
-                    update={"keyword_score": score}
-                )
+                recalls[row_index] = current.model_copy(update={"keyword_score": score})
 
         merged = sorted(
             recalls.values(),
             key=lambda item: (
-                self.settings.retrieval.semantic_weight
-                * (item.semantic_score or 0)
-                + self.settings.retrieval.keyword_weight
-                * (item.keyword_score or 0)
+                self.settings.retrieval.semantic_weight * (item.semantic_score or 0)
+                + self.settings.retrieval.keyword_weight * (item.keyword_score or 0)
             ),
             reverse=True,
         )
@@ -115,9 +111,22 @@ class RetrievalService:
                     source=recall.chunk.source_ref(
                         self.settings.retrieval.max_source_chars
                     ),
-                    content=recall.chunk.content[
-                        : self.settings.retrieval.max_source_chars
-                    ],
+                    # 表格/图片转写按完整结构返回，由工具说明输出预算，不能拦腰截断。
+                    content=(
+                        recall.chunk.content
+                        if recall.chunk.block_kind != "text"
+                        else recall.chunk.content[
+                            : self.settings.retrieval.max_source_chars
+                        ]
+                    ),
+                    truncated=(
+                        recall.chunk.block_kind == "text"
+                        and len(recall.chunk.content)
+                        > self.settings.retrieval.max_source_chars
+                    ),
+                    parse_version=recall.chunk.parse_version,
+                    page_numbers=recall.chunk.page_numbers,
+                    image_paths=recall.chunk.image_paths,
                     project_id=recall.chunk.project_id,
                     bidder_id=recall.chunk.bidder_id,
                     task_id=recall.chunk.task_id,

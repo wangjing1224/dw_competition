@@ -49,6 +49,11 @@ class IndexChunk(StrictModel):
     parse_status: ParseStatus
     evidence_type: EvidenceType | None = None
     classification_status: ClassificationStatus | None = None
+    block_kind: Literal["text", "table", "image"] = "text"
+    source_block_index: int | None = None
+    parse_version: str | None = None
+    page_numbers: list[int] = Field(default_factory=list)
+    image_paths: list[str] = Field(default_factory=list)
 
     def source_ref(self, quote_chars: int = 500) -> SourceRef:
         return SourceRef(
@@ -96,3 +101,7 @@ class SearchResult(StrictModel):
     bidder_id: str | None = None
     task_id: str | None = None
     evidence_type: EvidenceType | None = None
+    parse_version: str | None = None
+    page_numbers: list[int] = Field(default_factory=list)
+    image_paths: list[str] = Field(default_factory=list)
+    truncated: bool = False

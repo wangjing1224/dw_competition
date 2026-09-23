@@ -4,17 +4,17 @@
 
 系统业务 ID 使用按类型独立递增的短格式，例如 `project-1`、`bidder-1`、
 `audit-1` 和 `file-1`；索引片段使用 `chunk-文件号-章节号-单元号-切片号`，
-减少日志、Prompt 和观测页面中的冗余字符。
+有序解析结果的片段另带短版本后缀，避免重建索引后旧片段 ID 指向不同内容。
 
 ## 主流程
 
 ```text
-招标文件夹 -> 文档解析 -> LLM 抽取 RuleSet -> 招标依据索引
+招标文件夹 -> 文档解析 -> 招标依据索引 -> 逐文件规则 Agent -> RuleSet
 投标方资料 -> 文档解析 -> LLM 资料分类 -> Evidence Index
 投标测试集 -> 文档解析 -> Bid Index -> 主/子 Agent 审核 -> JSON -> Word
 ```
 
-LangGraph 只承载审核阶段的主审核 Agent 和资料核验子 Agent。文件上传、解析、规则抽取、资料分类和索引构建在图外完成；JSON 校验和 Word 渲染也在图外完成。
+LangGraph 承载规则抽取 Agent、主审核 Agent 和资料核验子 Agent。文件上传、解析、资料分类和索引构建在图外完成；JSON 校验和 Word 渲染也在图外完成。
 
 ## 目录职责
 
@@ -26,10 +26,10 @@ app/models       共享 Pydantic Schema
 app/parsers      DOC/DOCX/XLSX/TXT/Markdown/PDF/图片解析及可选视觉辅助
 app/llm          LangChain 模型适配
 app/retrieval    本地向量和关键词检索
-app/rules        规则抽取、合并和确定性判断
+app/rules        逐文件规则编排、增量应用、规则视图和安全追踪
 app/evidence     投标方资料分类
-app/tools        主/子 Agent BaseTool
-app/agents       主审核和资料核验 Agent
+app/tools        规则/审核工具及 CommonTool 通用工具
+app/agents       规则抽取、主审核和资料核验 Agent
 app/graph        LangGraph State、路由和更新
 app/reports      JSON 和 Word 输出
 configs          模型、检索和存储配置
@@ -65,11 +65,11 @@ http://127.0.0.1:8000/web/
 
 ## 模型配置
 
-- `.env`：保存四类 Chat 模型和 Embedding 的连接地址、Key，不提交 Git。
+- `.env`：保存各职责 Chat 模型和 Embedding 的连接地址、Key，不提交 Git。
 - `configs/model.yaml`：保存模型名、温度、超时、重试、维度和批大小。
 - `configs/retrieval.yaml`：保存分段、候选数量和混合召回权重。
 - `configs/storage.yaml`：保存数据目录、SQLite 路径和上传安全限制。
-- `configs/prompts/`：保存四套 Prompt 模板和五个 Tool 的模型可见说明。
+- `configs/prompts/`：保存各流程的 Prompt 模板和工具说明。
 
 Chat 和 Embedding 使用 LangChain 的 OpenAI 兼容封装。首期可使用阿里百炼；
 后续切换本地服务时，修改对应 URL、Key 和模型名即可。Rerank 使用进程内
@@ -90,9 +90,37 @@ Rerank 模型固定下载到项目根目录的
 Embedding 模型、URL 或维度变化后，停止服务并删除 `data/indexes/` 和
 `data/app.db`，再依次重新调用项目、投标方和审核任务接口。
 
+## 规则抽取与增量维护
+
+上传接口不变。解析和索引完成后，规则 Agent 串行处理每份招标文件，使用独立消息历史：
+System 放稳定要求和启动时的完整规则视图，Human 放当前文件的有序正文、表格及图片路径。
+提交结果以 ToolMessage 更新上下文，不反复改写 System；下一份文件使用最新规则库启动。
+
+- `search_rule_source`：按查询组回查已处理的历史文件，不提前读取未来文件。
+- `view_image`：通过统一图片路径查看当前或历史文件中的已登记图片；由 `CommonTool` 提供。
+- `submit_rule_delta`：一批 `add/merge/replace` 或项目简介更新；三个参数显式全为 `null` 时只读查看。
+
+每条规则保存 `rule_id/provenance/category/requirement/priority/verification/reason/sources`。
+`rule_id` 和 `provenance=ai_generated` 由系统赋值；来源只保存文件 ID、名称和路径。
+`merge` 追加要求并合并来源，`replace` 完整替换且校验来源，二者保留目标 ID；`reason` 始终覆盖为最新依据说明。
+暂不设置 30 条上限，不自动将同类规则拼接压缩，数量和粒度通过后续人工标注验证。
+
+每次成功提交立即原子写入 `data/parsed/rules/{project_id}.progress.json`，整批失败不更新规则状态。
+所有文件处理完成才生成正式 `{project_id}.json`；进度及变更记录保留，不自动跨进程续跑。
+旧版规则数据不兼容、不迁移，也不会自动删除；测试新流程需重新上传原始招标文件抽取。
+
+`configs/model.yaml` 顶层 `rule_agent_max_steps` 独立配置规则 Agent 的调用轮数，默认 8。
+倒数第二轮提醒保存且仍绑定工具，最后一轮提醒后使用不绑定工具的模型收尾，上一轮工具全部回应后才进入下一轮。
+沿用 `RULE_EXTRACTION_MODEL_BASE_URL/API_KEY` 和 `rule_extraction_model.model`；模型需支持原生工具调用及多模态工具消息。
+没有自动切换模型，实际网关的识图和工具调用能力需要单独验证。
+
+当前输入为完整文件，没有动态 Token 装载器；真实超限或未完成会明确失败，不静默截断。
+开启 LangSmith 时记录独立文件会话和脱敏的模型/工具调用，保留文字与位置，不上传图片 Base64。
+资料入库 Agent、动态 Token 控制器及人工规则维护接口留给后续开发。
+
 ## 公共解析与视觉辅助
 
-当前先实现解析能力，**尚未改造规则/资料 Agent、检索消费逻辑或输入预算控制器**。
+规则 Agent 已接入有序解析结构和通用看图工具；资料入库 Agent、输入预算控制器尚未实现。
 三条业务解析路径统一调用异步 `prepare_document()`：先做原生解析，再按配置进行视觉辅助。
 原同步公开入口 `parse_document()` 已删除；各格式解析器内部的 `.parse()` 仍保留。
 迁移只改解析入口，文件之间仍按原顺序串行处理。
@@ -141,7 +169,7 @@ uv run python -m app.parsers file-42 --no-vision
 
 不要在正在审核同一文件时重解析。生成新解析版本后，旧索引不会自动更新。
 本地测试使用合成文件和 Mock 视觉响应，不向外部服务发送真实资料；真实网关的识图效果
-和图片工具消息支持仍需联调。`image_messages.py` 提供安全图片工具消息构造，暂未绑定业务 Agent。
+和图片工具消息支持仍需联调。`image_messages.py` 提供安全图片工具消息构造，规则 Agent 通过 `CommonTool` 复用。
 解析视觉调用默认关闭 LangSmith Trace 采集，避免 Base64 图片和原文被第三方采集。
 
 边界：PDF 的复杂排版与表格恢复不是无损保证；续表逐相邻页处理，不再限制整表最多三页。

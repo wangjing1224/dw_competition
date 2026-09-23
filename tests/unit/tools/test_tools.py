@@ -8,7 +8,7 @@ from langgraph.prebuilt import ToolNode
 from app.graph.audit_state import AuditState
 from app.models.documents import DocumentRef, SourceRef
 from app.models.evidence import EvidenceCatalogItem
-from app.models.rules import RuleItem, RuleSet
+from app.models.rules import RuleItem, RuleSet, RuleSourceFile
 from app.retrieval.models import SearchResult
 from app.retrieval.service import RetrievalService
 from app.storage.repositories import AuditEventRepository
@@ -16,8 +16,8 @@ from app.tools.bid_tools import (
     EvidenceReviewCheck,
     EvidenceReviewToolInput,
     RequestEvidenceReviewTool,
-    SearchBidResponseTool,
     SearchBidResponseInput,
+    SearchBidResponseTool,
     SearchTenderSourceInput,
 )
 from app.tools.evidence_tools import SearchEvidenceInput, SearchEvidenceTool
@@ -29,14 +29,15 @@ def test_search_schema_requires_grouped_checks():
     assert "checks" in bid_schema["properties"]
     assert bid_schema["properties"]["checks"]["description"]
     assert bid_schema["properties"]["checks"]["maxItems"] == 8
-    assert bid_schema["$defs"]["BidSearchCheck"]["properties"]["queries"][
-        "maxItems"
-    ] == 5
+    assert (
+        bid_schema["$defs"]["BidSearchCheck"]["properties"]["queries"]["maxItems"] == 5
+    )
     assert tender_schema["properties"]["checks"]["description"]
     assert tender_schema["properties"]["checks"]["maxItems"] == 8
-    assert tender_schema["$defs"]["TenderSearchCheck"]["properties"]["queries"][
-        "maxItems"
-    ] == 5
+    assert (
+        tender_schema["$defs"]["TenderSearchCheck"]["properties"]["queries"]["maxItems"]
+        == 5
+    )
     assert (
         bid_schema["properties"]["checks"]["description"]
         != tender_schema["properties"]["checks"]["description"]
@@ -44,7 +45,9 @@ def test_search_schema_requires_grouped_checks():
 
 
 def test_injected_state_is_hidden_from_tool_call_schema():
-    schema = SearchBidResponseTool.model_construct().tool_call_schema.model_json_schema()
+    schema = (
+        SearchBidResponseTool.model_construct().tool_call_schema.model_json_schema()
+    )
     assert set(schema["properties"]) == {"checks"}
     # 输入 DTO 中保留状态注入点，但模型实际看到的工具 Schema 不包含它。
     assert "state" in SearchBidResponseInput.model_fields
@@ -73,9 +76,9 @@ def test_evidence_search_can_optionally_limit_files():
     schema = SearchEvidenceInput.model_json_schema()
     assert schema["properties"]["checks"]["description"]
     assert schema["properties"]["file_ids"]["description"]
-    assert schema["$defs"]["EvidenceSearchCheck"]["properties"]["queries"][
-        "maxItems"
-    ] == 5
+    assert (
+        schema["$defs"]["EvidenceSearchCheck"]["properties"]["queries"]["maxItems"] == 5
+    )
 
 
 class NoopEvents(AuditEventRepository):
@@ -183,12 +186,15 @@ async def test_evidence_review_batch_preserves_rule_and_category(temp_settings):
         requirement="投标人应提供有效营业执照",
         priority="critical",
         verification="evidence_check",
-        evidence_types=["business_license"],
-        source=SourceRef(
-            file_id="rule-file",
-            file_name="招标文件.docx",
-            source_path="招标文件.docx",
-        ),
+        provenance="ai_generated",
+        reason="招标资格条款",
+        sources=[
+            RuleSourceFile(
+                file_id="rule-file",
+                file_name="招标文件.docx",
+                source_path="招标文件.docx",
+            )
+        ],
     )
     response = await tool._arun(
         checks=[
@@ -202,7 +208,9 @@ async def test_evidence_review_batch_preserves_rule_and_category(temp_settings):
             "task_id": "audit-1",
             "project_id": "project-1",
             "bidder_id": "bidder-1",
-            "rule_set": RuleSet(project_id="project-1", rules=[rule]),
+            "rule_set": RuleSet(
+                project_id="project-1", rules=[rule], source_files=rule.sources
+            ),
             "evidence_catalog": {
                 "business_license": [
                     EvidenceCatalogItem(

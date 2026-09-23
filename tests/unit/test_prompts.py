@@ -8,20 +8,20 @@ from app.prompts.loader import load_tool_description, render_prompt
 def test_rule_system_and_input_are_separate():
     system = render_prompt(
         "rule_extraction",
-        rule_delta_schema={"type": "object"},
+        rule_view="当前暂无规则",
     )
     human = render_prompt(
         "rule_extraction_input",
-        current_rules=[],
-        source_file="规则/技术规范.md",
-        batch_index=1,
-        batch_count=2,
+        file_id="file-1",
+        file_name="技术规范.md",
+        source_path="规则/技术规范.md",
+        history_files="暂无已处理历史文件",
         source_context="技术要求：像素不低于640x480",
     )
-    assert '"type": "object"' in system
+    assert "当前暂无规则" in system
     assert "640x480" not in system
     assert "640x480" in human
-    assert "1/2" in human
+    assert "file-1" in human
 
 
 def test_missing_prompt_variable_fails_fast():
@@ -35,6 +35,9 @@ def test_all_tool_descriptions_are_available():
         "search_tender_source",
         "request_evidence_review",
         "search_evidence",
+        "search_rule_source",
+        "submit_rule_delta",
+        "view_image",
     ):
         assert load_tool_description(name)
 
@@ -50,9 +53,7 @@ def test_all_tool_descriptions_are_available():
         ),
     ],
 )
-def test_agent_prompt_contains_runtime_output_schema(
-    name, schema_variable, model_name
-):
+def test_agent_prompt_contains_runtime_output_schema(name, schema_variable, model_name):
     rendered = render_prompt(
         name,
         **{

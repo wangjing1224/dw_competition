@@ -420,7 +420,7 @@
     },
     "RuleReportItem": {
       "additionalProperties": false,
-      "description": "最终 JSON 顶层保存的规则快照，供 Word 按 rule_id 展示。",
+      "description": "报告中的规则快照，按 rule_id 拼接审核结论。",
       "properties": {
         "rule_id": {
           "title": "Rule Id",
@@ -430,8 +430,6 @@
           "$ref": "#/$defs/RuleCategory"
         },
         "requirement": {
-          "maxLength": 500,
-          "minLength": 8,
           "title": "Requirement",
           "type": "string"
         },
@@ -441,11 +439,15 @@
         "verification": {
           "$ref": "#/$defs/VerificationLevel"
         },
-        "evidence_types": {
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "source_file_ids": {
           "items": {
-            "$ref": "#/$defs/EvidenceType"
+            "type": "string"
           },
-          "title": "Evidence Types",
+          "title": "Source File Ids",
           "type": "array"
         }
       },
@@ -454,7 +456,9 @@
         "category",
         "requirement",
         "priority",
-        "verification"
+        "verification",
+        "reason",
+        "source_file_ids"
       ],
       "title": "RuleReportItem",
       "type": "object"
@@ -462,9 +466,7 @@
     "VerificationLevel": {
       "enum": [
         "bid_only",
-        "source_check",
-        "evidence_check",
-        "cross_check"
+        "evidence_check"
       ],
       "title": "VerificationLevel",
       "type": "string"

@@ -4,9 +4,9 @@ from langchain_core.messages import AIMessage
 
 from app.graph.audit_state import build_initial_audit_state
 from app.graph.state_updates import apply_bid_agent_output_node, summarize_conclusion
-from app.models.documents import BidDocumentSummary, DocumentRef, SourceRef
+from app.models.documents import BidDocumentSummary, DocumentRef
 from app.models.findings import Finding
-from app.models.rules import RuleItem, RuleSet
+from app.models.rules import RuleItem, RuleSet, RuleSourceFile
 from app.models.tasks import AgentAuditDecision
 from app.services.audit_task_service import AuditTaskContext
 
@@ -28,18 +28,24 @@ def state():
         requirement="探测器分辨率不低于640x480",
         priority="critical",
         verification="bid_only",
-        source=SourceRef(
-            file_id="rule-file",
-            file_name="规则.docx",
-            source_path="规则.docx",
-        ),
+        provenance="ai_generated",
+        reason="技术规范明确要求",
+        sources=[
+            RuleSourceFile(
+                file_id="rule-file",
+                file_name="规则.docx",
+                source_path="规则.docx",
+            )
+        ],
     )
     return build_initial_audit_state(
         AuditTaskContext(
             task_id="audit-1",
             project_id="project-1",
             bidder_id="bidder-1",
-            rule_set=RuleSet(project_id="project-1", rules=[rule]),
+            rule_set=RuleSet(
+                project_id="project-1", rules=[rule], source_files=rule.sources
+            ),
             bid_files=[bid],
             bid_summaries={
                 "bid-file": BidDocumentSummary(

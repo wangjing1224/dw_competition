@@ -9,11 +9,12 @@ from app.core.config import AppSettings
 from app.llm.factory import ModelRegistry
 from app.models.documents import document_ref_from_record
 from app.models.rules import RuleExtractionProgress, RuleSet
+from app.parsers.assets import atomic_write
 from app.parsers.service import prepare_document
 from app.retrieval.index import build_document_index
 from app.retrieval.models import IndexScope
+from app.retrieval.service import RetrievalService
 from app.rules.extractor import extract_rule_set
-from app.rules.merger import merge_rule_set
 from app.storage.file_store import FileOwner, FileStore
 from app.storage.repositories import ProjectRecord, ProjectRepository
 
@@ -52,8 +53,8 @@ class ProjectService:
             ]
             documents = [document_ref_from_record(record) for record in records]
             parsed = [await prepare_document(document) for document in documents]
-            if not any(item.sections for item in parsed):
-                raise ValueError("招标文件没有可用于规则抽取的文本")
+            if not parsed:
+                raise ValueError("没有待处理招标文件")
 
             await build_document_index(
                 IndexScope(
@@ -69,17 +70,13 @@ class ProjectService:
                 project.project_id,
                 parsed,
                 self.models.rule_extraction,
-                self.settings.rule_extraction_model,
-                maximum=self.settings.audit.rule_limit,
+                settings=self.settings,
+                retrieval_service=RetrievalService(
+                    self.models.embedding, self.models.rerank, self.settings
+                ),
                 progress_callback=self._write_rule_progress,
             )
-            rule_set = merge_rule_set(
-                extracted,
-                limit=self.settings.audit.rule_limit,
-            )
-            if not rule_set.rules:
-                raise ValueError("模型未抽取到任何审核规则")
-            rule_path = self._write_rule_set(rule_set)
+            rule_path = self._write_rule_set(extracted)
             return self.repository.update_status(
                 project.project_id,
                 "rule_ready",
@@ -98,13 +95,10 @@ class ProjectService:
         """RuleSet 使用临时文件校验后原子替换，避免半写入状态。"""
 
         directory = self.settings.storage.data_root / "parsed" / "rules"
-        directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{rule_set.project_id}.json"
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(rule_set.model_dump_json(indent=2), encoding="utf-8")
-        RuleSet.model_validate_json(temporary.read_text("utf-8"))
-        temporary.replace(path)
-        self._rule_progress_path(rule_set.project_id).unlink(missing_ok=True)
+        payload = rule_set.model_dump_json(indent=2)
+        RuleSet.model_validate_json(payload)
+        atomic_write(path, payload.encode("utf-8"))
         return path
 
     def _rule_progress_path(self, project_id: str) -> Path:
@@ -116,16 +110,9 @@ class ProjectService:
         )
 
     def _write_rule_progress(self, progress: RuleExtractionProgress) -> None:
-        """每个成功批次原子写入规则快照，失败时保留最近进度。"""
+        """每次有效提交及文件结束写入快照，失败时保留最近已保存成果。"""
 
         path = self._rule_progress_path(progress.project_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f"{path.name}.tmp")
-        temporary.write_text(
-            progress.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-        RuleExtractionProgress.model_validate_json(
-            temporary.read_text("utf-8")
-        )
-        temporary.replace(path)
+        payload = progress.model_dump_json(indent=2)
+        RuleExtractionProgress.model_validate_json(payload)
+        atomic_write(path, payload.encode("utf-8"))

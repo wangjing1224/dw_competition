@@ -95,11 +95,10 @@ class RuntimeSettings(ConfigModel):
 
 
 class AuditSettings(ConfigModel):
-    """主/子 Agent 的有界循环和规则总量。"""
+    """主/子审核 Agent 的有界循环。"""
 
     bid_agent_max_steps: int = Field(default=8, gt=0)
     evidence_agent_max_steps: int = Field(default=3, gt=0)
-    rule_limit: int = Field(default=30, gt=0)
 
 
 class ParsingSettings(ConfigModel):
@@ -122,6 +121,7 @@ class AppSettings(ConfigModel):
     debug: bool = False
     project_root: Path = PROJECT_ROOT
     rule_extraction_model: ChatModelSettings
+    rule_agent_max_steps: int = Field(default=8, ge=2)
     evidence_classification_model: ChatModelSettings
     bid_summary_model: ChatModelSettings
     bid_chat_model: ChatModelSettings
@@ -203,7 +203,6 @@ def get_settings() -> AppSettings:
                 "evidence_agent_max_steps": int(
                     os.getenv("EVIDENCE_AGENT_MAX_STEPS", "3")
                 ),
-                "rule_limit": int(os.getenv("RULE_LIMIT", "30")),
             },
         }
     )

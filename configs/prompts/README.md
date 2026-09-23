@@ -2,7 +2,7 @@
 
 本目录保存模型可调整的文本配置。每类调用拆成：
 
-- `xxx.md`：稳定的 SystemMessage，包含角色、边界、判断原则和轻量输出 Schema。
+- `xxx.md`：SystemMessage，包含角色、边界和判断原则；一次性结构化调用附输出 Schema，规则 Agent 使用原生工具参数 Schema。
 - `xxx_input.md`：本次运行的 HumanMessage，包含文件、规则、摘要、资料目录等动态数据。
 
 工具名称、说明和参数 Schema 由 LangChain `bind_tools` 注入，不在 System Prompt 中重复维护。
@@ -11,14 +11,15 @@
 
 | 模板 | 主要占位符 | Python 注入位置 |
 |---|---|---|
-| `rule_extraction.md` | `${rule_delta_schema}` | `app/rules/extractor.py` |
-| `rule_extraction_input.md` | `${current_rules}`、`${source_file}`、`${batch_index}`、`${batch_count}`、`${source_context}` | `app/rules/extractor.py` |
+| `rule_extraction.md` | `${rule_view}`（启动快照，会话内不覆盖） | `app/rules/extractor.py` |
+| `rule_extraction_input.md` | `${file_id}`、`${file_name}`、`${source_path}`、`${history_files}`、`${source_context}` | `app/rules/extractor.py` |
+| `rule_extraction_last_tool_round.md`、`rule_extraction_finalize.md` | `${current_step}`、`${max_steps}` | `app/agents/rule_agent.py` |
 | `evidence_classification.md` | `${evidence_types}`、`${evidence_classification_schema}` | `app/evidence/classifier.py` |
 | `evidence_classification_input.md` | `${classification_input}` | `app/evidence/classifier.py` |
 | `bid_document_summary.md` | `${bid_document_summary_schema}` | `app/audit/bid_summary.py` |
 | `bid_document_summary_input.md` | `${file_identity}`、`${project_profile}`、`${rule_categories}`、`${document_context}` | `app/audit/bid_summary.py` |
 | `bid_agent.md` | `${agent_audit_decision_schema}` | `app/agents/bid_agent.py` |
-| `bid_agent_input.md` | `${project_name}`、`${bid_file}`、`${bidder}`、`${bid_summary}`、`${rule_groups}`、`${evidence_catalog}` | `app/agents/bid_agent.py` |
+| `bid_agent_input.md` | `${project_name}`、`${project_profile}`、`${bid_file}`、`${bidder}`、`${bid_summary}`、`${rule_groups}`、`${evidence_catalog}` | `app/agents/bid_agent.py` |
 | `evidence_subagent.md` | `${evidence_review_schema}` | `app/agents/evidence_subagent.py` |
 | `evidence_subagent_input.md` | `${verification_request}`、`${evidence_type}`、`${evidence_files}` | `app/agents/evidence_subagent.py` |
 
