@@ -61,3 +61,37 @@ def test_parser_vision_has_independent_environment(monkeypatch):
     assert settings.bid_chat_model.api_key.get_secret_value() == "agent-secret"
     assert not settings.parsing.vision_enabled
     assert "vision-secret" not in repr(settings)
+
+
+def test_rule_budget_configuration_and_legacy_roles():
+    settings = get_settings()
+    assert settings.rule_extraction_model.context_window_tokens == 1_000_000
+    assert settings.rule_extraction_model.max_output_tokens is None
+    assert settings.rule_extraction_model.compaction_trigger_ratio == 0.90
+    assert settings.rule_extraction_model.tokenizer == "DeepSeek"
+    assert settings.bid_chat_model.max_output_tokens is not None
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"context_window_tokens": 0},
+        {"context_window_tokens": True},
+        {"compaction_trigger_ratio": 0},
+        {"compaction_trigger_ratio": 1},
+        {"max_output_tokens": 8192},
+        {"context_window_tokens": None},
+    ],
+)
+def test_invalid_budget_settings_rejected(values):
+    data = get_settings().rule_extraction_model.model_dump()
+    data.update(values)
+    with pytest.raises(ValidationError):
+        config.ChatModelSettings.model_validate(data)
+
+
+def test_unmigrated_roles_cannot_silently_drop_output_limit():
+    data = get_settings().model_dump()
+    data["bid_chat_model"].update(context_window_tokens=10000, max_output_tokens=None)
+    with pytest.raises(ValidationError, match="尚未接入"):
+        config.AppSettings.model_validate(data)

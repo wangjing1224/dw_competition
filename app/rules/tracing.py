@@ -28,13 +28,13 @@ def trace_payload(value):
     ),
     process_outputs=trace_payload,
 )
-async def _model_call(runnable, messages, tool_schemas):
+async def _model_call(runnable, messages, tool_schemas, call_options):
     # 禁用底层 LangChain 再次自动采集未经脱敏的同一条消息。
     with tracing_context(enabled=False):
-        return await runnable.ainvoke(messages)
+        return await runnable.ainvoke(messages, **call_options)
 
 
-async def invoke_rule_model(runnable, messages, tools, context):
+async def invoke_rule_model(runnable, messages, tools, context, **call_options):
     with tracing_context(**context):
         return await _model_call(
             runnable,
@@ -47,6 +47,7 @@ async def invoke_rule_model(runnable, messages, tools, context):
                 }
                 for tool in tools
             ],
+            call_options,
         )
 
 

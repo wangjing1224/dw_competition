@@ -13,6 +13,7 @@ from app.rules.tracing import invoke_rule_tool
 class RuleState(TypedDict):
     messages: list[BaseMessage]
     model_calls: int
+    prepared_step: int | None
 
 
 def route_rule_agent(state):
@@ -20,7 +21,9 @@ def route_rule_agent(state):
     return "tools" if getattr(state["messages"][-1], "tool_calls", None) else END
 
 
-def build_rule_graph(*, model, tools, session, max_steps, trace_context=None):
+def build_rule_graph(
+    *, model, tools, session, max_steps, controller, trace_context=None
+):
     by_name = {tool.name: tool for tool in tools}
     trace_context = trace_context or {"enabled": False}
 
@@ -68,6 +71,7 @@ def build_rule_graph(*, model, tools, session, max_steps, trace_context=None):
             session=session,
             max_steps=max_steps,
             trace_context=trace_context,
+            controller=controller,
         ),
     )
     graph.add_node("tools", execute_tools)

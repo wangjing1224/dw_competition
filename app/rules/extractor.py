@@ -10,15 +10,31 @@ from langsmith import traceable, tracing_context
 from langsmith.run_helpers import get_tracing_context
 from langsmith.utils import tracing_is_enabled
 
+from app.agents.rule_agent import prepare_rule_request
 from app.core.config import AppSettings, get_settings
 from app.graph.rule_graph import build_rule_graph
+from app.llm.context_compaction import (
+    InputBudgetError,
+    InputController,
+    NeedsCompaction,
+    compact_context,
+)
+from app.llm.factory import budgeted_generation_options
+from app.llm.input_budget import plan_document_input
+from app.llm.model_capabilities import get_model_capabilities
+from app.llm.token_counter import get_token_counter
 from app.models.documents import ParsedDocument
 from app.models.rules import RuleExtractionProgress, RuleSet, RuleSourceFile
 from app.parsers.assets import atomic_write
 from app.prompts.loader import render_prompt
 from app.retrieval.service import RetrievalService
-from app.rules.context import build_document_context, build_rule_view
+from app.rules.context import (
+    build_document_units,
+    build_rule_view,
+    render_document_range,
+)
 from app.rules.merger import finalize_rule_set
+from app.rules.tracing import invoke_rule_model
 from app.tools.common_tools import CommonTool
 from app.tools.rule_tools import RuleSession, build_rule_tools
 
@@ -26,16 +42,22 @@ RuleProgressCallback = Callable[[RuleExtractionProgress], Awaitable[None] | None
 logger = logging.getLogger(__name__)
 
 
-@traceable(
-    name="rule_extraction_agent",
-    process_inputs=lambda inputs: {
-        "file_id": inputs["session"].current.document.file_id,
-        "project_id": inputs["session"].rule_set.project_id,
-        "initial_rule_count": len(inputs["session"].rule_set.rules),
-    },
-    process_outputs=lambda _: {"session_finished": True},
-)
-async def _run_file(*, model, session, settings):
+def _batch_context(
+    *, session, units, start, end, tools, settings, model_calls=0, handoff=""
+):
+    """业务侧负责重建 System/原文；通用控制器不认识 RuleSet。"""
+    continuation = (
+        "这是同一文件的续读，前批已完成并保存。"
+        if session.batch_index > 1
+        else "这是当前文件的首个阅读批次。"
+    )
+    if handoff:
+        continuation = (
+            f"继续当前批工作：下一次是业务第 {model_calls + 1}/{settings.rule_agent_max_steps} 轮。"
+            "本批尚未完成；旧交互已整理，规则视图已刷新，已保存操作不得重复执行。"
+            "摘要不是原始依据，必要时按授权范围回查。\n\n"
+            "## 工作交接（历史摘要，非原始材料）\n" + handoff
+        )
     initial = [
         SystemMessage(
             content=render_prompt(
@@ -53,10 +75,44 @@ async def _run_file(*, model, session, settings):
                     for key, item in session.history.items()
                 )
                 or "暂无已处理历史文件",
-                source_context=build_document_context(session.current),
+                reading_scope=f"第 {session.batch_index} 个阅读批次；还有后续内容：{'是' if end < len(units) else '否'}",
+                continuation=continuation,
+                source_context=render_document_range(
+                    session.current, units, start, end
+                ),
             )
         ),
     ]
+    return prepare_rule_request(
+        {"messages": initial, "model_calls": model_calls},
+        tools=tools,
+        max_steps=settings.rule_agent_max_steps,
+    )
+
+
+@traceable(
+    name="rule_extraction_agent",
+    process_inputs=lambda inputs: {
+        "file_id": inputs["session"].current.document.file_id,
+        "project_id": inputs["session"].rule_set.project_id,
+        "initial_rule_count": len(inputs["session"].rule_set.rules),
+    },
+    process_outputs=lambda _: {"session_finished": True},
+)
+async def _run_file(*, model, session, settings):
+    units = build_document_units(session.current)
+    model_settings = settings.rule_extraction_model
+    if model_settings.context_window_tokens is None:
+        raise ValueError("规则 Agent 需要配置 context_window_tokens")
+    capabilities = get_model_capabilities(model_settings)
+    controller = InputController(
+        model_settings,
+        get_token_counter(
+            model_settings.tokenizer,
+            image_tokens_per_image=capabilities.image_tokens_per_image,
+        ),
+        capabilities,
+    )
     tools = [
         *build_rule_tools(session),
         *CommonTool(
@@ -75,22 +131,145 @@ async def _run_file(*, model, session, settings):
         session=session,
         max_steps=settings.rule_agent_max_steps,
         trace_context=trace_context,
+        controller=controller,
     )
     # 图的默认 tracing 会上传原始 State，故关闭自动采集。模型/工具调用
     # 单独记录脱敏 span：保留文本、参数、调用 ID 和结果，去掉图片 Base64。
-    with tracing_context(enabled=False):
-        final = await graph.ainvoke(
-            {"messages": initial, "model_calls": 0},
-            config={
-                "recursion_limit": settings.rule_agent_max_steps * 2 + 2,
-                "run_name": "rule_extraction_agent",
-                "metadata": {
+    cursor = 0
+    while cursor < len(units):
+        session.batch_index += 1
+        session.batch_start = session.batch_end = cursor
+        session.model_calls = 0
+        session.cached_submissions.clear()
+        session.accessed_history.clear()
+        controller.reset_history()
+        batch = plan_document_input(
+            units=units,
+            cursor=cursor,
+            build_context=lambda start, end: _batch_context(
+                session=session,
+                units=units,
+                start=start,
+                end=end,
+                tools=tools,
+                settings=settings,
+            ),
+            budget_settings=controller.budget,
+            counter=controller.counter,
+        )
+        if batch.status != "ready":
+            raise InputBudgetError(batch.blocked_reason or "没有可运行的阅读批次")
+        session.batch_end = batch.end
+        controller.previous = batch.decision
+        state = {
+            "messages": list(batch.context.messages),
+            "model_calls": 0,
+            "prepared_step": 1,
+        }
+        compacted_step = None
+        first_commit = len(session.commits)
+        while True:
+            try:
+                # 图本身关闭自动追踪；把运行关联信息传给已脱敏的模型/工具 span。
+                trace_context["metadata"] = {
+                    **(trace_context.get("metadata") or {}),
                     "project_id": session.rule_set.project_id,
                     "file_id": session.current.document.file_id,
+                    "batch_index": session.batch_index,
                     "session_id": uuid4().hex,
-                },
-            },
-        )
+                }
+                with tracing_context(enabled=False):
+                    final = await graph.ainvoke(
+                        state,
+                        config={
+                            "recursion_limit": settings.rule_agent_max_steps * 2 + 2,
+                            "run_name": "rule_extraction_agent",
+                            "metadata": trace_context["metadata"],
+                        },
+                    )
+                _check_batch_completion(final, session)
+                break
+            except NeedsCompaction as signal:
+                step = signal.state["model_calls"] + 1
+                if compacted_step == step:
+                    raise InputBudgetError(
+                        "同一业务轮已压缩，仍不能继续；不重复压缩"
+                    ) from signal
+                compacted_step = step
+                session.compaction_calls += 1
+                constraints = (
+                    f"当前文件：{session.current.document.file_id}；阅读批次：{session.batch_index}。\n"
+                    f"已使用业务轮数：{signal.state['model_calls']}；最多：{settings.rule_agent_max_steps}。\n"
+                    "当前批原文和最新完整规则视图会重新提供，不在交接中抄写。\n"
+                    f"本批已保存的提交 ID：{[item.tool_call_id for item in session.commits[first_commit:]]}。\n"
+                    f"未解决写入错误：{session.unresolved_write_error or '无'}。\n"
+                    "保留未处理条件、数值单位、来源、未提交修改和必要回查/看图待办；不得虚报整个文件完成。\n\n"
+                    + build_rule_view(session.rule_set)
+                )
+
+                async def invoke_summary(context, allowance):
+                    return await invoke_rule_model(
+                        model,
+                        list(context.messages),
+                        [],
+                        trace_context,
+                        **budgeted_generation_options(model_settings, allowance),
+                    )
+
+                compacted = await compact_context(
+                    context=signal.context,
+                    constraints=constraints,
+                    controller=controller,
+                    invoke=invoke_summary,
+                )
+                rebuilt = _batch_context(
+                    session=session,
+                    units=units,
+                    start=batch.start,
+                    end=batch.end,
+                    tools=tools,
+                    settings=settings,
+                    model_calls=signal.state["model_calls"],
+                    handoff=compacted.summary,
+                )
+                controller.reset_history()
+                decision = controller.check(rebuilt)
+                session.compaction_records.append(
+                    {
+                        "batch_index": session.batch_index,
+                        "step": step,
+                        "before_tokens": signal.decision.estimate.total,
+                        "after_tokens": decision.estimate.total
+                        if decision.estimate
+                        else None,
+                        "summary_input_estimate": compacted.input_tokens,
+                        "summary_output_tokens": compacted.output_tokens,
+                    }
+                )
+                await session.persist(session.rule_set, session.commits)
+                if decision.status != "ready":
+                    raise InputBudgetError(
+                        "压缩后仍无法发送；保留原文和规则，不重复压缩："
+                        + decision.reason
+                    )
+                state = {
+                    "messages": list(rebuilt.messages),
+                    "model_calls": signal.state["model_calls"],
+                    "prepared_step": step,
+                }
+        # 保存成功之后才推进权威阅读游标。失败时恢复，错误进度也不声称读完。
+        previous = session.next_unit_index
+        session.next_unit_index = batch.end
+        try:
+            await session.persist(session.rule_set, session.commits)
+        except Exception:
+            session.next_unit_index = previous
+            raise
+        cursor = batch.end
+    return session.rule_set
+
+
+def _check_batch_completion(final, session):
     response = final["messages"][-1]
     if session.unresolved_write_error:
         raise RuntimeError("规则提交尚未成功：" + session.unresolved_write_error)
@@ -104,7 +283,6 @@ async def _run_file(*, model, session, settings):
         or response.content.strip().rstrip("。.!！") != "处理完毕"
     ):
         raise RuntimeError(f"当前文件未完成：{response.content}")
-    return session.rule_set
 
 
 async def extract_rule_set(
@@ -116,7 +294,7 @@ async def extract_rule_set(
     settings: AppSettings | None = None,
     progress_callback: RuleProgressCallback | None = None,
 ) -> RuleSet:
-    """完整文件输入，不做固定字符切分或自动压缩；真实超限由调用失败如实暴露。"""
+    """逐文件、逐完整结构批次处理；同批超限交接续跑，不重放已保存提交。"""
     resolved = settings or get_settings()
     if not parsed_documents:
         raise ValueError("没有待处理招标文件")
@@ -154,6 +332,14 @@ async def extract_rule_set(
                 completed_file_ids=list(history) if completed is None else completed,
                 parser_versions=versions,
                 model_calls=session.model_calls,
+                next_unit_index=session.next_unit_index,
+                batch_start=session.batch_start,
+                batch_end=session.batch_end,
+                batch_index=session.batch_index,
+                file_model_calls=session.file_model_calls,
+                compaction_calls=session.compaction_calls,
+                compaction_records=session.compaction_records,
+                last_budget=session.last_budget,
                 rule_set=candidate,
                 commits=records,
                 error=error,

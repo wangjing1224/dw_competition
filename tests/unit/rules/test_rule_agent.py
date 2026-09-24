@@ -1,15 +1,19 @@
 """真实图/工具闭环配合脚本模型，不连接外部模型。"""
 
 from io import BytesIO
+from math import ceil
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import StructuredTool
 from langsmith import tracing_context
 from langsmith.run_trees import RunTree
 from PIL import Image
 
+from app.llm.context_compaction import InputBudgetError
+from app.llm.token_counter import TokenCounter
 from app.models.documents import (
     DocumentRef,
     ParsedBlock,
@@ -84,14 +88,17 @@ class ScriptModel:
     def __init__(self, replies):
         self.replies = iter(replies)
         self.calls = []
+        self.options = []
 
     def bind_tools(self, tools):
-        async def invoke(messages):
+        async def invoke(messages, **kwargs):
+            self.options.append(kwargs)
             return await self.invoke(messages, [tool.name for tool in tools])
 
         return SimpleNamespace(ainvoke=invoke)
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
+        self.options.append(kwargs)
         return await self.invoke(messages, [])
 
     async def invoke(self, messages, tools):
@@ -470,7 +477,7 @@ async def test_group_search_enforces_history_scope_and_version(env):
         )
     )
     assert response.content.count("期限原文90日") == 1
-    assert retrieval.search.await_count == 2
+    assert retrieval.search.await_count == 3
     assert "未执行" in response.content and "页码：1" in response.content
     assert session.accessed_history == {"file-1"}
     retrieval.search.return_value[0].parse_version = "different-version"
@@ -479,6 +486,62 @@ async def test_group_search_enforces_history_scope_and_version(env):
             "search_rule_source",
             "stale",
             {"querylist": [{"queries": ["期限"], "file_ids": ["file-1"]}]},
+        )
+    )
+    assert "重建索引" in response.content
+
+
+@pytest.mark.asyncio
+async def test_current_file_search_is_scoped_versioned_and_does_not_advance(env):
+    current = parsed_file(1)
+    retrieval = SimpleNamespace(
+        settings=env,
+        search=AsyncMock(
+            return_value=[
+                SearchResult(
+                    chunk_id="chunk-1",
+                    score=0.9,
+                    project_id="project-1",
+                    source=SourceRef(
+                        file_id="file-1", file_name="1.md", source_path="目录/1.md"
+                    ),
+                    content="后续章节原文",
+                    parse_version=current.markdown_path,
+                ),
+            ]
+        ),
+    )
+    session = RuleSession(
+        RuleSet(project_id="project-1"),
+        current,
+        {},
+        AsyncMock(),
+        retrieval,
+        rule_limit=env.rule_limit,
+    )
+    search = build_rule_tools(session)[0]
+    response = await search.ainvoke(
+        tool_call(
+            "search_rule_source",
+            "search-current",
+            {
+                "querylist": [{"queries": ["参数"], "file_ids": ["file-1"]}],
+            },
+        )
+    )
+    assert "后续章节原文" in response.content and "不推进阅读进度" in response.content
+    assert session.next_unit_index == 0
+    filters = retrieval.search.call_args.args[1]
+    assert filters.project_id == "project-1" and filters.file_ids == ["file-1"]
+    assert str(filters.data_role) == "rule_source"
+    retrieval.search.return_value[0].parse_version = "stale"
+    response = await search.ainvoke(
+        tool_call(
+            "search_rule_source",
+            "stale-current",
+            {
+                "querylist": [{"queries": ["参数"], "file_ids": ["file-1"]}],
+            },
         )
     )
     assert "重建索引" in response.content
@@ -650,3 +713,278 @@ async def test_tool_calls_from_unbound_final_model_are_protocol_failure(env):
     with pytest.raises(RuntimeError, match="最终轮仍发出"):
         await extract(env, model, [parsed_file(1)])
     assert len(model.calls) == 3 and not model.calls[-1][1]
+
+
+def mock_counter(monkeypatch):
+    counter = TokenCounter("mock-characters", len, 100)
+    monkeypatch.setattr(
+        "app.rules.extractor.get_token_counter", lambda *a, **k: counter
+    )
+    return counter
+
+
+def budget_env(env, capacity, *, steps=3):
+    return env.model_copy(
+        update={
+            "rule_agent_max_steps": steps,
+            "rule_extraction_model": env.rule_extraction_model.model_copy(
+                update={
+                    "context_window_tokens": capacity,
+                    "compaction_trigger_ratio": 0.9,
+                    "max_output_tokens": None,
+                }
+            ),
+        }
+    )
+
+
+def read_progress(env):
+    return RuleExtractionProgress.model_validate_json(
+        (env.storage.data_root / "parsed/rules/project-1.progress.json").read_text()
+    )
+
+
+@pytest.mark.asyncio
+async def test_small_window_batches_keep_complete_blocks_latest_view_and_progress(
+    env, monkeypatch
+):
+    from app.llm.input_budget import BudgetSettings, check_input
+    from app.rules.context import build_document_units
+    from app.rules.extractor import _batch_context
+
+    counter = mock_counter(monkeypatch)
+    settings = budget_env(env, 100_000, steps=2)
+    parsed = parsed_file(1)
+    parsed.sections[0].blocks = [
+        ParsedBlock(kind="text", source_block_index=0, content="FIRST:" + "A" * 3000),
+        ParsedBlock(
+            kind="table",
+            source_block_index=1,
+            content="|单位|阈值|\n|---|---|\n|" + "B" * 3000 + "|90日|",
+        ),
+        ParsedBlock(kind="text", source_block_index=2, content="THIRD:" + "C" * 3000),
+    ]
+    before = parsed.model_dump()
+    session = RuleSession(
+        RuleSet(project_id="project-1"),
+        parsed,
+        {},
+        AsyncMock(),
+        SimpleNamespace(settings=settings),
+        rule_limit=settings.rule_limit,
+    )
+    session.batch_index = 1
+    tools = [
+        *build_rule_tools(session),
+        *CommonTool(parsed_documents={"file-1": parsed}, settings=settings).tools(),
+    ]
+    context = _batch_context(
+        session=session,
+        units=build_document_units(parsed),
+        start=0,
+        end=1,
+        tools=tools,
+        settings=settings,
+    )
+    # 按 Mock 的固定输入测定容量，不写死 2000；额外留一点规则增长空间。
+    cost = check_input(
+        context=context, counter=counter, budget_settings=BudgetSettings(100_000)
+    ).estimate.total
+    settings = budget_env(settings, ceil((cost + 600) / 0.9), steps=2)
+    write = tool_call(
+        "submit_rule_delta", "one-write", submit_args([add_operation()], view="changed")
+    )
+    model = ScriptModel(
+        [
+            AIMessage(content="", tool_calls=[write]),
+            AIMessage(content="处理完毕"),
+            AIMessage(content="处理完毕"),
+            AIMessage(content="处理完毕"),
+        ]
+    )
+    progress = []
+    result = await extract(settings, model, [parsed], progress.append)
+    assert len(result.rules) == 1 and parsed.model_dump() == before
+    assert "FIRST:" in str(model.calls[0][0]) and "THIRD:" not in str(model.calls[0][0])
+    assert "B" * 3000 in str(model.calls[2][0])
+    assert "rule-1" in model.calls[2][0][0].content
+    assert "FIRST:" not in str(model.calls[2][0]) and "THIRD:" not in str(
+        model.calls[2][0]
+    )
+    assert "THIRD:" in str(model.calls[3][0])
+    for index in [2, 3]:
+        assert not any(
+            message.type in {"ai", "tool"} for message in model.calls[index][0]
+        )
+    final = progress[-1]
+    assert (final.next_unit_index, final.batch_index, final.file_model_calls) == (
+        3,
+        3,
+        4,
+    )
+    assert final.completed_file_ids == ["file-1"] and final.compaction_calls == 0
+    assert all(p.completed_file_ids == [] for p in progress if p.next_unit_index < 3)
+    assert all(option["extra_body"]["max_tokens"] > 0 for option in model.options)
+
+
+def compaction_scenario(env, monkeypatch, *, summary=None):
+    mock_counter(monkeypatch)
+    original_builder = build_rule_tools
+
+    async def load_mock_material():
+        return "仅用于压缩测试的已查材料：" + "X" * 14000
+
+    tool = StructuredTool.from_function(
+        coroutine=load_mock_material,
+        name="load_mock_material",
+        description="Mock 只读工具，返回已查材料。",
+    )
+    monkeypatch.setattr(
+        "app.rules.extractor.build_rule_tools",
+        lambda session: [*original_builder(session), tool],
+    )
+    parsed = parsed_file(1)
+    parsed.sections[0].blocks[0].content = (
+        "原文锚点-BEGIN:" + "D" * 30000 + ":原文锚点-END"
+    )
+    settings = budget_env(env, 51_000, steps=2)
+    write = tool_call(
+        "submit_rule_delta",
+        "saved-before-compaction",
+        submit_args([add_operation()], view="changed"),
+    )
+    read = tool_call("load_mock_material", "read-before-compaction", {})
+    model = ScriptModel(
+        [
+            AIMessage(content="", tool_calls=[write, read]),
+            summary
+            if summary is not None
+            else AIMessage(
+                content="已保存 rule-1，来源 file-1；只读核对已完成。请根据已保存状态收尾。"
+            ),
+            AIMessage(content="处理完毕"),
+        ]
+    )
+    return settings, parsed, model
+
+
+@pytest.mark.asyncio
+async def test_compaction_reinvokes_same_batch_preserves_write_and_final_round(
+    env, monkeypatch
+):
+    settings, parsed, model = compaction_scenario(env, monkeypatch)
+    result = await extract(settings, model, [parsed])
+    assert len(result.rules) == 1 and len(model.calls) == 3
+    assert model.calls[0][1] and model.calls[1][1] == model.calls[2][1] == []
+    assert all(message.type in {"system", "human"} for message in model.calls[1][0])
+    final_messages = model.calls[2][0]
+    assert all(message.type in {"system", "human"} for message in final_messages)
+    assert "rule-1" in final_messages[0].content
+    assert parsed.sections[0].blocks[0].content in final_messages[1].content
+    assert "已保存 rule-1" in final_messages[1].content
+    assert "第 2/2 轮" in final_messages[1].content
+    assert (
+        sum("本轮不提供工具" in str(message.content) for message in final_messages) == 1
+    )
+    progress = read_progress(settings)
+    assert progress.model_calls == progress.file_model_calls == 2
+    assert progress.compaction_calls == 1 and len(progress.compaction_records) == 1
+    assert progress.next_unit_index == 1 and progress.completed_file_ids == ["file-1"]
+    assert len(progress.commits) == 1
+    assert progress.commits[0].tool_call_id == "saved-before-compaction"
+    assert (
+        progress.compaction_records[0]["after_tokens"]
+        < progress.compaction_records[0]["before_tokens"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_two_compactions_require_intervening_business_calls(env, monkeypatch):
+    settings, parsed, initial = compaction_scenario(env, monkeypatch)
+    first = next(initial.replies)
+    settings = budget_env(settings, 51_000, steps=3)
+    model = ScriptModel(
+        [
+            first,
+            AIMessage(content="rule-1 已保存。还需一次只读回查，不能重复提交。"),
+            AIMessage(
+                content="",
+                tool_calls=[tool_call("load_mock_material", "second-read", {})],
+            ),
+            AIMessage(content="两次只读回查已完成，rule-1 已保存。请收尾。"),
+            AIMessage(content="处理完毕"),
+        ]
+    )
+    await extract(settings, model, [parsed])
+    assert len(model.calls) == 5
+    assert model.calls[2][1]  # 第 2/3 轮续跑仍有工具；不能误当成最终轮。
+    assert model.calls[1][1] == model.calls[3][1] == model.calls[4][1] == []
+    progress = read_progress(settings)
+    assert progress.model_calls == progress.file_model_calls == 3
+    assert progress.compaction_calls == 2 and len(progress.commits) == 1
+    assert [record["step"] for record in progress.compaction_records] == [2, 3]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "summary",
+    [
+        AIMessage(content=""),
+        AIMessage(content="摘要半截", response_metadata={"finish_reason": "length"}),
+        AIMessage(content="膨胀摘要" + "S" * 30000),
+    ],
+)
+async def test_failed_compaction_keeps_commits_and_does_not_advance_or_loop(
+    env, monkeypatch, summary
+):
+    settings, parsed, model = compaction_scenario(env, monkeypatch, summary=summary)
+    with pytest.raises(InputBudgetError):
+        await extract(settings, model, [parsed, parsed_file(2)])
+    progress = read_progress(settings)
+    assert len(model.calls) == 2 and progress.compaction_calls == 1
+    assert progress.model_calls == progress.file_model_calls == 1
+    assert progress.next_unit_index == 0 and progress.completed_file_ids == []
+    assert progress.current_file_id == "file-1" and len(progress.commits) == 1
+    assert len(progress.rule_set.rules) == 1 and progress.error
+
+
+@pytest.mark.asyncio
+async def test_progress_save_failure_does_not_publish_finished_cursor(env, monkeypatch):
+    mock_counter(monkeypatch)
+    progress = []
+
+    async def persist(value):
+        if value.next_unit_index > 0:
+            raise OSError("Mock 进度保存失败")
+        progress.append(value)
+
+    model = ScriptModel([AIMessage(content="处理完毕")])
+    with pytest.raises(OSError, match="进度保存失败"):
+        await extract(env, model, [parsed_file(1), parsed_file(2)], persist)
+    assert len(model.calls) == 1
+    assert progress[-1].next_unit_index == 0
+    assert progress[-1].completed_file_ids == [] and progress[-1].error
+
+
+@pytest.mark.asyncio
+async def test_oversize_atomic_block_stops_without_call_or_skip(env, monkeypatch):
+    mock_counter(monkeypatch)
+    settings = budget_env(env, 1000)
+    parsed = parsed_file(1)
+    parsed.sections[0].blocks[0].content = "HUGE" * 1000
+    model = ScriptModel([])
+    with pytest.raises(InputBudgetError, match="完整结构"):
+        await extract(settings, model, [parsed, parsed_file(2)])
+    assert not model.calls
+    progress = read_progress(settings)
+    assert progress.next_unit_index == 0 and progress.completed_file_ids == []
+
+
+@pytest.mark.asyncio
+async def test_empty_blocks_do_not_masquerade_as_completed_document(env):
+    parsed = parsed_file(1)
+    parsed.sections[0].blocks[0].content = "  "
+    model = ScriptModel([])
+    with pytest.raises(ValueError, match="没有可阅读"):
+        await extract(env, model, [parsed])
+    assert not model.calls

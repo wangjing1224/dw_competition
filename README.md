@@ -96,7 +96,7 @@ Embedding 模型、URL 或维度变化后，停止服务并删除 `data/indexes/
 System 放稳定要求和启动时的完整规则视图，Human 放当前文件的有序正文、表格及图片路径。
 提交结果以 ToolMessage 更新上下文，不反复改写 System；下一份文件使用最新规则库启动。
 
-- `search_rule_source`：按查询组回查已处理的历史文件，不提前读取未来文件。
+- `search_rule_source`：按查询组回查当前文件及已完成的历史文件，不提前读取其他未来文件；补查不推进阅读游标。
 - `view_image`：通过统一图片路径查看当前或历史文件中的已登记图片；由 `CommonTool` 提供。
 - `submit_rule_delta`：一批 `add/merge/replace` 或项目简介更新；三个参数显式全为 `null` 时只读查看。
 
@@ -109,7 +109,7 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 所有文件处理完成才生成正式 `{project_id}.json`；进度及变更记录保留，不自动跨进程续跑。
 旧版规则数据不兼容、不迁移，也不会自动删除；测试新流程需重新上传原始招标文件抽取。
 
-`configs/model.yaml` 顶层 `rule_agent_max_steps` 独立配置规则 Agent 的调用轮数，默认 8。
+`configs/model.yaml` 顶层 `rule_agent_max_steps` 配置每个阅读批次的规则 Agent 调用轮数，默认 8；同批压缩续跑不清零。
 同层 `rule_limit: 10000` 配置规则库总条数上限。整批增量校验后、保存前，若总条数超过该值，
 会调用 `app/rules/policies.py` 的 `handle_rule_limit_exceeded()`；目前只打印警告并继续保存全部规则，
 不拒绝、截断或自动合并。后续超限策略从这个函数接入，当前将上限设大即可保持原有业务行为。
@@ -117,13 +117,42 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 沿用 `RULE_EXTRACTION_MODEL_BASE_URL/API_KEY` 和 `rule_extraction_model.model`；模型需支持原生工具调用及多模态工具消息。
 没有自动切换模型，实际网关的识图和工具调用能力需要单独验证。
 
-当前输入为完整文件，没有动态 Token 装载器；真实超限或未完成会明确失败，不静默截断。
+当前按有序结构装载：全文能放下就整份输入，否则按连续完整块分批，不截表、不跳过超大块。
+每批使用最新规则视图；正常换批不额外调用摘要模型。多轮历史超出阈值时生成交接摘要，
+保留当前批原文、已保存规则、工具提交状态和业务轮次，从外层重新 invoke 继续当前批。
+进度文件同时记录批次、下一结构位置、批次/文件调用数及压缩诊断。全部批次成功后才完成文件；
+单结构过大、固定输入过大或压缩失败会明确停止并保留成果，不静默裁剪，也不自动重跑失败批次。
 开启 LangSmith 时记录独立文件会话和脱敏的模型/工具调用，保留文字与位置，不上传图片 Base64。
-资料入库 Agent、动态 Token 控制器及人工规则维护接口留给后续开发。
+资料入库 Agent、其他业务接入输入控制器及人工规则维护接口留给后续开发。
+
+### 模型输入预算
+
+规则模型使用 `configs/model.yaml` 中的 `context_window_tokens`、`compaction_trigger_ratio`（默认 0.90）
+和 `tokenizer`（`DeepSeek` 或 `utf8`）。仅规则模型取消固定 `max_output_tokens`；其他调用保持原配置。
+控制器核算 System、实际工具/输出约束、Human、AI/Tool 历史四类内容，计入真实图片但不把 Base64 当文字。
+相同请求复用计数；有可靠服务用量时补计新增历史，重建消息或更换绑定后重新本地核算。
+输入达到阈值才按业务策略处理，不把 Token 判断放在动作路由中。
+
+接口输出额度从预留窗口推导：默认约 10% 中留窗口的 1% 给计数误差，再受实际剩余空间与服务输出上限约束。
+压缩调用可越过业务软阈值，但输入、输出和余量仍须满足硬容量。能力表在 `app/llm/model_capabilities.py`，
+目前登记的是 [DeepSeek 官方 Chat 接口](https://api-docs.deepseek.com/api/create-chat-completion/)；
+其他网关需先核实并登记，不能凭同名模型沿用官方上限。图片计数采用[官方单图上界](https://api-docs.deepseek.com/guides/vision/)。
+
+`DeepSeek` 使用[官方分词资源](https://api-docs.deepseek.com/quick_start/token_usage/)，固定在本地缓存，
+校验指纹并在进程中复用，不加载生成模型、不在请求时下载。首次准备资源：
+
+```bash
+curl -fL https://cdn.deepseek.com/api-docs/deepseek_v4_tokenizer.zip -o /tmp/deepseek_v4_tokenizer.zip
+unzip -n /tmp/deepseek_v4_tokenizer.zip 'deepseek_v4_tokenizer/tokenizer*.json' -d models/tokenizers
+```
+
+分词资源位于 `models/tokenizers/deepseek_v4_tokenizer/`，不提交 Git；缺失或指纹不匹配时告警并回退 UTF-8 字节估算。
+文本估算与服务端真实 Token 不完全等同，UTF-8 兜底尤其保守；实际图片缺少计数能力则明确阻塞。
+本地小窗口 Mock 已覆盖分批、交接、失败保留与最终轮行为；真实接口的计数偏差、压缩质量仍需单独验证。
 
 ## 公共解析与视觉辅助
 
-规则 Agent 已接入有序解析结构和通用看图工具；资料入库 Agent、输入预算控制器尚未实现。
+规则 Agent 已接入有序解析结构、通用看图工具和输入预算控制器；资料入库 Agent 尚未实现。
 三条业务解析路径统一调用异步 `prepare_document()`：先做原生解析，再按配置进行视觉辅助。
 原同步公开入口 `parse_document()` 已删除；各格式解析器内部的 `.parse()` 仍保留。
 迁移只改解析入口，文件之间仍按原顺序串行处理。

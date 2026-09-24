@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ENV_PATTERN = re.compile(r"^\$\{([A-Z0-9_]+)\}$")
@@ -31,9 +31,21 @@ class ChatModelSettings(ConfigModel):
     temperature: float = Field(ge=0)
     timeout_seconds: float = Field(gt=0)
     max_retries: int = Field(ge=0)
-    max_output_tokens: int = Field(gt=0)
+    # 尚未迁移的调用保留固定输出额度；接入控制器的调用逐请求推导。
+    max_output_tokens: int | None = Field(default=None, gt=0)
+    context_window_tokens: int | None = Field(default=None, gt=0, strict=True)
+    compaction_trigger_ratio: float = Field(default=0.90, gt=0, lt=1)
+    tokenizer: str = "DeepSeek"
     enable_thinking: bool = False
     structured_output_mode: Literal["json_schema", "json_object", "prompt_only"]
+
+    @model_validator(mode="after")
+    def validate_budget_mode(self):
+        if (self.max_output_tokens is None) == (self.context_window_tokens is None):
+            raise ValueError(
+                "必须二选一：固定 max_output_tokens 或 context_window_tokens"
+            )
+        return self
 
 
 class EmbeddingSettings(ConfigModel):
@@ -140,6 +152,22 @@ class AppSettings(ConfigModel):
     storage: StorageSettings
     runtime: RuntimeSettings
     audit: AuditSettings = Field(default_factory=AuditSettings)
+
+    @model_validator(mode="after")
+    def validate_budget_adoption(self):
+        if self.rule_extraction_model.context_window_tokens is None:
+            raise ValueError("规则模型已接入输入控制器，需要 context_window_tokens")
+        for name in (
+            "evidence_classification_model",
+            "bid_summary_model",
+            "bid_chat_model",
+            "evidence_chat_model",
+            "parser_vision_model",
+        ):
+            model = getattr(self, name)
+            if model is not None and model.context_window_tokens is not None:
+                raise ValueError(f"{name} 尚未接入输入控制器，暂保留 max_output_tokens")
+        return self
 
     def ensure_runtime_directories(self) -> None:
         """按需创建运行目录，不使用 .gitkeep 提前占位。"""

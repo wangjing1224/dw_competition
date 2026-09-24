@@ -16,6 +16,8 @@ def test_rule_system_and_input_are_separate():
         file_name="技术规范.md",
         source_path="规则/技术规范.md",
         history_files="暂无已处理历史文件",
+        reading_scope="第 1 批；还有后续内容：否",
+        continuation="这是当前文件的首批内容。",
         source_context="技术要求：像素不低于640x480",
     )
     assert "当前暂无规则" in system

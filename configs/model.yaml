@@ -1,4 +1,4 @@
-# 规则 Agent 每份文件最多调用次数，最后一次不提供工具；与审核 Agent 独立。
+# 规则 Agent 每个阅读批次最多调用次数；压缩续跑不清零，最后一次不提供工具。
 rule_agent_max_steps: 8
 
 # 规则库总条数上限预留值，10000 用于当前近似不限制的试运行。
@@ -15,7 +15,10 @@ rule_extraction_model:
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
-  max_output_tokens: 8192
+  # 仅规则 Agent 接入输入控制器；其他角色仍保留原有输出额度。
+  context_window_tokens: 1000000
+  compaction_trigger_ratio: 0.90
+  tokenizer: DeepSeek
   # Agent 使用原生工具调用；收尾仅普通文本，不强制整库 JSON。
   enable_thinking: false
   # 保留通用模型配置；规则 Agent 不调用一次性结构化抽取接口。

@@ -179,6 +179,14 @@ class RuleExtractionProgress(StrictModel):
     completed_file_ids: list[str] = Field(default_factory=list)
     parser_versions: dict[str, str] = Field(default_factory=dict)
     model_calls: int = Field(ge=0)
+    next_unit_index: int = Field(default=0, ge=0)
+    batch_start: int = Field(default=0, ge=0)
+    batch_end: int = Field(default=0, ge=0)
+    batch_index: int = Field(default=0, ge=0)
+    file_model_calls: int = Field(default=0, ge=0)
+    compaction_calls: int = Field(default=0, ge=0)
+    compaction_records: list[dict] = Field(default_factory=list)
+    last_budget: dict = Field(default_factory=dict)
     rule_set: RuleSet
     commits: list[RuleCommitRecord] = Field(default_factory=list)
     error: str | None = None

@@ -25,7 +25,7 @@ class RuleSearchGroup(StrictModel):
     )
     file_ids: list[NonBlank] = Field(
         min_length=1,
-        description="本组所有查询的共同文件范围，仅可选已处理历史文件 ID，不能填当前或未处理文件。",
+        description="本组所有查询的共同文件范围，仅可选当前文件或已完成历史文件 ID，不可填未来文件。",
     )
 
 
@@ -55,6 +55,15 @@ class RuleSession:
     unresolved_write_error: str | None = None
     cached_submissions: dict[str, tuple[dict, str]] = field(default_factory=dict)
     accessed_history: set[str] = field(default_factory=set)
+    # 以下仅为代码侧运行进度，不进入规则库协议或工具参数。
+    next_unit_index: int = 0
+    batch_start: int = 0
+    batch_end: int = 0
+    batch_index: int = 0
+    file_model_calls: int = 0
+    compaction_calls: int = 0
+    compaction_records: list[dict] = field(default_factory=list)
+    last_budget: dict = field(default_factory=dict)
 
     async def submit(self, request: SubmitRuleDeltaInput, call_id: str) -> str:
         if request.return_view is None:
@@ -135,6 +144,7 @@ def build_rule_tools(session: RuleSession) -> list[StructuredTool]:
         return await session.submit(request, tool_call_id)
 
     async def search_rule_source(querylist: list[RuleSearchGroup]) -> str:
+        allowed = {**session.history, session.current.document.file_id: session.current}
         groups = []
         for number, group in enumerate(querylist, 1):
             lines = [
@@ -143,11 +153,21 @@ def build_rule_tools(session: RuleSession) -> list[StructuredTool]:
                 "文件范围：" + "、".join(group.file_ids),
             ]
             try:
-                if not set(group.file_ids) <= session.history.keys():
+                if not set(group.file_ids) <= allowed.keys():
                     raise ValueError(
-                        "只能回查已完成处理的历史文件，不能查询当前或未处理文件"
+                        "只能回查当前文件及已完成历史文件，不能查询未来或越界文件"
                     )
-                parsed = [session.history[key] for key in group.file_ids]
+                parsed = [allowed[key] for key in group.file_ids]
+                if any(
+                    item.document.project_id != session.rule_set.project_id
+                    or str(item.document.data_role) != "rule_source"
+                    for item in parsed
+                ):
+                    raise ValueError("授权文件角色或项目不符")
+                if session.current.document.file_id in group.file_ids:
+                    lines.append(
+                        "当前文件补查可能涉及后续正文，不代表该范围已处理，不推进阅读进度。"
+                    )
                 if not any(
                     block.content.strip()
                     or any(image.transcription.strip() for image in block.images)
@@ -173,7 +193,7 @@ def build_rule_tools(session: RuleSession) -> list[StructuredTool]:
                             or result.project_id != session.rule_set.project_id
                         ):
                             raise ValueError("检索返回越界文件")
-                        expected = session.history[result.source.file_id]
+                        expected = allowed[result.source.file_id]
                         if (
                             not expected.markdown_path
                             or result.parse_version != expected.markdown_path
@@ -213,9 +233,7 @@ def build_rule_tools(session: RuleSession) -> list[StructuredTool]:
                     if result.image_paths:
                         registered = {
                             image.path
-                            for section in session.history[
-                                result.source.file_id
-                            ].sections
+                            for section in allowed[result.source.file_id].sections
                             for block in section.blocks
                             for image in block.images
                         }
