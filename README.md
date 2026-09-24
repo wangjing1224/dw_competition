@@ -66,13 +66,28 @@ http://127.0.0.1:8000/web/
 ## 模型配置
 
 - `.env`：保存各职责 Chat 模型和 Embedding 的连接地址、Key，不提交 Git。
-- `configs/model.yaml`：保存模型名、温度、超时、重试、维度和批大小。
+- `configs/model.yaml`：保存 Chat 平台、模型名、思考开关、温度、超时、重试、维度和批大小。
 - `configs/retrieval.yaml`：保存分段、候选数量和混合召回权重。
 - `configs/storage.yaml`：保存数据目录、SQLite 路径和上传安全限制。
 - `configs/prompts/`：保存各流程的 Prompt 模板和工具说明。
 
-Chat 和 Embedding 使用 LangChain 的 OpenAI 兼容封装。首期可使用阿里百炼；
-后续切换本地服务时，修改对应 URL、Key 和模型名即可。Rerank 使用进程内
+Chat 使用显式平台适配，共享 LangChain 的 Chat Completions 封装：
+
+| `platform` | 典型服务地址 | `enable_thinking` 对应请求参数 |
+| --- | --- | --- |
+| `deepseek` | `https://api.deepseek.com` | `thinking.type=enabled/disabled` |
+| `bailian` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `enable_thinking`；思考模式用流式接收并聚合完整回复 |
+| `openai` | `https://api.openai.com/v1` | 已登记推理型号映射 `reasoning_effort`，普通型号不发送第三方参数 |
+
+切换时同时修改各角色的 `platform`、`model` 及 `.env` 对应 URL/Key，不根据模型名猜平台。
+OpenAI 可切换思考示例为 `gpt-5.1`，开为 `medium`、关为 `none`；不支持关闭的推理型号会明确报错，
+未登记的推理型号需先核实能力。协议实现见 `app/llm/platforms.py`，
+参数参考 [DS 官方](https://api-docs.deepseek.com/guides/thinking_mode/)、
+[百炼](https://help.aliyun.com/zh/model-studio/deep-thinking)、
+[OpenAI](https://developers.openai.com/api/docs/models/gpt-5.1)。不自动替换平台或偷偷打开思考。
+Embedding 仍使用原有 OpenAI 兼容封装，本地配置不变；第三方 Chat 网关协议需另行核实，不能套用 DS 官方参数。
+
+Rerank 使用进程内
 `sentence-transformers` CrossEncoder，默认加载 `Qwen3-Reranker-0.6B`：
 Mac 优先使用 MPS，Linux 优先使用可用的 NPU/CUDA，设备加载或推理失败时
 自动回退 CPU。模型在第一次检索时通过魔塔社区下载并复用本地缓存，不影响
@@ -135,8 +150,13 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 
 接口输出额度从预留窗口推导：默认约 10% 中留窗口的 1% 给计数误差，再受实际剩余空间与服务输出上限约束。
 压缩调用可越过业务软阈值，但输入、输出和余量仍须满足硬容量。能力表在 `app/llm/model_capabilities.py`，
-目前登记的是 [DeepSeek 官方 Chat 接口](https://api-docs.deepseek.com/api/create-chat-completion/)；
-其他网关需先核实并登记，不能凭同名模型沿用官方上限。图片计数采用[官方单图上界](https://api-docs.deepseek.com/guides/vision/)。
+目前登记 DS 官方 Flash、OpenAI GPT-5.1 和百炼北京 Qwen3.6-Plus/Qwen-Plus 的文本上限；
+其他型号、地域和网关需先核实并登记，不能凭同名模型沿用官方上限。
+DS 图片计数采用[官方单图上界](https://api-docs.deepseek.com/guides/vision/)；其他平台的图片预算未标定时明确阻塞。
+Token 计数与实际发送使用同一个平台消息转换：DS 思考+工具模式回传并计入 `reasoning_content`，
+取消工具的收尾不回传该字段；百炼已登记的 `preserve_thinking` 型号按协议回传。
+OpenAI 不把隐藏的推理输出 Token 数直接累加成下一轮输入。平台/绑定变化会使旧计数基准失效。
+分词器仍由 `tokenizer` 独立选择，不随平台自动切换；非 DS 模型暂用 `utf8` 保守估算。
 
 `DeepSeek` 使用[官方分词资源](https://api-docs.deepseek.com/quick_start/token_usage/)，固定在本地缓存，
 校验指纹并在进程中复用，不加载生成模型、不在请求时下载。首次准备资源：

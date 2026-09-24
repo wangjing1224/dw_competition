@@ -11,41 +11,36 @@ from app.core.config import (
     get_settings,
 )
 from app.llm.embedding_model import EmbeddingModel
+from app.llm.platforms import ChatProtocol, PlatformChatOpenAI
 from app.llm.rerank_model import RerankModel
 
 
 def budgeted_generation_options(settings: ChatModelSettings, tokens: int) -> dict:
     """仅已接入控制器的调用使用；不省略接口额度而退回服务默认值。"""
-    return {
-        "extra_body": {
-            "max_tokens": tokens,
-            "enable_thinking": settings.enable_thinking,
-        }
-    }
+    return ChatProtocol.from_settings(settings).generation_options(tokens)
 
 
 def build_chat_model(settings: ChatModelSettings) -> ChatOpenAI:
     api_key = settings.api_key.get_secret_value()
     if not api_key:
         raise ValueError(f"模型 {settings.model} 未配置 API Key")
-    return ChatOpenAI(
+    protocol = ChatProtocol.from_settings(settings)
+    return PlatformChatOpenAI(
+        protocol=protocol,
         model=settings.model,
         base_url=settings.base_url.rstrip("/"),
         api_key=api_key,
-        temperature=settings.temperature,
+        # DeepSeek 思考模式忽略采样参数；OpenAI 推理模式可能直接拒绝 temperature。
+        temperature=None
+        if settings.enable_thinking and settings.platform != "bailian"
+        else settings.temperature,
         timeout=settings.timeout_seconds,
         max_retries=settings.max_retries,
-        # 算力网文档使用 max_tokens，并通过 enable_thinking 控制
-        # Qwen3/DeepSeek-V4 的思考模式；extra_body 会把两项放到
-        # OpenAI 兼容请求的顶层。
-        extra_body={
-            **(
-                {"max_tokens": settings.max_output_tokens}
-                if settings.max_output_tokens is not None
-                else {}
-            ),
-            "enable_thinking": settings.enable_thinking,
-        },
+        use_responses_api=False,
+        # 百炼部分思考模型仅支持流式；ainvoke 仍聚合为完整 AIMessage 返回。
+        streaming=settings.platform == "bailian" and settings.enable_thinking,
+        stream_usage=True,
+        **protocol.generation_options(settings.max_output_tokens),
     )
 
 

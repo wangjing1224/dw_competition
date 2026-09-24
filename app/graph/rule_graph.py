@@ -51,8 +51,25 @@ def build_rule_graph(
             except Exception as exc:
                 detail = f"{type(exc).__name__}: {exc}"
                 if name == "submit_rule_delta":
-                    session.unresolved_write_error = detail
-                    detail = "提交失败，本次规则和项目简介均未修改。\n" + detail
+                    args = call.get("args")
+                    # 只读意图按两个写入参数显式为 null 判定，不把误填 all
+                    # 当成未完成写入。缺参/非法写入仍保守归入提交错误。
+                    reading = isinstance(args, dict) and all(
+                        key in args and args[key] is None
+                        for key in ("operations", "project_profile")
+                    )
+                    if reading:
+                        detail = (
+                            "查看规则失败，没有发起写入。只读请重试："
+                            '{"operations":null,"project_profile":null,"return_view":null}。\n'
+                            + detail
+                        )
+                    else:
+                        session.unresolved_write_error = detail
+                        detail = (
+                            "提交失败，本次规则和项目简介均未修改，纠正后重新提交。\n"
+                            + detail
+                        )
                 else:
                     detail = "工具未完成，不能视为无要求或图片不可读。\n" + detail
                 result = ToolMessage(

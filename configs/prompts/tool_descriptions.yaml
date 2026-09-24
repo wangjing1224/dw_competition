@@ -22,10 +22,14 @@ submit_rule_delta: |-
   不接受空 operations 列表或省略参数。add 新增；merge 的 requirement 只写新增文本、由系统追加，
   replace 提交完整字段并选择完整非空 source_file_ids。add/merge 不填来源列表；ID 由系统维护。
   每项 reason 都写更新后整条规则的完整依据说明，始终覆盖，可为空字符串，不可省略。
+  只读示例：{"operations":null,"project_profile":null,"return_view":null}。
+  只更新简介并查看全库：{"operations":null,"project_profile":"更新后的完整简介","return_view":"all"}。
+  不要为了查看全库把只读示例的 return_view 改成 all；all 是真实写入后的返回范围，不是查看命令。
   返回：成功时仅返回渲染后的 Markdown 规则视图，不是 JSON。
   changed 返回整批最终新增或修改的全部存续规则及已更新简介，all 返回当前完整规则库。
   视图含规则 ID、等级、正文、来源文件 ID、依据说明，不含维护标记。
   失败时整批不生效，明确返回哪项操作及原因；纠正后再提交，不得把候选变更当成已保存。
+  查看失败与提交失败不同：查看失败只需纠正查看参数，不能为此重复已保存的操作。
 
 # 主审核 Agent：按当前 RuleItem 检索当前投标文件中的响应。
 search_bid_response: >-

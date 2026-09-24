@@ -824,7 +824,7 @@ async def test_small_window_batches_keep_complete_blocks_latest_view_and_progres
     )
     assert final.completed_file_ids == ["file-1"] and final.compaction_calls == 0
     assert all(p.completed_file_ids == [] for p in progress if p.next_unit_index < 3)
-    assert all(option["extra_body"]["max_tokens"] > 0 for option in model.options)
+    assert all(option["max_tokens"] > 0 for option in model.options)
 
 
 def compaction_scenario(env, monkeypatch, *, summary=None):
@@ -906,7 +906,10 @@ async def test_two_compactions_require_intervening_business_calls(env, monkeypat
     model = ScriptModel(
         [
             first,
-            AIMessage(content="rule-1 已保存。还需一次只读回查，不能重复提交。"),
+            # 模拟摘要错误推断轮次，代码仍应保留第 2/3 轮工具并提供权威提醒。
+            AIMessage(
+                content="rule-1 已保存。错误安排：下一轮是最后一轮，不可调用工具。"
+            ),
             AIMessage(
                 content="",
                 tool_calls=[tool_call("load_mock_material", "second-read", {})],
@@ -918,11 +921,119 @@ async def test_two_compactions_require_intervening_business_calls(env, monkeypat
     await extract(settings, model, [parsed])
     assert len(model.calls) == 5
     assert model.calls[2][1]  # 第 2/3 轮续跑仍有工具；不能误当成最终轮。
+    assert "第 2/3 轮" in model.calls[2][0][1].content
+    assert "不采纳摘要中的轮次安排" in model.calls[2][0][1].content
     assert model.calls[1][1] == model.calls[3][1] == model.calls[4][1] == []
     progress = read_progress(settings)
     assert progress.model_calls == progress.file_model_calls == 3
     assert progress.compaction_calls == 2 and len(progress.commits) == 1
     assert [record["step"] for record in progress.compaction_records] == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_invalid_read_can_recover_without_poisoning_saved_rules(env):
+    settings = env.model_copy(update={"rule_agent_max_steps": 4})
+    model = ScriptModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    tool_call(
+                        "submit_rule_delta",
+                        "write",
+                        submit_args([add_operation()], view="changed"),
+                    )
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    tool_call("submit_rule_delta", "bad-read", submit_args(view="all"))
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    tool_call("submit_rule_delta", "correct-read", submit_args())
+                ],
+            ),
+            AIMessage(content="处理完毕"),
+        ]
+    )
+    result = await extract(settings, model, [parsed_file(1)])
+    assert len(result.rules) == 1
+    progress = read_progress(settings)
+    assert progress.completed_file_ids == ["file-1"] and len(progress.commits) == 1
+    error = next(
+        m
+        for m in model.calls[2][0]
+        if isinstance(m, ToolMessage) and m.tool_call_id == "bad-read"
+    )
+    assert error.status == "error" and "查看规则失败，没有发起写入" in error.content
+    assert "提交失败" not in error.content
+
+
+@pytest.mark.asyncio
+async def test_reads_do_not_clear_a_real_unresolved_write_failure(env):
+    model = ScriptModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    tool_call(
+                        "submit_rule_delta",
+                        "bad-write",
+                        submit_args([add_operation()], view=None),
+                    )
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    tool_call("submit_rule_delta", "bad-read", submit_args(view="all")),
+                    tool_call("submit_rule_delta", "read", submit_args()),
+                ],
+            ),
+            AIMessage(content="处理完毕"),
+        ]
+    )
+    with pytest.raises(RuntimeError, match="规则提交尚未成功"):
+        await extract(env, model, [parsed_file(1)])
+    progress = read_progress(env)
+    assert not progress.commits and not progress.completed_file_ids
+
+
+@pytest.mark.asyncio
+async def test_corrected_write_clears_real_failure(env):
+    model = ScriptModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    tool_call(
+                        "submit_rule_delta",
+                        "bad-write",
+                        submit_args([add_operation()], view=None),
+                    )
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    tool_call(
+                        "submit_rule_delta",
+                        "correct-write",
+                        submit_args([add_operation()], view="all"),
+                    )
+                ],
+            ),
+            AIMessage(content="处理完毕"),
+        ]
+    )
+    result = await extract(env, model, [parsed_file(1)])
+    assert len(result.rules) == 1
+    progress = read_progress(env)
+    assert progress.completed_file_ids == ["file-1"] and len(progress.commits) == 1
 
 
 @pytest.mark.asyncio

@@ -55,7 +55,7 @@ async def test_project_and_bidder_preprocessing_reach_ready(
             return self
 
         async def ainvoke(self, messages, **kwargs):
-            assert kwargs["extra_body"]["max_tokens"] > 0
+            assert kwargs["max_tokens"] > 0
             if any(getattr(message, "type", "") == "tool" for message in messages):
                 return AIMessage(content="处理完毕")
             return AIMessage(

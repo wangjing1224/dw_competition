@@ -7,8 +7,8 @@ from hashlib import sha256
 from typing import Literal
 
 from langchain_core.messages import BaseMessage
-from langchain_openai.chat_models.base import _convert_message_to_dict
 
+from app.llm.platforms import ChatProtocol
 from app.llm.token_counter import CounterUnavailable, TokenCounter
 
 
@@ -26,6 +26,7 @@ class InputContext:
 
     messages: tuple[BaseMessage, ...]
     bindings: dict = field(default_factory=dict)
+    protocol: ChatProtocol = field(default_factory=ChatProtocol)
 
     def __post_init__(self):
         object.__setattr__(self, "messages", tuple(deepcopy(self.messages)))
@@ -39,9 +40,9 @@ class InputContext:
             raise ValueError("bindings 只放工具及输出约束，不放 Key 或生成参数")
 
     def wire_messages(self) -> list[dict]:
-        # 与当前 LangChain Chat Completions 适配器使用同一转换函数；契约测试
-        # 对比真正请求体，升级 LangChain 时不能静默漏掉新增的模型可见内容。
-        return [_convert_message_to_dict(message) for message in self.messages]
+        return self.protocol.wire_messages(
+            self.messages, has_tools=bool(self.bindings.get("tools"))
+        )
 
 
 def validate_tool_pairs(messages: list[dict]) -> None:
@@ -165,6 +166,11 @@ def check_input(
             budget_settings.compaction_trigger_ratio,
             budget_settings.model_key,
             counter.signature,
+            (
+                context.protocol.platform,
+                context.protocol.model,
+                context.protocol.thinking,
+            ),
         )
     )
     messages = context.wire_messages()

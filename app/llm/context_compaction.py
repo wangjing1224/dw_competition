@@ -13,6 +13,7 @@ from app.llm.input_budget import (
     validate_tool_pairs,
 )
 from app.llm.model_capabilities import output_allowance
+from app.llm.platforms import ChatProtocol
 from app.prompts.loader import render_prompt
 
 
@@ -85,6 +86,8 @@ def history_transcript(context: InputContext) -> str:
     messages = context.wire_messages()
     validate_tool_pairs(messages)
     for message in messages:
+        # 交接提炼可见事实/工具结果，不把内部思考当作事实或新的控制指令。
+        message.pop("reasoning_content", None)
         content = message.get("content")
         if isinstance(content, list):
             # 图片的来源、路径由同条工具消息文本保留，不向摘要模型谎称已看图。
@@ -120,7 +123,8 @@ async def compact_context(*, context, constraints, controller, invoke):
                     + history_transcript(context)
                 )
             ),
-        )
+        ),
+        protocol=ChatProtocol.from_settings(controller.settings),
     )
     # 摘要请求使用自己的计数基准。它可超过业务软阈值，但不得超过硬窗口。
     summary_controller = InputController(

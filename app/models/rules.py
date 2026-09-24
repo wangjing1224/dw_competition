@@ -133,7 +133,11 @@ class SubmitRuleDeltaInput(StrictModel):
         description="完整新项目简介；不修改时显式填 null。"
     )
     return_view: Literal["changed", "all"] | None = Field(
-        description="提交时必须选 changed/all；只读查看时三个参数都显式填 null。"
+        description=(
+            "仅有真实写入时选 changed（本批变更）或 all（保存后的全库）。"
+            "只读时必须填 null，不要填 all；只读完整参数："
+            '{"operations":null,"project_profile":null,"return_view":null}。'
+        )
     )
 
     @model_validator(mode="after")

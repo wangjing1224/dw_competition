@@ -21,6 +21,7 @@ from app.llm.input_budget import (
     usage_baseline_from_response,
 )
 from app.llm.model_capabilities import ModelCapabilities, output_allowance
+from app.llm.platforms import ChatProtocol
 from app.llm.token_counter import TokenCounter, get_token_counter
 
 
@@ -183,6 +184,80 @@ def test_usage_plus_only_incremental_visible_reply_and_tools(counter):
     )
 
 
+def test_deepseek_replayed_reasoning_is_counted_once_and_unbinding_recounts(counter):
+    protocol = ChatProtocol("deepseek", "deepseek-v4-flash", True)
+    context = InputContext(
+        (HumanMessage(content="核验"),),
+        {"tools": [{"type": "function", "function": {"name": "search"}}]},
+        protocol,
+    )
+    first = check(context, counter)
+    reply = AIMessage(
+        content="",
+        tool_calls=[call("a")],
+        additional_kwargs={"reasoning_content": "需要核实参数" * 30},
+        usage_metadata={
+            "input_tokens": 200,
+            "output_tokens": 5000,
+            "total_tokens": 5200,
+        },
+    )
+    baseline = usage_baseline_from_response(context, first, reply, confirmed=True)
+    continuation = replace(
+        context,
+        messages=(
+            *context.messages,
+            reply,
+            ToolMessage(content="已查明", tool_call_id="a"),
+        ),
+    )
+    counter.count_text.reset_mock()
+    second = check(continuation, counter, usage_baseline=baseline)
+    assert second.estimate.method.startswith("usage+")
+    assert (
+        second.estimate.total
+        == 200 + second.estimate.local_total - first.estimate.local_total
+    )
+    counted = str(counter.count_text.call_args_list)
+    assert counted.count("reasoning_content") == 1 and "需要核实参数" in counted
+    assert second.estimate.total < 5000  # 未盲加 completion_tokens。
+    assert (
+        check(continuation, counter, usage_baseline=baseline, previous=second) is second
+    )
+    final = replace(continuation, bindings={})
+    counter.count_text.reset_mock()
+    assert check(final, counter, usage_baseline=baseline).estimate.method.startswith(
+        "local:"
+    )
+    assert "reasoning_content" not in str(counter.count_text.call_args_list)
+    assert reply.additional_kwargs["reasoning_content"]  # 没有删改历史对象。
+
+
+def test_platform_and_thinking_changes_invalidate_usage_even_without_history(counter):
+    context = InputContext(
+        (HumanMessage(content="输入未变"),),
+        protocol=ChatProtocol("deepseek", "alias", False),
+    )
+    first = check(context, counter)
+    reply = AIMessage(
+        content="完成",
+        usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    )
+    baseline = usage_baseline_from_response(context, first, reply, confirmed=True)
+    for protocol in (
+        ChatProtocol("bailian", "alias", False),
+        ChatProtocol("deepseek", "alias", True),
+    ):
+        changed = check(
+            replace(context, protocol=protocol),
+            counter,
+            previous=first,
+            usage_baseline=baseline,
+        )
+        assert changed.conditions_key != first.conditions_key
+        assert changed.estimate.method.startswith("local:")
+
+
 @pytest.mark.parametrize("change", ["system", "tools", "model", "counter"])
 def test_rewritten_prefix_or_conditions_discard_usage(counter, change):
     original = ctx(SystemMessage(content="s"), HumanMessage(content="h"))
@@ -331,6 +406,8 @@ def controller(counter, *, capacity=10000, ratio=0.9):
         compaction_trigger_ratio=ratio,
         base_url="https://mock.test/v1",
         model="mock",
+        platform="openai",
+        enable_thinking=False,
     )
     return InputController(settings, counter, ModelCapabilities(10000, 2000, 100, True))
 
@@ -367,6 +444,46 @@ async def test_generic_compaction_without_file_cursor_preserves_human_order(coun
         HumanMessage(content="原要求\n" + result.summary),
     )
     assert runtime.check(rebuilt).status == "ready"
+
+
+@pytest.mark.asyncio
+async def test_compaction_keeps_facts_not_reasoning_or_invented_round_control(counter):
+    runtime = controller(counter)
+    runtime.settings.platform = "deepseek"
+    runtime.settings.enable_thinking = True
+    original = InputContext(
+        (
+            HumanMessage(content="按当前资料核实"),
+            AIMessage(
+                content="",
+                tool_calls=[call("a")],
+                additional_kwargs={"reasoning_content": "隐藏推理不应交接"},
+            ),
+            ToolMessage(
+                content="file-1：90日，从截止日计算；投标方声明尚未核实，不能当成通过。",
+                tool_call_id="a",
+            ),
+        ),
+        {"tools": [{"type": "function", "function": {"name": "search"}}]},
+        ChatProtocol.from_settings(runtime.settings),
+    )
+    invoke = AsyncMock(
+        return_value=AIMessage(
+            content="待核实：file-1 的90日及起算要求，尚未得出合规结论。"
+        )
+    )
+    await compact_context(
+        context=original,
+        constraints="原文会重送；待办不可丢。",
+        controller=runtime,
+        invoke=invoke,
+    )
+    sent = invoke.call_args.args[0]
+    assert not sent.bindings
+    assert "隐藏推理不应交接" not in str(sent.messages)
+    assert "不能当成通过" in sent.messages[-1].content
+    assert "不要根据转录条数推算轮次" in sent.messages[0].content
+    assert "固定压缩率" in sent.messages[0].content
 
 
 @pytest.mark.asyncio
@@ -415,6 +532,58 @@ def test_output_allowance_respects_capacity_and_service_limit(counter):
     )
     with pytest.raises(ValueError):
         output_allowance(runtime.settings, 9950, caps, compaction=True)
+    with pytest.raises(ValueError, match="服务输入上限"):
+        output_allowance(
+            runtime.settings,
+            9200,
+            replace(caps, max_input_tokens=9100),
+            compaction=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "platform,url,model,capacity,output",
+    [
+        (
+            "deepseek",
+            "https://api.deepseek.com",
+            "deepseek-v4-flash",
+            1_000_000,
+            393216,
+        ),
+        (
+            "deepseek",
+            "https://api.deepseek.com/v1/",
+            "deepseek-v4-flash",
+            1_000_000,
+            393216,
+        ),
+        (
+            "bailian",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.6-plus",
+            1_000_000,
+            65536,
+        ),
+        ("openai", "https://api.openai.com/v1", "gpt-5.1", 400_000, 128000),
+    ],
+)
+def test_registered_model_capabilities_are_platform_and_endpoint_specific(
+    platform, url, model, capacity, output
+):
+    from app.llm.model_capabilities import get_model_capabilities
+
+    settings = SimpleNamespace(
+        platform=platform, base_url=url, model=model, context_window_tokens=capacity
+    )
+    assert get_model_capabilities(settings).max_output_tokens == output
+    settings.platform = "unregistered"
+    with pytest.raises(ValueError, match="尚未登记"):
+        get_model_capabilities(settings)
+    settings.platform = platform
+    settings.context_window_tokens += 1
+    with pytest.raises(ValueError, match="超过"):
+        get_model_capabilities(settings)
 
 
 def test_service_capabilities_do_not_guess_third_party_gateway():
@@ -423,6 +592,7 @@ def test_service_capabilities_do_not_guess_third_party_gateway():
     settings = SimpleNamespace(
         base_url="https://unverified.example/v1",
         model="deepseek-flash",
+        platform="deepseek",
         context_window_tokens=10000,
     )
     with pytest.raises(ValueError, match="尚未登记"):

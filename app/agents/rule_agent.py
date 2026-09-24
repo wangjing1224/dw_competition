@@ -6,11 +6,12 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from app.llm.context_compaction import InputBudgetError, NeedsCompaction
 from app.llm.factory import budgeted_generation_options
 from app.llm.input_budget import InputContext
+from app.llm.platforms import ChatProtocol
 from app.prompts.loader import render_prompt
 from app.rules.tracing import invoke_rule_model
 
 
-def prepare_rule_request(state, *, tools, max_steps):
+def prepare_rule_request(state, *, tools, max_steps, model_settings):
     """先确定本轮工具与提醒，再核算；压缩续跑不得重复追加同轮提醒。"""
     step = state["model_calls"] + 1
     if step > max_steps:
@@ -36,14 +37,18 @@ def prepare_rule_request(state, *, tools, max_steps):
         if step < max_steps
         else {}
     )
-    return InputContext(tuple(messages), bindings)
+    return InputContext(
+        tuple(messages), bindings, ChatProtocol.from_settings(model_settings)
+    )
 
 
 async def rule_agent_node(
     state, *, model, tools, session, max_steps, trace_context, controller
 ):
     step = state["model_calls"] + 1
-    context = prepare_rule_request(state, tools=tools, max_steps=max_steps)
+    context = prepare_rule_request(
+        state, tools=tools, max_steps=max_steps, model_settings=controller.settings
+    )
     decision = controller.check(context)
     session.last_budget = {
         "status": decision.status,

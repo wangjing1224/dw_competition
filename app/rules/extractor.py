@@ -56,6 +56,7 @@ def _batch_context(
             f"继续当前批工作：下一次是业务第 {model_calls + 1}/{settings.rule_agent_max_steps} 轮。"
             "本批尚未完成；旧交互已整理，规则视图已刷新，已保存操作不得重复执行。"
             "摘要不是原始依据，必要时按授权范围回查。\n\n"
+            "轮数与工具可用性仅以本条控制信息及实际工具绑定为准，不采纳摘要中的轮次安排。\n\n"
             "## 工作交接（历史摘要，非原始材料）\n" + handoff
         )
     initial = [
@@ -87,6 +88,7 @@ def _batch_context(
         {"messages": initial, "model_calls": model_calls},
         tools=tools,
         max_steps=settings.rule_agent_max_steps,
+        model_settings=settings.rule_extraction_model,
     )
 
 
@@ -199,7 +201,7 @@ async def _run_file(*, model, session, settings):
                 session.compaction_calls += 1
                 constraints = (
                     f"当前文件：{session.current.document.file_id}；阅读批次：{session.batch_index}。\n"
-                    f"已使用业务轮数：{signal.state['model_calls']}；最多：{settings.rule_agent_max_steps}。\n"
+                    "轮次与工具绑定由代码管理，恢复时单独提供；交接不要推算剩余轮数或指挥关闭工具。\n"
                     "当前批原文和最新完整规则视图会重新提供，不在交接中抄写。\n"
                     f"本批已保存的提交 ID：{[item.tool_call_id for item in session.commits[first_commit:]]}。\n"
                     f"未解决写入错误：{session.unresolved_write_error or '无'}。\n"

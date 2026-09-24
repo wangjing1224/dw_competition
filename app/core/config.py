@@ -23,6 +23,7 @@ class ConfigModel(BaseModel):
 
 
 class ChatModelSettings(ConfigModel):
+    platform: Literal["deepseek", "bailian", "openai"]
     """单个 ChatModel 职责对应的完整连接和生成参数。"""
 
     base_url: str

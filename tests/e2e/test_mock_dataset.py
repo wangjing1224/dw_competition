@@ -137,7 +137,7 @@ async def test_mock_dataset_full_pipeline(monkeypatch, temp_settings):
             return self
 
         async def ainvoke(self, messages, **kwargs):
-            assert kwargs["extra_body"]["max_tokens"] > 0
+            assert kwargs["max_tokens"] > 0
             if self.submitted:
                 return AIMessage(content="处理完毕")
             self.submitted = True

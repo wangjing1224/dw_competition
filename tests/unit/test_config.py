@@ -19,6 +19,7 @@ def test_settings_load_yaml_and_environment(monkeypatch):
         (settings.project_root / "configs/model.yaml").read_text("utf-8")
     )
     assert settings.bid_chat_model.model == raw["bid_chat_model"]["model"]
+    assert settings.bid_chat_model.platform == raw["bid_chat_model"]["platform"]
     assert settings.bid_chat_model.api_key.get_secret_value() == "test-secret"
     assert "test-secret" not in repr(settings.bid_chat_model)
     assert settings.storage.database_path.is_absolute()
@@ -61,6 +62,17 @@ def test_parser_vision_has_independent_environment(monkeypatch):
     assert settings.bid_chat_model.api_key.get_secret_value() == "agent-secret"
     assert not settings.parsing.vision_enabled
     assert "vision-secret" not in repr(settings)
+
+
+@pytest.mark.parametrize("platform", ["scnet", "unknown", None])
+def test_chat_platform_must_be_explicit_supported_value(platform):
+    values = get_settings().rule_extraction_model.model_dump()
+    values["platform"] = platform
+    with pytest.raises(ValidationError, match="platform"):
+        config.ChatModelSettings.model_validate(values)
+    values.pop("platform")
+    with pytest.raises(ValidationError, match="platform"):
+        config.ChatModelSettings.model_validate(values)
 
 
 def test_rule_budget_configuration_and_legacy_roles():
