@@ -5,6 +5,36 @@ import pytest
 from app.prompts.loader import load_tool_description, render_prompt
 
 
+def test_evidence_ingestion_prompt_separates_business_relations_from_similarity():
+    system = render_prompt(
+        "evidence_ingestion",
+        current_material="尚无已保存结果",
+        history_view="历史资料目录",
+    )
+    assert "具体业务事项" in system
+    assert "仅主体/供方相同" in system
+    assert "不是关系枚举" in system
+    assert "简短短语" in system and "evidence_summary" in system
+    assert "处理完成状态不写入摘要" in system
+    assert "补充、证明、更正或有依据的矛盾" in system
+    assert "不得丢掉当前材料自身的图片回查入口" in system
+
+
+def test_evidence_save_schema_keeps_free_relations_and_matching_guidance():
+    from app.models.evidence import EvidenceMaterialInput
+
+    description = load_tool_description("save_evidence_material")
+    assert "无明确业务联系填 []" in description
+    assert "简短短语" in description
+    assert "运行状态" in description
+    assert "必须在 evidence_summary 中保留对应真实图片路径" in description
+    schema = EvidenceMaterialInput.model_json_schema()
+    relations = schema["properties"]["relations"]
+    assert "仅同一主体不建立关系" in relations["description"]
+    assert "enum" not in str(relations) and "maxLength" not in str(relations)
+    assert set(schema["properties"]) == {"bid_summary", "evidence_summary", "relations"}
+
+
 def test_rule_system_and_input_are_separate():
     system = render_prompt(
         "rule_extraction",
