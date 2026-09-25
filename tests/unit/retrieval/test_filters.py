@@ -8,7 +8,7 @@ def chunk(bidder_id):
     return IndexChunk(
         chunk_id=f"chunk-{bidder_id}",
         file_id=f"file-{bidder_id}",
-        project_id="project-1",
+        project_id=None,
         bidder_id=bidder_id,
         data_role="evidence_material",
         file_name="合同.docx",
@@ -25,7 +25,7 @@ def test_evidence_filter_never_crosses_bidder():
         [chunk("bidder-a"), chunk("bidder-b")],
         IndexFilter(
             scope_id="evidence-project-1-bidder-a",
-            project_id="project-1",
+            project_id=None,
             bidder_id="bidder-a",
             data_role="evidence_material",
         ),

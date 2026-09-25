@@ -14,8 +14,9 @@
 | `rule_extraction.md` | `${rule_view}`（启动快照，会话内不覆盖） | `app/rules/extractor.py` |
 | `rule_extraction_input.md` | `${file_id}`、`${file_name}`、`${source_path}`、`${history_files}`、`${source_context}` | `app/rules/extractor.py` |
 | `rule_extraction_last_tool_round.md`、`rule_extraction_finalize.md` | `${current_step}`、`${max_steps}` | `app/agents/rule_agent.py` |
-| `evidence_classification.md` | `${evidence_types}`、`${evidence_classification_schema}` | `app/evidence/classifier.py` |
-| `evidence_classification_input.md` | `${classification_input}` | `app/evidence/classifier.py` |
+| `evidence_ingestion.md` | `${current_material}`、`${history_view}`（启动快照） | `app/evidence/ingestion.py` |
+| `evidence_ingestion_input.md` | `${file_id}`、`${file_name}`、`${source_path}`、`${reading_scope}`、`${continuation}`、`${source_context}` | `app/evidence/ingestion.py` |
+| `evidence_ingestion_last_tool_round.md`、`evidence_ingestion_finalize.md` | `${current_step}`、`${max_steps}` | `app/agents/evidence_ingestion_agent.py` |
 | `bid_document_summary.md` | `${bid_document_summary_schema}` | `app/audit/bid_summary.py` |
 | `bid_document_summary_input.md` | `${file_identity}`、`${project_profile}`、`${rule_categories}`、`${document_context}` | `app/audit/bid_summary.py` |
 | `bid_agent.md` | `${agent_audit_decision_schema}` | `app/agents/bid_agent.py` |

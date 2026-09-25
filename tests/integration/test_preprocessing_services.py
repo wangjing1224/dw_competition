@@ -10,7 +10,6 @@ from langchain_core.messages import AIMessage
 from PIL import Image
 
 from app.models.documents import DocumentRef
-from app.models.evidence import EvidenceClassification
 from app.parsers.service import prepare_document
 from app.retrieval.index import build_document_index
 from app.retrieval.models import IndexScope
@@ -83,23 +82,33 @@ async def test_project_and_bidder_preprocessing_reach_ready(
                 ],
             )
 
-    async def fake_classification(*_args, **_kwargs):
-        return EvidenceClassification(
-            evidence_type="contract",
-            classification_status="classified",
-            reason="包含合同标的和双方主体",
-            bid_summary="红外热成像仪供货合同",
-            evidence_summary="合同标的为红外热成像仪20台，正文可读",
-        )
+    class MaterialModel(RuleModel):
+        async def ainvoke(self, messages, **kwargs):
+            if any(message.type == "tool" for message in messages):
+                return AIMessage(content="处理完毕")
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    dict(
+                        name="save_evidence_material",
+                        id="material-1",
+                        type="tool_call",
+                        args={
+                            "material": {
+                                "bid_summary": "红外热成像仪供货合同",
+                                "evidence_summary": "合同标的为红外热成像仪20台，正文可读",
+                                "relations": [],
+                            },
+                            "file_ids": None,
+                        },
+                    )
+                ],
+            )
 
-    monkeypatch.setattr(
-        "app.evidence.classifier.invoke_structured",
-        fake_classification,
-    )
     models = SimpleNamespace(
         rule_extraction=RuleModel(),
         rerank=object(),
-        evidence_classification=object(),
+        evidence_classification=MaterialModel(),
         embedding=FakeEmbedding(settings.embedding_model.dimension),
     )
     project = await ProjectService(settings, models).create_project(
@@ -112,7 +121,6 @@ async def test_project_and_bidder_preprocessing_reach_ready(
         ]
     )
     bidder = await BidderService(settings, models).create_bidder(
-        project.project_id,
         [
             (
                 "合同.txt",

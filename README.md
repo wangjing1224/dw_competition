@@ -10,11 +10,13 @@
 
 ```text
 招标文件夹 -> 文档解析 -> 招标依据索引 -> 逐文件规则 Agent -> RuleSet
-投标方资料 -> 文档解析 -> LLM 资料分类 -> Evidence Index
+投标方资料 -> 整批文档解析 -> Evidence Index -> 逐文件资料入库 Agent -> 双摘要与文件关联
 投标测试集 -> 文档解析 -> Bid Index -> 主/子 Agent 审核 -> JSON -> Word
 ```
 
-LangGraph 承载规则抽取 Agent、主审核 Agent 和资料核验子 Agent。文件上传、解析、资料分类和索引构建在图外完成；JSON 校验和 Word 渲染也在图外完成。
+LangGraph 承载规则抽取 Agent、资料入库 Agent、主审核 Agent 和资料核验子 Agent。文件上传、解析和索引构建在图外完成；JSON 校验和 Word 渲染也在图外完成。
+
+资料库现按 bidder_id 独立入库，不绑定招标项目。新版资料库与审核侧的消费适配尚未接入，暂不能把新版入库成功视为审核全链路已接通；审核接口会明确提示，不静默使用空资料。
 
 ## 目录职责
 
@@ -27,7 +29,7 @@ app/parsers      DOC/DOCX/XLSX/TXT/Markdown/PDF/图片解析及可选视觉辅�
 app/llm          LangChain 模型适配
 app/retrieval    本地向量和关键词检索
 app/rules        逐文件规则编排、增量应用、规则视图和安全追踪
-app/evidence     投标方资料分类
+app/evidence     逐文件资料理解、双摘要持久化及关联查询
 app/tools        规则/审核工具及 CommonTool 通用工具
 app/agents       规则抽取、主审核和资料核验 Agent
 app/graph        LangGraph State、路由和更新
@@ -57,7 +59,7 @@ http://127.0.0.1:8000/web/
 ```
 
 - 系统总览：展示处理边界和审核链路。
-- 审核操作：选择三个文件夹，依次创建 Project、Bidder 和 AuditTask。
+- 操作页：创建 Project 和独立 Bidder；新版资料库的 AuditTask 消费适配尚未接入。
 - 任务观测：自动轮询后台阶段，展示文件级结论、原始 JSON，并下载输出。
 
 服务启动只检查本地目录和 SQLite，不会主动请求模型。调用项目上传、
@@ -111,7 +113,7 @@ Embedding 模型、URL 或维度变化后，停止服务并删除 `data/indexes/
 System 放稳定要求和启动时的完整规则视图，Human 放当前文件的有序正文、表格及图片路径。
 提交结果以 ToolMessage 更新上下文，不反复改写 System；下一份文件使用最新规则库启动。
 
-- `search_rule_source`：按查询组回查当前文件及已完成的历史文件，不提前读取其他未来文件；补查不推进阅读游标。
+- `search_documents`：公共检索工具，规则侧按查询组回查当前文件及已完成的历史文件，不提前读取其他未来文件；补查不推进阅读游标。
 - `view_image`：通过统一图片路径查看当前或历史文件中的已登记图片；由 `CommonTool` 提供。
 - `submit_rule_delta`：一批 `add/merge/replace` 或项目简介更新；三个参数显式全为 `null` 时只读查看。
 
@@ -138,12 +140,33 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 进度文件同时记录批次、下一结构位置、批次/文件调用数及压缩诊断。全部批次成功后才完成文件；
 单结构过大、固定输入过大或压缩失败会明确停止并保留成果，不静默裁剪，也不自动重跑失败批次。
 开启 LangSmith 时记录独立文件会话和脱敏的模型/工具调用，保留文字与位置，不上传图片 Base64。
-资料入库 Agent、其他业务接入输入控制器及人工规则维护接口留给后续开发。
+审核侧输入控制器接入及人工规则维护接口留给后续开发。
+
+### 投标方资料入库
+
+一次上传一批资料，先统一解析并构建原文索引，再串行运行资料入库 Agent；不支持同一投标方完成后追加上传。
+每份文件保存 `bid_summary`、`evidence_summary`、`relations`。关系为 `[自由文本描述, 历史file_id]`，不设类型枚举，
+仅关联本批已完成的前序文件；代码可以按目标文件反查，不把有关联当作核验通过。
+详细摘要按需保留真实图片路径，简洁摘要不放路径；历史详情和图片可以按需读取，不强制遍历全部资料。
+
+三个工具为 `search_documents`、`view_image`、`save_evidence_material`。
+保存工具的 `material`、`file_ids` 必须显式填写且恰好一项为 null：写入当前文件完整结果，或查看指定历史文件/`"all"`。
+有变化才再次保存，不要求每个阅读批次重复提交；首次处理的文件必须有结果。保存失败保留进度，不伪装成人工核验结论。
+结果在 `data/parsed/evidence/{bidder_id}.json`，执行进度在同目录 `{bidder_id}.progress.json`。
+失败的完整上传批次可由 `BidderService.resume_bidder(bidder_id)` 恢复；未传完文件的批次不能按部分文件恢复成成功。
+
+沿用 `EVIDENCE_CLASSIFICATION_MODEL_BASE_URL/API_KEY` 和 `evidence_classification_model` 配置名称，实际执行已改为入库 Agent。
+`evidence_ingestion_max_steps` 按阅读批次计数；压缩续跑不清零，倒数第二轮提醒保存、最后一轮不绑定工具。
+原文检索和看图与规则 Agent 共用 CommonTool，业务代码注入各自授权范围、默认范围和解析版本。
+
+旧版 SQLite 的 bidders/files 仍绑定项目，启动时会提示旧结构并停止，不自动迁移或删除旧数据。
+试跑新版前，请在 `configs/storage.yaml` 将 **data_root 和 database_path 一起**改为独立目录，例如
+`data/ingestion-v23` 与 `data/ingestion-v23/app.db`；旧目录保留作参考。不要仅更换数据库却复用旧解析/索引目录。
 
 ### 模型输入预算
 
-规则模型使用 `configs/model.yaml` 中的 `context_window_tokens`、`compaction_trigger_ratio`（默认 0.90）
-和 `tokenizer`（`DeepSeek` 或 `utf8`）。仅规则模型取消固定 `max_output_tokens`；其他调用保持原配置。
+规则和资料入库模型使用 `configs/model.yaml` 中的 `context_window_tokens`、`compaction_trigger_ratio`（默认 0.90）
+和 `tokenizer`（`DeepSeek` 或 `utf8`）。这两类取消固定 `max_output_tokens`；其他调用保持原配置。
 控制器核算 System、实际工具/输出约束、Human、AI/Tool 历史四类内容，计入真实图片但不把 Base64 当文字。
 相同请求复用计数；有可靠服务用量时补计新增历史，重建消息或更换绑定后重新本地核算。
 输入达到阈值才按业务策略处理，不把 Token 判断放在动作路由中。
@@ -172,7 +195,7 @@ unzip -n /tmp/deepseek_v4_tokenizer.zip 'deepseek_v4_tokenizer/tokenizer*.json' 
 
 ## 公共解析与视觉辅助
 
-规则 Agent 已接入有序解析结构、通用看图工具和输入预算控制器；资料入库 Agent 尚未实现。
+规则 Agent 和资料入库 Agent 均已接入有序解析结构、通用检索/看图工具和输入预算控制器；审核侧的资料消费适配另行处理。
 三条业务解析路径统一调用异步 `prepare_document()`：先做原生解析，再按配置进行视觉辅助。
 原同步公开入口 `parse_document()` 已删除；各格式解析器内部的 `.parse()` 仍保留。
 迁移只改解析入口，文件之间仍按原顺序串行处理。
@@ -247,12 +270,18 @@ curl -X POST http://127.0.0.1:8000/api/projects \
 上传一家投标方的支撑资料：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/projects/{project_id}/bidders \
+curl -X POST http://127.0.0.1:8000/api/bidders \
   -F 'files=@/path/to/合同.docx' \
   -F 'relative_paths=1.业绩文件/合同.docx'
 ```
 
-创建审核任务：
+查询独立资料库及入库进度：
+
+```bash
+curl http://127.0.0.1:8000/api/bidders/{bidder_id}
+```
+
+创建审核任务（旧审核接口保留，新版资料库消费适配完成前会明确拒绝接入）：
 
 ```bash
 curl -X POST \
@@ -284,11 +313,11 @@ uv run python -m app.models.schema_export
 uv run pytest tests/e2e/test_mock_dataset.py -v -s
 ```
 
-上述命令读取根目录 `test-datas/`，执行真实 SQLite、文件解析、索引、后台审核、
-JSON 和 Word 输出，仅将外部模型调用替换为确定性 Mock。适合在上传比赛材料前
-验证本地代码链路。
+上述命令读取根目录 `test-datas/`，验证 SQLite、解析、索引和新版资料入库；
+另用独立脚本审核 fixture 保留后台审核、JSON/Word 的回归验证，仅替换外部模型。
+这不是新版资料库到审核的全链路验收；目前明确检查该入口返回“尚未适配”。
 
-真实比赛数据 E2E：
+真实比赛数据入库验收（会调用模型，当前验证规则/资料入库，不运行审核 Agent）：
 
 ```bash
 RUN_MODEL_E2E=1 \

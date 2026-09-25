@@ -17,27 +17,27 @@ from app.models.documents import SourceRef
 class IndexScope(StrictModel):
     scope_id: str
     data_role: DataRole
-    project_id: str
+    project_id: str | None = None
     bidder_id: str | None = None
     task_id: str | None = None
 
     @model_validator(mode="after")
     def validate_scope(self) -> "IndexScope":
         if self.data_role == DataRole.RULE_SOURCE:
-            if self.bidder_id or self.task_id:
-                raise ValueError("规则索引不能绑定 bidder 或 task")
+            if not self.project_id or self.bidder_id or self.task_id:
+                raise ValueError("规则索引必须绑定 project，不能绑定 bidder 或 task")
         elif self.data_role == DataRole.EVIDENCE_MATERIAL:
-            if not self.bidder_id or self.task_id:
-                raise ValueError("资料索引必须绑定 bidder 且不能绑定 task")
-        elif not self.bidder_id or not self.task_id:
-            raise ValueError("投标索引必须绑定 bidder 和 task")
+            if not self.bidder_id or self.task_id or self.project_id:
+                raise ValueError("资料索引只绑定 bidder")
+        elif not self.project_id or not self.bidder_id or not self.task_id:
+            raise ValueError("投标索引必须绑定 project、bidder 和 task")
         return self
 
 
 class IndexChunk(StrictModel):
     chunk_id: str
     file_id: str
-    project_id: str
+    project_id: str | None = None
     bidder_id: str | None = None
     task_id: str | None = None
     data_role: DataRole
@@ -68,7 +68,7 @@ class IndexChunk(StrictModel):
 
 class IndexFilter(StrictModel):
     scope_id: str
-    project_id: str
+    project_id: str | None = None
     data_role: DataRole
     bidder_id: str | None = None
     task_id: str | None = None
@@ -97,7 +97,7 @@ class SearchResult(StrictModel):
     score: float
     source: SourceRef
     content: str
-    project_id: str
+    project_id: str | None = None
     bidder_id: str | None = None
     task_id: str | None = None
     evidence_type: EvidenceType | None = None

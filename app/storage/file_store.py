@@ -13,9 +13,8 @@ from typing import BinaryIO
 
 from app.core.config import get_settings
 from app.core.errors import BusinessError
-from app.storage.repositories import FileRecord, FileRepository
 from app.storage.ids import next_id
-
+from app.storage.repositories import FileRecord, FileRepository
 
 ALLOWED_EXTENSIONS = {
     ".doc",
@@ -33,7 +32,7 @@ ALLOWED_EXTENSIONS = {
 
 @dataclass(frozen=True)
 class FileOwner:
-    project_id: str
+    project_id: str | None = None
     bidder_id: str | None = None
     task_id: str | None = None
 
@@ -82,9 +81,23 @@ class FileStore:
                 f"暂不支持文件格式: {extension or '无扩展名'}",
             )
 
+        from app.models.documents import DocumentRef
+
+        # 与领域模型使用同一归属约束，不能借文件路径绕过资料隔离。
+        DocumentRef(
+            file_id="pending",
+            file_name=file_name,
+            source_path=source_path,
+            data_role=data_role,
+            project_id=owner.project_id,
+            bidder_id=owner.bidder_id,
+            task_id=owner.task_id,
+        )
         file_id = next_id("file")
-        owner_path = Path(owner.project_id)
-        if owner.bidder_id:
+        owner_path = Path(
+            owner.bidder_id if data_role == "evidence_material" else owner.project_id
+        )
+        if owner.bidder_id and data_role != "evidence_material":
             owner_path /= owner.bidder_id
         if owner.task_id:
             owner_path /= owner.task_id

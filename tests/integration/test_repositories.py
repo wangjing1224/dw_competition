@@ -1,7 +1,5 @@
 """SQLite 组合外键、状态更新和中断恢复集成测试。"""
 
-import sqlite3
-
 import pytest
 
 from app.storage.database import initialize_database
@@ -21,25 +19,33 @@ def isolated_database(monkeypatch, tmp_path):
     return path
 
 
-def test_task_cannot_bind_bidder_from_another_project(isolated_database):
+def test_independent_bidder_can_be_selected_for_different_projects(isolated_database):
     projects = ProjectRepository()
     bidders = BidderRepository()
     tasks = AuditTaskRepository()
     project_a = projects.create()
     project_b = projects.create()
-    bidder_b = bidders.create(project_b.project_id)
+    bidder_b = bidders.create()
 
     assert project_a.project_id == "project-1"
     assert project_b.project_id == "project-2"
     assert bidder_b.bidder_id == "bidder-1"
 
+    assert (
+        tasks.create(project_a.project_id, bidder_b.bidder_id).project_id
+        == project_a.project_id
+    )
+    assert (
+        tasks.create(project_b.project_id, bidder_b.bidder_id).bidder_id
+        == bidder_b.bidder_id
+    )
     with pytest.raises(Exception):
-        tasks.create(project_a.project_id, bidder_b.bidder_id)
+        tasks.create("project-missing", bidder_b.bidder_id)
 
 
 def test_interrupted_running_task_becomes_failed(isolated_database):
     project = ProjectRepository().create()
-    bidder = BidderRepository().create(project.project_id)
+    bidder = BidderRepository().create()
     repository = AuditTaskRepository()
     task = repository.create(project.project_id, bidder.bidder_id)
 
@@ -52,7 +58,7 @@ def test_interrupted_running_task_becomes_failed(isolated_database):
 
 def test_audit_events_are_ordered_by_append_sequence(isolated_database):
     project = ProjectRepository().create()
-    bidder = BidderRepository().create(project.project_id)
+    bidder = BidderRepository().create()
     task = AuditTaskRepository().create(project.project_id, bidder.bidder_id)
     events = AuditEventRepository()
 

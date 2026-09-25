@@ -7,7 +7,12 @@ import pytest
 from app.audit.bid_summary import summarize_and_route_bid_document
 from app.evidence.catalog import build_evidence_catalog
 from app.evidence.storage import write_evidence_classification
-from app.models.documents import BidRouteDecision, DocumentRef, ParsedDocument, ParsedSection
+from app.models.documents import (
+    BidRouteDecision,
+    DocumentRef,
+    ParsedDocument,
+    ParsedSection,
+)
 from app.models.evidence import EvidenceClassification
 from app.models.rules import RuleSet
 
@@ -66,7 +71,7 @@ def test_evidence_catalog_keeps_file_level_entries(temp_settings):
         source_path="合同.md",
         data_role="evidence_material",
         parse_status="parsed",
-        project_id="project-1",
+        project_id=None,
         bidder_id="bidder-1",
         evidence_type="contract",
         classification_status="classified",

@@ -142,6 +142,7 @@ class AppSettings(ConfigModel):
         description="规则库总条数上限；超过时调用预留处理函数，当前只警告并继续保存。",
     )
     evidence_classification_model: ChatModelSettings
+    evidence_ingestion_max_steps: int = Field(default=8, ge=2)
     bid_summary_model: ChatModelSettings
     bid_chat_model: ChatModelSettings
     evidence_chat_model: ChatModelSettings
@@ -158,8 +159,9 @@ class AppSettings(ConfigModel):
     def validate_budget_adoption(self):
         if self.rule_extraction_model.context_window_tokens is None:
             raise ValueError("规则模型已接入输入控制器，需要 context_window_tokens")
+        if self.evidence_classification_model.context_window_tokens is None:
+            raise ValueError("资料入库模型已接入输入控制器，需要 context_window_tokens")
         for name in (
-            "evidence_classification_model",
             "bid_summary_model",
             "bid_chat_model",
             "evidence_chat_model",

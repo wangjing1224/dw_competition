@@ -56,15 +56,9 @@ async def test_background_task_reaches_completed(monkeypatch, temp_settings):
         "app.storage.database.database_path",
         lambda: temp_settings.storage.database_path,
     )
-    monkeypatch.setattr(
-        "app.storage.file_store.get_settings", lambda: temp_settings
-    )
-    monkeypatch.setattr(
-        "app.parsers.service.get_settings", lambda: temp_settings
-    )
-    monkeypatch.setattr(
-        "app.retrieval.store.get_settings", lambda: temp_settings
-    )
+    monkeypatch.setattr("app.storage.file_store.get_settings", lambda: temp_settings)
+    monkeypatch.setattr("app.parsers.service.get_settings", lambda: temp_settings)
+    monkeypatch.setattr("app.retrieval.store.get_settings", lambda: temp_settings)
     initialize_database(temp_settings.storage.database_path)
 
     projects = ProjectRepository()
@@ -78,13 +72,11 @@ async def test_background_task_reaches_completed(monkeypatch, temp_settings):
     project = projects.update_status(
         project.project_id,
         "rule_ready",
-        rule_set_path=rule_path.relative_to(
-            temp_settings.storage.data_root
-        ).as_posix(),
+        rule_set_path=rule_path.relative_to(temp_settings.storage.data_root).as_posix(),
     )
     bidders = BidderRepository()
-    bidder = bidders.create(project.project_id)
-    bidders.update_status(project.project_id, bidder.bidder_id, "evidence_ready")
+    bidder = bidders.create()
+    bidders.update_status(bidder.bidder_id, "evidence_ready")
 
     runner = BackgroundRunner()
     service = AuditTaskService(

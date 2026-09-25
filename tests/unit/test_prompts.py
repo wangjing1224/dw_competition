@@ -37,7 +37,8 @@ def test_all_tool_descriptions_are_available():
         "search_tender_source",
         "request_evidence_review",
         "search_evidence",
-        "search_rule_source",
+        "search_documents",
+        "save_evidence_material",
         "submit_rule_delta",
         "view_image",
     ):

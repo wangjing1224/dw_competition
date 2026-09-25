@@ -48,9 +48,7 @@ class AuditTaskContext(StrictModel):
     bid_files: list[DocumentRef] = Field(default_factory=list)
     bid_summaries: dict[str, BidDocumentSummary] = Field(default_factory=dict)
     routed_file_results: list[FileAuditResult] = Field(default_factory=list)
-    evidence_catalog: dict[str, list[EvidenceCatalogItem]] = Field(
-        default_factory=dict
-    )
+    evidence_catalog: dict[str, list[EvidenceCatalogItem]] = Field(default_factory=dict)
     evidence_classifications: list[EvidenceClassificationRecord] = Field(
         default_factory=list
     )
@@ -83,9 +81,7 @@ class AuditTaskService:
         self.settings = settings
         self.embedding_model = embedding_model
         self.summary_model = summary_model
-        self.summary_model_settings = (
-            summary_model_settings or settings.bid_chat_model
-        )
+        self.summary_model_settings = summary_model_settings or settings.bid_chat_model
         self.audit_executor = audit_executor
         self.output_finalizer = output_finalizer
         self.background_runner = background_runner
@@ -104,8 +100,17 @@ class AuditTaskService:
             raise BusinessError("empty_audit_files", "审核测试集不能为空")
         project = ProjectRepository().require(project_id)
         if project.status != "rule_ready":
-            raise BusinessError("rule_not_ready", "项目规则尚未准备完成", http_status=409)
-        bidder = BidderRepository().require(project_id, bidder_id)
+            raise BusinessError(
+                "rule_not_ready", "项目规则尚未准备完成", http_status=409
+            )
+        bidder = BidderRepository().require(bidder_id)
+        # 新资料库的审核消费侧留给后续任务；不能静默按旧分类目录审核空资料。
+        from app.evidence.storage import load_library
+
+        if load_library(bidder_id, self.settings) is not None:
+            raise BusinessError(
+                "evidence_audit_not_adapted", "新版资料库已入库，审核侧适配尚未接入"
+            )
         if bidder.status != "evidence_ready":
             raise BusinessError(
                 "evidence_not_ready",
@@ -178,7 +183,9 @@ class AuditTaskService:
             if not project.rule_set_path:
                 raise BusinessError("rule_set_missing", "项目 RuleSet 路径缺失")
             rule_set = RuleSet.model_validate_json(
-                self.file_store.resolve_relative(project.rule_set_path).read_text("utf-8")
+                self.file_store.resolve_relative(project.rule_set_path).read_text(
+                    "utf-8"
+                )
             )
 
             self.task_repository.update_progress(
@@ -254,9 +261,7 @@ class AuditTaskService:
             )
             result = await self.audit_executor.run(self.build_context(task_id))
 
-            self.task_repository.update_progress(
-                task_id, {"stage": "writing_outputs"}
-            )
+            self.task_repository.update_progress(task_id, {"stage": "writing_outputs"})
             self.event_repository.append(
                 task_id,
                 actor="pipeline",
@@ -323,7 +328,6 @@ class AuditTaskService:
         evidence_documents = [
             document_ref_from_record(record)
             for record in self.file_repository.list_by_scope(
-                project_id=task.project_id,
                 bidder_id=task.bidder_id,
                 data_role="evidence_material",
             )
@@ -427,9 +431,7 @@ def _routed_file_result(
         ),
         document_summary=summary,
         exclusion_reason=summary.match_reason,
-        overall_conclusion=(
-            "not_applicable" if not_matched else "manual_review"
-        ),
+        overall_conclusion=("not_applicable" if not_matched else "manual_review"),
         suggestions=(
             []
             if not_matched

@@ -17,8 +17,8 @@ document.addEventListener("DOMContentLoaded", () => {
     elements.projectId.textContent = current.projectId || "未创建";
     elements.bidderId.textContent = current.bidderId || "未创建";
     elements.taskId.textContent = current.taskId || "未创建";
-    document.getElementById("bidder-step").classList.toggle("locked", !current.projectId);
-    document.getElementById("task-step").classList.toggle("locked", !current.bidderId);
+    document.getElementById("bidder-step").classList.remove("locked");
+    document.getElementById("task-step").classList.toggle("locked", !current.projectId || !current.bidderId);
     if (current.projectId) setStatus("project", "已就绪", "success");
     if (current.bidderId) setStatus("bidder", "已就绪", "success");
     if (current.taskId) setStatus("task", "已创建", "success");
@@ -160,8 +160,9 @@ document.addEventListener("DOMContentLoaded", () => {
       buttonId: "create-project",
       url: "/api/projects",
       success: (data) => {
+        const { bidderId } = ReviewUI.getIdentity();
         ReviewUI.clearIdentity();
-        ReviewUI.setIdentity({ projectId: data.project_id });
+        ReviewUI.setIdentity({ projectId: data.project_id, bidderId });
         addLog("Project ID", data.project_id);
       },
     });
@@ -171,9 +172,11 @@ document.addEventListener("DOMContentLoaded", () => {
     runUpload({
       prefix: "bidder",
       buttonId: "create-bidder",
-      url: ({ projectId }) => `/api/projects/${encodeURIComponent(projectId)}/bidders`,
+      url: "/api/bidders",
       success: (data) => {
-        ReviewUI.setIdentity({ bidderId: data.bidder_id });
+        const { projectId } = ReviewUI.getIdentity();
+        ReviewUI.clearIdentity();
+        ReviewUI.setIdentity({ projectId, bidderId: data.bidder_id });
         addLog("Bidder ID", data.bidder_id);
       },
     });

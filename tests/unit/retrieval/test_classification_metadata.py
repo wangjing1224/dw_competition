@@ -11,7 +11,7 @@ def test_classified_document_metadata_is_inherited_by_chunk():
         source_path="合同.docx",
         data_role="evidence_material",
         parse_status="parsed",
-        project_id="project-1",
+        project_id=None,
         bidder_id="bidder-1",
         evidence_type="contract",
         classification_status="classified",

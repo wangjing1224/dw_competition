@@ -1,4 +1,4 @@
-"""使用 test-datas 执行无需外部模型的完整本地审核闭环。"""
+"""使用 test-datas 验证新入库，并独立保留旧审核/报告契约回归。"""
 
 from io import BytesIO
 from pathlib import Path
@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.models.evidence import EvidenceClassification
+from app.core.errors import BusinessError
+from app.evidence.storage import load_library
 from app.models.findings import Finding
 from app.models.results import AuditResult, FileAuditResult, ProjectMatch
 from app.models.rules import RuleReportItem, present_rule_for_model
@@ -20,6 +21,7 @@ from app.services.bidder_service import BidderService
 from app.services.project_service import ProjectService
 from app.storage.database import initialize_database
 from app.storage.file_store import FileStore
+from app.storage.repositories import BidderRepository
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "test-datas"
 
@@ -119,7 +121,9 @@ class MockDatasetAuditExecutor:
 
 
 @pytest.mark.asyncio
-async def test_mock_dataset_full_pipeline(monkeypatch, temp_settings):
+async def test_mock_dataset_ingestion_and_legacy_audit_contract(
+    monkeypatch, temp_settings
+):
     monkeypatch.setattr(
         "app.storage.database.database_path",
         lambda: temp_settings.storage.database_path,
@@ -174,44 +178,56 @@ async def test_mock_dataset_full_pipeline(monkeypatch, temp_settings):
                 ],
             )
 
-    async def mock_classification(_model, messages, *_args, **_kwargs):
-        prompt = "\n".join(str(message.content) for message in messages)
-        technical = "技术参数表" in prompt
-        return EvidenceClassification(
-            evidence_type="technical_parameter" if technical else "contract",
-            classification_status="classified",
-            reason="正文类型明确",
-            bid_summary=(
-                "产品技术参数表，可用于核验产品参数"
-                if technical
-                else "红外热成像仪供货合同，可用于核验业绩"
-            ),
-            evidence_summary=(
-                "技术参数表列明探测器分辨率为640x480"
-                if technical
-                else "合同正文包含主体和红外热成像仪标的"
-            ),
-        )
+    class MaterialModel:
+        def bind_tools(self, tools):
+            return self
 
-    monkeypatch.setattr(
-        "app.evidence.classifier.invoke_structured",
-        mock_classification,
-    )
+        async def ainvoke(self, messages, **kwargs):
+            if any(message.type == "tool" for message in messages):
+                return AIMessage(content="处理完毕")
+            prompt = next(
+                str(message.content) for message in messages if message.type == "human"
+            )
+            technical = "技术参数表" in prompt
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "save_evidence_material",
+                        "id": "save",
+                        "type": "tool_call",
+                        "args": {
+                            "material": {
+                                "bid_summary": "产品技术参数表"
+                                if technical
+                                else "红外热成像仪供货合同",
+                                "evidence_summary": "技术参数表列明探测器分辨率为640x480"
+                                if technical
+                                else "合同正文包含主体和红外热成像仪标的",
+                                "relations": [],
+                            },
+                            "file_ids": None,
+                        },
+                    }
+                ],
+            )
 
     embedding = MockEmbedding(temp_settings.embedding_model.dimension)
     models = SimpleNamespace(
         rule_extraction=RuleModel(),
         rerank=object(),
-        evidence_classification=object(),
+        evidence_classification=MaterialModel(),
         embedding=embedding,
     )
     project = await ProjectService(temp_settings, models).create_project(
         folder_uploads(DATA_ROOT / "招标文件")
     )
     bidder = await BidderService(temp_settings, models).create_bidder(
-        project.project_id,
         folder_uploads(DATA_ROOT / "投标方资料"),
     )
+    library = load_library(bidder.bidder_id, temp_settings)
+    assert len(library.materials) == len(folder_uploads(DATA_ROOT / "投标方资料"))
+    assert bidder.status == "evidence_ready"
 
     runner = BackgroundRunner()
     task_service = AuditTaskService(
@@ -221,9 +237,19 @@ async def test_mock_dataset_full_pipeline(monkeypatch, temp_settings):
         ReportService(file_store=FileStore()),
         runner,
     )
+    with pytest.raises(BusinessError, match="资料库"):
+        await task_service.create_task(
+            project.project_id,
+            bidder.bidder_id,
+            folder_uploads(DATA_ROOT / "投标文件测试集"),
+        )
+
+    # 审核消费适配另属后续任务。以下是无资料查询的脚本审核器契约回归，
+    # 用独立 fixture 保留 JSON/Word 验证，不能冒充新资料库已接入审核。
+    audit_fixture_bidder = BidderRepository().create(status="evidence_ready")
     task = await task_service.create_task(
         project.project_id,
-        bidder.bidder_id,
+        audit_fixture_bidder.bidder_id,
         folder_uploads(DATA_ROOT / "投标文件测试集"),
     )
     await runner.wait()

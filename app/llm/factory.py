@@ -76,6 +76,28 @@ def build_parser_vision_model(settings: AppSettings | None = None) -> ChatOpenAI
 
 
 @dataclass(frozen=True)
+class EvidenceIngestionModels:
+    """独立资料入库只创建自身依赖，不要求已配置招标/审核模型的 Key。"""
+
+    evidence_classification: ChatOpenAI
+    embedding: EmbeddingModel
+    rerank: RerankModel
+
+
+def build_evidence_ingestion_models(
+    settings: AppSettings | None = None,
+) -> EvidenceIngestionModels:
+    resolved = settings or get_settings()
+    return EvidenceIngestionModels(
+        evidence_classification=build_chat_model(
+            resolved.evidence_classification_model
+        ),
+        embedding=build_embedding_model(resolved.embedding_model),
+        rerank=RerankModel(resolved.rerank_model),
+    )
+
+
+@dataclass(frozen=True)
 class ModelRegistry:
     rule_extraction: ChatOpenAI
     evidence_classification: ChatOpenAI

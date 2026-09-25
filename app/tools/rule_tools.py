@@ -5,35 +5,15 @@ from dataclasses import dataclass, field
 from typing import Annotated
 
 from langchain_core.tools import InjectedToolCallId, StructuredTool
-from pydantic import Field
 
-from app.models.common import StrictModel
 from app.models.documents import ParsedDocument
-from app.models.rules import NonBlank, RuleCommitRecord, RuleSet, SubmitRuleDeltaInput
+from app.models.rules import RuleCommitRecord, RuleSet, SubmitRuleDeltaInput
 from app.prompts.loader import load_tool_description
 from app.retrieval.models import IndexFilter
 from app.retrieval.service import RetrievalService
 from app.rules.context import build_rule_view
 from app.rules.merger import apply_rule_delta_operations
 from app.rules.policies import handle_rule_limit_exceeded
-
-
-class RuleSearchGroup(StrictModel):
-    queries: list[NonBlank] = Field(
-        min_length=1,
-        description="本组一个或多个明确问题，可用互补表达，避免重复同义查询。",
-    )
-    file_ids: list[NonBlank] = Field(
-        min_length=1,
-        description="本组所有查询的共同文件范围，仅可选当前文件或已完成历史文件 ID，不可填未来文件。",
-    )
-
-
-class SearchRuleSourceInput(StrictModel):
-    querylist: list[RuleSearchGroup] = Field(
-        min_length=1,
-        description="非空查询组列表；不同文件范围分别成组，每组必须明确 queries 和 file_ids。",
-    )
 
 
 class SubmitRuleToolInput(SubmitRuleDeltaInput):
@@ -143,122 +123,27 @@ def build_rule_tools(session: RuleSession) -> list[StructuredTool]:
         )
         return await session.submit(request, tool_call_id)
 
-    async def search_rule_source(querylist: list[RuleSearchGroup]) -> str:
-        allowed = {**session.history, session.current.document.file_id: session.current}
-        groups = []
-        for number, group in enumerate(querylist, 1):
-            lines = [
-                f"## 查询组 {number}",
-                "查询：" + "；".join(group.queries),
-                "文件范围：" + "、".join(group.file_ids),
-            ]
-            try:
-                if not set(group.file_ids) <= allowed.keys():
-                    raise ValueError(
-                        "只能回查当前文件及已完成历史文件，不能查询未来或越界文件"
-                    )
-                parsed = [allowed[key] for key in group.file_ids]
-                if any(
-                    item.document.project_id != session.rule_set.project_id
-                    or str(item.document.data_role) != "rule_source"
-                    for item in parsed
-                ):
-                    raise ValueError("授权文件角色或项目不符")
-                if session.current.document.file_id in group.file_ids:
-                    lines.append(
-                        "当前文件补查可能涉及后续正文，不代表该范围已处理，不推进阅读进度。"
-                    )
-                if not any(
-                    block.content.strip()
-                    or any(image.transcription.strip() for image in block.images)
-                    for item in parsed
-                    for section in item.sections
-                    for block in section.blocks
-                ):
-                    raise ValueError("当前范围无可检索文字，请使用已提供的图片路径查看")
-                hits = {}
-                for query in dict.fromkeys(group.queries):
-                    results = await session.retrieval.search(
-                        query,
-                        IndexFilter(
-                            scope_id=f"rules-{session.rule_set.project_id}",
-                            project_id=session.rule_set.project_id,
-                            data_role="rule_source",
-                            file_ids=group.file_ids,
-                        ),
-                    )
-                    for result in results:
-                        if (
-                            result.source.file_id not in group.file_ids
-                            or result.project_id != session.rule_set.project_id
-                        ):
-                            raise ValueError("检索返回越界文件")
-                        expected = allowed[result.source.file_id]
-                        if (
-                            not expected.markdown_path
-                            or result.parse_version != expected.markdown_path
-                        ):
-                            raise ValueError("索引解析版本与会话不一致，需要重建索引")
-                        entry = hits.setdefault(result.chunk_id, (result, []))
-                        entry[1].append(query)
-                lines.append(
-                    "状态：检索完成"
-                    if hits
-                    else "状态：检索完成，本次未召回；不表示原文没有要求"
-                )
-                used = 0
-                budget = session.retrieval.settings.retrieval.max_source_chars
-                for number_hit, (result, queries) in enumerate(hits.values(), 1):
-                    if used + len(result.content) > budget and used:
-                        lines.append("返回达到本组长度预算；其余命中未展示。")
-                        break
-                    if len(result.content) > budget:
-                        lines.append("完整结构超过本组预算，不截断表格。")
-                        content = (
-                            "原文结构过长，未在此展示；请查看关联原图。"
-                            if result.image_paths
-                            else "原文结构过长，未在此展示；该结构没有可用原图，本次未能提供完整内容。"
-                        )
-                    else:
-                        content = result.content
-                    lines.extend(
-                        [
-                            f"### 命中 {number_hit}",
-                            "命中查询：" + "；".join(queries),
-                            f"文件：{result.source.file_id}（{result.source.file_name}）",
-                            f"位置：{result.source.section or '章节未知'}；页码：{'、'.join(map(str, result.page_numbers)) or '未知'}",
-                            f"原文：{content}",
-                        ]
-                    )
-                    if result.image_paths:
-                        registered = {
-                            image.path
-                            for section in allowed[result.source.file_id].sections
-                            for block in section.blocks
-                            for image in block.images
-                        }
-                        if not set(result.image_paths) <= registered:
-                            raise ValueError("索引图片未登记在固定解析版本，需要重建")
-                        lines.append("相关图片：" + "、".join(result.image_paths))
-                    if result.truncated:
-                        lines.append("读取限制：此次返回为文本节选，不能代表完整条款。")
-                    if content == result.content:
-                        session.accessed_history.add(result.source.file_id)
-                    used += len(content)
-            except Exception as exc:
-                lines.append(
-                    f"状态：本组未执行或未完整完成。原因：{type(exc).__name__}: {exc}"
-                )
-            groups.append("\n\n".join(lines))
-        return "\n\n".join(groups)
+    from app.tools.common_tools import CommonTool
 
-    return [
-        StructuredTool.from_function(
-            coroutine=search_rule_source,
-            name="search_rule_source",
-            args_schema=SearchRuleSourceInput,
-            description=load_tool_description("search_rule_source"),
+    # 检索实现公共化，规则侧仍保留实际已展示来源的业务记录。
+    search = CommonTool(
+        parsed_documents={
+            **session.history,
+            session.current.document.file_id: session.current,
+        },
+        settings=session.retrieval.settings,
+        retrieval=session.retrieval,
+        query_filter=IndexFilter(
+            scope_id=f"rules-{session.rule_set.project_id}",
+            project_id=session.rule_set.project_id,
+            data_role="rule_source",
         ),
+        default_file_ids=[*session.history, session.current.document.file_id],
+        current_file_id=session.current.document.file_id,
+        on_source_read=session.accessed_history.add,
+    ).search_tool()
+    return [
+        search,
         StructuredTool.from_function(
             coroutine=submit_rule_delta,
             name="submit_rule_delta",

@@ -21,7 +21,7 @@ class DocumentRef(StrictModel):
     source_path: str
     data_role: DataRole
     parse_status: ParseStatus = ParseStatus.PENDING
-    project_id: str
+    project_id: str | None = None
     bidder_id: str | None = None
     task_id: str | None = None
     evidence_type: EvidenceType | None = None
@@ -30,13 +30,17 @@ class DocumentRef(StrictModel):
     @model_validator(mode="after")
     def validate_ownership(self) -> "DocumentRef":
         if self.data_role == DataRole.RULE_SOURCE:
-            if self.bidder_id or self.task_id:
-                raise ValueError("规则文件不能绑定 bidder_id 或 task_id")
+            if not self.project_id or self.bidder_id or self.task_id:
+                raise ValueError(
+                    "规则文件必须绑定 project_id，不能绑定 bidder_id 或 task_id"
+                )
         elif self.data_role == DataRole.EVIDENCE_MATERIAL:
-            if not self.bidder_id or self.task_id:
-                raise ValueError("资料文件必须绑定 bidder_id 且不能绑定 task_id")
-        elif not self.bidder_id or not self.task_id:
-            raise ValueError("投标文件必须绑定 bidder_id 和 task_id")
+            if not self.bidder_id or self.task_id or self.project_id:
+                raise ValueError(
+                    "资料文件只绑定 bidder_id，不能绑定 project_id 或 task_id"
+                )
+        elif not self.project_id or not self.bidder_id or not self.task_id:
+            raise ValueError("投标文件必须绑定 project_id、bidder_id 和 task_id")
         return self
 
 

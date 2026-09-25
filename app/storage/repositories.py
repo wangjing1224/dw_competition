@@ -5,12 +5,11 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from app.core.errors import NotFoundError, StateConflict
-from app.storage.ids import next_id
 from app.storage.database import open_db
+from app.storage.ids import next_id
 
 
 def utc_now() -> str:
@@ -28,7 +27,6 @@ class ProjectRecord:
 
 @dataclass(frozen=True)
 class BidderRecord:
-    project_id: str
     bidder_id: str
     status: str
     error_code: str | None = None
@@ -64,7 +62,7 @@ class AuditEventRecord:
 @dataclass(frozen=True)
 class FileRecord:
     file_id: str
-    project_id: str
+    project_id: str | None
     bidder_id: str | None
     task_id: str | None
     data_role: str
@@ -140,36 +138,45 @@ class ProjectRepository:
 
 
 class BidderRepository:
-    def create(
-        self, project_id: str, status: str = "processing_evidence"
-    ) -> BidderRecord:
-        ProjectRepository().require(project_id)
+    def mark_interrupted_ingestions_failed(self) -> int:
+        """进程重启时保留原文件/进度，区分未传完和可恢复的处理阶段。"""
+        with open_db() as connection:
+            return connection.execute(
+                """UPDATE bidders SET
+                    error_code = CASE WHEN status = 'uploading_evidence'
+                        THEN 'upload_incomplete' ELSE 'process_interrupted' END,
+                    status = 'evidence_failed', error_message = '入库进程中断，已保存资料和进度保留',
+                    updated_at = ?
+                    WHERE status IN ('uploading_evidence', 'processing_evidence')""",
+                (utc_now(),),
+            ).rowcount
+
+    def create(self, *, status: str = "processing_evidence") -> BidderRecord:
         bidder_id = next_id("bidder")
         now = utc_now()
         with open_db() as connection:
             connection.execute(
                 """
                 INSERT INTO bidders(
-                    project_id, bidder_id, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?)
+                    bidder_id, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?)
                 """,
-                (project_id, bidder_id, status, now, now),
+                (bidder_id, status, now, now),
             )
-        return self.require(project_id, bidder_id)
+        return self.require(bidder_id)
 
-    def require(self, project_id: str, bidder_id: str) -> BidderRecord:
+    def require(self, bidder_id: str) -> BidderRecord:
         with open_db() as connection:
             row = connection.execute(
                 """
                 SELECT * FROM bidders
-                 WHERE project_id = ? AND bidder_id = ?
+                 WHERE bidder_id = ?
                 """,
-                (project_id, bidder_id),
+                (bidder_id,),
             ).fetchone()
         if row is None:
-            raise NotFoundError("bidder_not_found", "投标方不存在或不属于当前项目")
+            raise NotFoundError("bidder_not_found", "投标方不存在")
         return BidderRecord(
-            project_id=row["project_id"],
             bidder_id=row["bidder_id"],
             status=row["status"],
             error_code=row["error_code"],
@@ -178,34 +185,32 @@ class BidderRepository:
 
     def update_status(
         self,
-        project_id: str,
         bidder_id: str,
         status: str,
         *,
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> BidderRecord:
-        """更新投标方资料处理状态，归属条件始终包含 project_id。"""
+        """资料库独立于项目，只按 bidder_id 更新。"""
 
         with open_db() as connection:
             updated = connection.execute(
                 """
                 UPDATE bidders
                    SET status = ?, error_code = ?, error_message = ?, updated_at = ?
-                 WHERE project_id = ? AND bidder_id = ?
+                 WHERE bidder_id = ?
                 """,
                 (
                     status,
                     error_code,
                     error_message,
                     utc_now(),
-                    project_id,
                     bidder_id,
                 ),
             ).rowcount
         if updated != 1:
-            raise NotFoundError("bidder_not_found", "投标方不存在或不属于当前项目")
-        return self.require(project_id, bidder_id)
+            raise NotFoundError("bidder_not_found", "投标方不存在")
+        return self.require(bidder_id)
 
 
 class AuditTaskRepository:
@@ -217,7 +222,8 @@ class AuditTaskRepository:
         status: str = "running",
         progress: dict[str, Any] | None = None,
     ) -> AuditTaskRecord:
-        BidderRepository().require(project_id, bidder_id)
+        ProjectRepository().require(project_id)
+        BidderRepository().require(bidder_id)
         task_id = next_id("audit")
         now = utc_now()
         with open_db() as connection:
@@ -563,12 +569,17 @@ class FileRepository:
     def list_by_scope(
         self,
         *,
-        project_id: str,
+        project_id: str | None = None,
         data_role: str,
         bidder_id: str | None = None,
         task_id: str | None = None,
     ) -> list[FileRecord]:
-        clauses = ["project_id = ?", "data_role = ?"]
+        if data_role == "evidence_material":
+            if project_id is not None or not bidder_id or task_id:
+                raise ValueError("资料范围只允许 bidder_id")
+        elif project_id is None:
+            raise ValueError("招标和投标文件范围必须有 project_id")
+        clauses = ["project_id IS ?", "data_role = ?"]
         values: list[Any] = [project_id, data_role]
         if bidder_id is not None:
             clauses.append("bidder_id = ?")
@@ -578,15 +589,12 @@ class FileRepository:
             values.append(task_id)
         with open_db() as connection:
             rows = connection.execute(
-                f"SELECT * FROM files WHERE {' AND '.join(clauses)}",
+                f"SELECT * FROM files WHERE {' AND '.join(clauses)} ORDER BY rowid",
                 values,
             ).fetchall()
         return [
             FileRecord(
-                **{
-                    field: row[field]
-                    for field in FileRecord.__dataclass_fields__
-                }
+                **{field: row[field] for field in FileRecord.__dataclass_fields__}
             )
             for row in rows
         ]

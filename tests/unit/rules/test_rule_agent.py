@@ -465,7 +465,7 @@ async def test_group_search_enforces_history_scope_and_version(env):
     }
     response = await search.ainvoke(
         tool_call(
-            "search_rule_source",
+            "search_documents",
             "search",
             {
                 "querylist": [
@@ -483,7 +483,7 @@ async def test_group_search_enforces_history_scope_and_version(env):
     retrieval.search.return_value[0].parse_version = "different-version"
     response = await search.ainvoke(
         tool_call(
-            "search_rule_source",
+            "search_documents",
             "stale",
             {"querylist": [{"queries": ["期限"], "file_ids": ["file-1"]}]},
         )
@@ -522,7 +522,7 @@ async def test_current_file_search_is_scoped_versioned_and_does_not_advance(env)
     search = build_rule_tools(session)[0]
     response = await search.ainvoke(
         tool_call(
-            "search_rule_source",
+            "search_documents",
             "search-current",
             {
                 "querylist": [{"queries": ["参数"], "file_ids": ["file-1"]}],
@@ -537,7 +537,7 @@ async def test_current_file_search_is_scoped_versioned_and_does_not_advance(env)
     retrieval.search.return_value[0].parse_version = "stale"
     response = await search.ainvoke(
         tool_call(
-            "search_rule_source",
+            "search_documents",
             "stale-current",
             {
                 "querylist": [{"queries": ["参数"], "file_ids": ["file-1"]}],

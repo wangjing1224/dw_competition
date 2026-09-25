@@ -1,8 +1,18 @@
 """三个业务接口都进入 OpenAPI 的路由注册测试。"""
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def isolated_startup(monkeypatch, temp_settings):
+    monkeypatch.setattr("app.main.get_settings", lambda: temp_settings)
+    monkeypatch.setattr(
+        "app.storage.database.database_path",
+        lambda: temp_settings.storage.database_path,
+    )
 
 
 def test_business_routes_are_registered():
@@ -10,10 +20,9 @@ def test_business_routes_are_registered():
         paths = client.get("/openapi.json").json()["paths"]
 
     assert "/api/projects" in paths
-    assert "/api/projects/{project_id}/bidders" in paths
-    assert (
-        "/api/projects/{project_id}/bidders/{bidder_id}/audit-tasks" in paths
-    )
+    assert "/api/bidders" in paths
+    assert "/api/bidders/{bidder_id}" in paths
+    assert "/api/projects/{project_id}/bidders/{bidder_id}/audit-tasks" in paths
     assert "/api/audit-tasks/{task_id}" in paths
     assert "/api/audit-tasks/{task_id}/stream" in paths
     assert "/api/audit-tasks/{task_id}/outputs/json" in paths

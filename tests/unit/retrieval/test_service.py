@@ -29,7 +29,7 @@ async def test_search_returns_only_current_bidder(monkeypatch):
         IndexChunk(
             chunk_id="chunk-a",
             file_id="file-a",
-            project_id="project-1",
+            project_id=None,
             bidder_id="bidder-a",
             data_role="evidence_material",
             file_name="A合同.docx",
@@ -42,7 +42,7 @@ async def test_search_returns_only_current_bidder(monkeypatch):
         IndexChunk(
             chunk_id="chunk-b",
             file_id="file-b",
-            project_id="project-1",
+            project_id=None,
             bidder_id="bidder-b",
             data_role="evidence_material",
             file_name="B合同.docx",
@@ -64,14 +64,16 @@ async def test_search_returns_only_current_bidder(monkeypatch):
         np.asarray([[1.0, 0.0], [1.0, 0.0]], dtype=np.float32),
         {},
     )
-    monkeypatch.setattr("app.retrieval.service.load_index", lambda *args, **kwargs: loaded)
+    monkeypatch.setattr(
+        "app.retrieval.service.load_index", lambda *args, **kwargs: loaded
+    )
     service = RetrievalService(FakeEmbedding(), FakeRerank(), get_settings())
 
     results = await service.search(
         "B_ONLY_MARKER",
         IndexFilter(
             scope_id="evidence-project-1-bidder-a",
-            project_id="project-1",
+            project_id=None,
             bidder_id="bidder-a",
             data_role="evidence_material",
         ),

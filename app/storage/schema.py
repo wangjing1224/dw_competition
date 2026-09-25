@@ -20,16 +20,12 @@ TABLE_DDLS = (
     """,
     """
     CREATE TABLE IF NOT EXISTS bidders (
-        project_id TEXT NOT NULL,
-        bidder_id TEXT NOT NULL,
+        bidder_id TEXT PRIMARY KEY,
         status TEXT NOT NULL,
         error_code TEXT,
         error_message TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (project_id, bidder_id),
-        UNIQUE (bidder_id),
-        FOREIGN KEY (project_id) REFERENCES projects(project_id)
+        updated_at TEXT NOT NULL
     )
     """,
     """
@@ -46,14 +42,14 @@ TABLE_DDLS = (
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE (project_id, bidder_id, task_id),
-        FOREIGN KEY (project_id, bidder_id)
-            REFERENCES bidders(project_id, bidder_id)
+        FOREIGN KEY (project_id) REFERENCES projects(project_id),
+        FOREIGN KEY (bidder_id) REFERENCES bidders(bidder_id)
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS files (
         file_id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
+        project_id TEXT,
         bidder_id TEXT,
         task_id TEXT,
         data_role TEXT NOT NULL CHECK (
@@ -71,18 +67,18 @@ TABLE_DDLS = (
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (project_id) REFERENCES projects(project_id),
-        FOREIGN KEY (project_id, bidder_id)
-            REFERENCES bidders(project_id, bidder_id),
+        FOREIGN KEY (bidder_id) REFERENCES bidders(bidder_id),
         FOREIGN KEY (project_id, bidder_id, task_id)
             REFERENCES audit_tasks(project_id, bidder_id, task_id),
         CHECK (
-            (data_role = 'rule_source' AND bidder_id IS NULL AND task_id IS NULL)
+            (data_role = 'rule_source' AND project_id IS NOT NULL
+                AND bidder_id IS NULL AND task_id IS NULL)
             OR
             (data_role = 'evidence_material'
-                AND bidder_id IS NOT NULL AND task_id IS NULL)
+                AND project_id IS NULL AND bidder_id IS NOT NULL AND task_id IS NULL)
             OR
             (data_role = 'bid_document'
-                AND bidder_id IS NOT NULL AND task_id IS NOT NULL)
+                AND project_id IS NOT NULL AND bidder_id IS NOT NULL AND task_id IS NOT NULL)
         )
     )
     """,
@@ -101,7 +97,6 @@ TABLE_DDLS = (
 )
 
 INDEX_DDLS = (
-    "CREATE INDEX IF NOT EXISTS idx_bidders_project ON bidders(project_id)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_owner ON audit_tasks(project_id, bidder_id)",
     """
     CREATE INDEX IF NOT EXISTS idx_files_scope

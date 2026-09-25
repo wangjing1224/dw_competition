@@ -1,5 +1,7 @@
 # 规则 Agent 每个阅读批次最多调用次数；压缩续跑不清零，最后一次不提供工具。
 rule_agent_max_steps: 8
+# 资料入库也按阅读批次计数，正常换批重置、压缩续跑保留。
+evidence_ingestion_max_steps: 8
 
 # 规则库总条数上限预留值，10000 用于当前近似不限制的试运行。
 # 整批增量超过上限时调用预留处理函数，当前只打印警告，不拒绝、截断或自动合并。
@@ -17,7 +19,7 @@ rule_extraction_model:
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
-  # 仅规则 Agent 接入输入控制器；其他角色仍保留原有输出额度。
+  # 规则和资料入库 Agent 接入输入控制器；审核侧仍保留原有输出额度。
   context_window_tokens: 1000000
   compaction_trigger_ratio: 0.90
   tokenizer: DeepSeek
@@ -26,7 +28,7 @@ rule_extraction_model:
   # 保留通用模型配置；规则 Agent 不调用一次性结构化抽取接口。
   structured_output_mode: prompt_only
 
-# 投标方资料分类模型：识别合同、发票、证书、技术参数等资料类型。
+# 资料入库 Agent：沿用配置名称和 Key，产出文件双摘要及跨文件关联。
 evidence_classification_model:
   platform: deepseek
   base_url: ${EVIDENCE_CLASSIFICATION_MODEL_BASE_URL}
@@ -35,7 +37,9 @@ evidence_classification_model:
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
-  max_output_tokens: 4096
+  context_window_tokens: 1000000
+  compaction_trigger_ratio: 0.90
+  tokenizer: DeepSeek
   enable_thinking: false
   structured_output_mode: prompt_only
 

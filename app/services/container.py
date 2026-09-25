@@ -1,7 +1,7 @@
 """按请求构造服务依赖，避免模块导入阶段连接模型或创建全局客户端。"""
 
 from app.core.config import get_settings
-from app.llm.factory import build_model_registry
+from app.llm.factory import build_evidence_ingestion_models, build_model_registry
 from app.services.background_runner import background_runner
 from app.services.bidder_service import BidderService
 from app.services.project_service import ProjectService
@@ -14,7 +14,7 @@ def build_project_service() -> ProjectService:
 
 def build_bidder_service() -> BidderService:
     settings = get_settings()
-    return BidderService(settings, build_model_registry(settings))
+    return BidderService(settings, build_evidence_ingestion_models(settings))
 
 
 def build_audit_task_service():

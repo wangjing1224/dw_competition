@@ -6,7 +6,6 @@ import json
 import numpy as np
 
 from app.core.config import AppSettings, EmbeddingSettings, get_settings
-from app.evidence.storage import load_evidence_classification
 from app.llm.embedding_model import EmbeddingModel
 from app.models.documents import DocumentRef
 from app.parsers.service import load_parsed_document
@@ -47,29 +46,12 @@ async def build_document_index(
         for key in ("file_id", "project_id", "bidder_id", "task_id", "data_role"):
             if getattr(parsed.document, key) != getattr(document, key):
                 raise ValueError("解析文件身份与上传记录不一致")
-        # 解析 JSON 中的 parse_status 是解析完成后的最新值；资料分类则发生在
-        # 解析之后，因此只覆盖分类字段，不能用上传阶段的 pending 状态回退它。
-        indexed_document = parsed.document.model_copy(
-            update={
-                "evidence_type": document.evidence_type,
-                "classification_status": document.classification_status,
-            }
-        )
-        parsed = parsed.model_copy(update={"document": indexed_document})
-        retrieval_hint = None
-        if str(document.data_role) == "evidence_material":
-            classification = load_evidence_classification(
-                document.file_id,
-                resolved,
-            )
-            if classification is not None:
-                retrieval_hint = classification.evidence_summary
+        # 入库 Agent 启动前只索引原文，不读取旧分类或把文件摘要重复混入每个切片。
         chunks.extend(
             chunk_parsed_document(
                 parsed,
                 max_tokens=resolved.retrieval.chunk_tokens,
                 overlap_tokens=resolved.retrieval.chunk_overlap,
-                retrieval_hint=retrieval_hint,
             )
         )
     vectors = (

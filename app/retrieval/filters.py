@@ -8,11 +8,21 @@ def filter_chunk_indices(
     chunks: list[IndexChunk], query_filter: IndexFilter
 ) -> list[int]:
     if query_filter.data_role == DataRole.EVIDENCE_MATERIAL:
-        if not query_filter.bidder_id:
-            raise ValueError("资料检索必须提供 bidder_id")
+        if (
+            not query_filter.bidder_id
+            or query_filter.project_id
+            or query_filter.task_id
+        ):
+            raise ValueError("资料检索只绑定 bidder_id")
     elif query_filter.data_role == DataRole.BID_DOCUMENT:
-        if not query_filter.bidder_id or not query_filter.task_id:
+        if (
+            not query_filter.project_id
+            or not query_filter.bidder_id
+            or not query_filter.task_id
+        ):
             raise ValueError("投标文件检索必须提供 bidder_id 和 task_id")
+    elif not query_filter.project_id or query_filter.bidder_id or query_filter.task_id:
+        raise ValueError("招标检索只绑定 project_id")
 
     matched: list[int] = []
     for index, chunk in enumerate(chunks):
