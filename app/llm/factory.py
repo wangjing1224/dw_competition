@@ -108,6 +108,27 @@ class ModelRegistry:
     rerank: RerankModel
 
 
+@dataclass(frozen=True)
+class AuditModels:
+    """审核不创建规则/资料入库模型，也不要求它们的 Key。"""
+
+    bid_summary: ChatOpenAI
+    bid_chat: ChatOpenAI
+    evidence_chat: ChatOpenAI
+    embedding: EmbeddingModel
+    rerank: RerankModel
+
+
+def build_audit_models(settings: AppSettings) -> AuditModels:
+    return AuditModels(
+        bid_summary=build_chat_model(settings.bid_summary_model),
+        bid_chat=build_chat_model(settings.bid_chat_model),
+        evidence_chat=build_chat_model(settings.evidence_chat_model),
+        embedding=build_embedding_model(settings.embedding_model),
+        rerank=RerankModel(settings.rerank_model),
+    )
+
+
 def build_model_registry(settings: AppSettings | None = None) -> ModelRegistry:
     resolved = settings or get_settings()
     return ModelRegistry(

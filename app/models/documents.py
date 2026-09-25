@@ -221,11 +221,10 @@ class ParsedDocument(StrictModel):
 
 
 class BidRouteDecision(StrictModel):
-    """摘要模型只输出路由状态、原因和详细摘要。"""
+    """路由只判断项目归属；审核直接读取解析原文。"""
 
     match_status: str
-    match_reason: str
-    summary: str
+    match_reason: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_match_status(self) -> "BidRouteDecision":
@@ -235,6 +234,8 @@ class BidRouteDecision(StrictModel):
 
 
 class BidDocumentSummary(BidRouteDecision):
-    """代码补充文件身份后的持久化摘要。"""
+    """沿用存储名称，只保留路由记录与代码维护的阅读范围。"""
 
     file_id: str
+    reading_end: int = 0
+    total_units: int = 0

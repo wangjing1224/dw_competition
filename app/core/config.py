@@ -112,6 +112,8 @@ class AuditSettings(ConfigModel):
 
     bid_agent_max_steps: int = Field(default=8, gt=0)
     evidence_agent_max_steps: int = Field(default=3, gt=0)
+    file_concurrency: int = Field(default=2, ge=1)
+    model_concurrency: int = Field(default=3, ge=1)
 
 
 class ParsingSettings(ConfigModel):
@@ -161,15 +163,17 @@ class AppSettings(ConfigModel):
             raise ValueError("规则模型已接入输入控制器，需要 context_window_tokens")
         if self.evidence_classification_model.context_window_tokens is None:
             raise ValueError("资料入库模型已接入输入控制器，需要 context_window_tokens")
-        for name in (
-            "bid_summary_model",
-            "bid_chat_model",
-            "evidence_chat_model",
-            "parser_vision_model",
-        ):
+        for name in ("bid_summary_model", "bid_chat_model", "evidence_chat_model"):
             model = getattr(self, name)
-            if model is not None and model.context_window_tokens is not None:
-                raise ValueError(f"{name} 尚未接入输入控制器，暂保留 max_output_tokens")
+            if model.context_window_tokens is None:
+                raise ValueError(f"{name} 已接入输入控制器，需要 context_window_tokens")
+        if (
+            self.parser_vision_model
+            and self.parser_vision_model.context_window_tokens is not None
+        ):
+            raise ValueError(
+                "parser_vision_model 尚未接入输入控制器，暂保留 max_output_tokens"
+            )
         return self
 
     def ensure_runtime_directories(self) -> None:
@@ -236,6 +240,7 @@ def get_settings() -> AppSettings:
                 "langsmith_project": os.getenv("LANGSMITH_PROJECT", "dw-competition"),
             },
             "audit": {
+                **model_config.get("audit", {}),
                 "bid_agent_max_steps": int(os.getenv("BID_AGENT_MAX_STEPS", "8")),
                 "evidence_agent_max_steps": int(
                     os.getenv("EVIDENCE_AGENT_MAX_STEPS", "3")

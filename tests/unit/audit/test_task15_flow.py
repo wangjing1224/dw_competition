@@ -1,67 +1,66 @@
 """投标摘要路由和文件级资料目录回归测试。"""
 
-from types import SimpleNamespace
-
 import pytest
 
 from app.audit.bid_summary import summarize_and_route_bid_document
 from app.evidence.catalog import build_evidence_catalog
 from app.evidence.storage import write_evidence_classification
 from app.models.documents import (
-    BidRouteDecision,
     DocumentRef,
-    ParsedDocument,
-    ParsedSection,
 )
 from app.models.evidence import EvidenceClassification
-from app.models.rules import RuleSet
 
 
 @pytest.mark.asyncio
-async def test_summary_model_output_is_bound_to_current_file():
-    document = DocumentRef(
-        file_id="file-1",
-        file_name="投标.md",
-        source_path="投标.md",
-        data_role="bid_document",
-        parse_status="parsed",
-        project_id="project-1",
-        bidder_id="bidder-1",
-        task_id="audit-1",
+async def test_route_output_has_only_two_model_fields(temp_settings):
+    from tests.helpers.audit import SequenceModel, audit_context, parsed_file
+
+    model = SequenceModel(['{"match_status":"matched","match_reason":"采购对象一致"}'])
+    result = await summarize_and_route_bid_document(
+        parsed_file("bid-1"),
+        audit_context().rule_set,
+        model,
+        temp_settings.bid_summary_model,
     )
-    parsed = ParsedDocument(
-        document=document,
-        parse_status="parsed",
-        sections=[
-            ParsedSection(
-                section_id="section-1",
-                title="投标函",
-                content="红外热成像仪投标文件",
-            )
-        ],
+    assert result.file_id == "bid-1"
+    assert "summary" not in result.model_dump()
+    assert result.reading_end == result.total_units == 1
+    assert "rule-1" not in model.calls[0][0][1].content
+    assert model.calls[0][1]["max_tokens"] > 0
+
+
+@pytest.mark.asyncio
+async def test_route_has_one_bounded_repair_and_never_defaults_to_matched(
+    temp_settings,
+):
+    from tests.helpers.audit import SequenceModel, audit_context, parsed_file
+
+    model = SequenceModel(
+        ["坏JSON", '{"match_status":"uncertain","match_reason":"项目主体缺失"}']
     )
-
-    async def fake_invoke(*_args, **_kwargs):
-        return BidRouteDecision(
-            summary="## 文件基本信息\n红外热成像仪投标文件",
-            match_status="matched",
-            match_reason="采购对象一致",
+    result = await summarize_and_route_bid_document(
+        parsed_file("bid-1"),
+        audit_context().rule_set,
+        model,
+        temp_settings.bid_summary_model,
+    )
+    assert result.match_status == "uncertain"
+    assert len(model.calls) == 2
+    assert "bid-1独立正文" in model.calls[1][0][1].content
+    with pytest.raises(RuntimeError, match="402"):
+        await summarize_and_route_bid_document(
+            parsed_file("bid-1"),
+            audit_context().rule_set,
+            SequenceModel([RuntimeError("402")]),
+            temp_settings.bid_summary_model,
         )
-
-    import app.audit.bid_summary as module
-
-    original = module.invoke_structured
-    module.invoke_structured = fake_invoke
-    try:
-        result = await summarize_and_route_bid_document(
-            parsed,
-            RuleSet(project_id="project-1"),
-            object(),
-            SimpleNamespace(structured_output_mode="prompt_only"),
+    with pytest.raises(ValueError, match="修复失败"):
+        await summarize_and_route_bid_document(
+            parsed_file("bid-1"),
+            audit_context().rule_set,
+            SequenceModel(["坏JSON", "还是坏的"]),
+            temp_settings.bid_summary_model,
         )
-    finally:
-        module.invoke_structured = original
-    assert result.file_id == "file-1"
 
 
 def test_evidence_catalog_keeps_file_level_entries(temp_settings):

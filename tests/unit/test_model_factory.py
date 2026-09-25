@@ -18,6 +18,23 @@ from app.llm.input_budget import InputContext
 from app.llm.platforms import ChatProtocol, PlatformChatOpenAI
 
 
+def test_audit_factory_only_constructs_audit_roles(monkeypatch, temp_settings):
+    created = []
+    monkeypatch.setattr(
+        factory,
+        "build_chat_model",
+        lambda settings: created.append(settings) or settings,
+    )
+    monkeypatch.setattr(factory, "build_embedding_model", lambda settings: settings)
+    monkeypatch.setattr(factory, "RerankModel", lambda settings: settings)
+    models = factory.build_audit_models(temp_settings)
+    assert len(created) == 3
+    assert created[0] is temp_settings.bid_summary_model
+    assert created[1] is temp_settings.bid_chat_model
+    assert created[2] is temp_settings.evidence_chat_model
+    assert models.embedding is temp_settings.embedding_model
+
+
 @pytest.mark.parametrize(
     "platform,model_name,token_key",
     [
@@ -177,6 +194,8 @@ async def test_real_http_serialization_and_reasoning_replay(
                     "platform": platform,
                     "model": model_name,
                     "enable_thinking": thinking,
+                    "context_window_tokens": None,
+                    "max_output_tokens": 4096,
                 }
             )
             model = factory.build_chat_model(cfg)

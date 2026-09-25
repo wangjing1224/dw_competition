@@ -2,7 +2,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const stages = [
     ["saving_files", "保存文件"],
     ["parsing_bid_documents", "文档解析"],
-    ["summarizing_bid_documents", "摘要路由"],
+    ["routing_bid_documents", "项目路由"],
     ["building_bid_index", "构建索引"],
     ["auditing", "智能审核"],
     ["writing_outputs", "结果输出"],
@@ -85,9 +85,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const rules = Object.fromEntries(
       (payload.result?.rules || []).map((rule) => [rule.rule_id, rule])
     );
-    const classifications = payload.result?.evidence_classifications || [];
     const body = document.getElementById("result-body");
-    if (!results.length) {
+    const failures = Object.entries(payload.result?.file_errors || {});
+    if (!results.length && !failures.length) {
       body.innerHTML = '<tr><td colspan="6" class="empty-cell">任务尚未生成审核结果</td></tr>';
       return;
     }
@@ -105,13 +105,14 @@ document.addEventListener("DOMContentLoaded", () => {
         <td><button class="detail-button" data-index="${index}">查看</button></td>
       </tr>
     `;
-    }).join("");
+    }).join("") + failures.map(([fileId, error]) => `
+      <tr><td>${escapeHtml(fileId)}</td><td colspan="5">执行失败（非审核结论）：${escapeHtml(error)}</td></tr>
+    `).join("");
     body.querySelectorAll(".detail-button").forEach((button) => {
       button.addEventListener("click", () =>
         showDetail(
           results[Number(button.dataset.index)],
-          rules,
-          classifications
+          rules
         )
       );
     });
@@ -220,7 +221,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }).join("");
   }
 
-  function showDetail(item, rules, classifications) {
+  function showDetail(item, rules) {
     document.getElementById("dialog-title").textContent = item.file.file_name;
     const findings = (item.findings || []).length
       ? item.findings.map((finding) => {
@@ -228,7 +229,8 @@ document.addEventListener("DOMContentLoaded", () => {
           const sourceCount =
             (finding.tender_chunk_ids || []).length +
             (finding.bid_chunk_ids || []).length +
-            (finding.evidence_chunk_ids || []).length;
+            (finding.evidence_chunk_ids || []).length +
+            (finding.image_paths || []).length;
           return `
           <article class="finding-detail">
             <h3>${escapeHtml(rule.requirement || finding.rule_id)}</h3>
@@ -236,7 +238,7 @@ document.addEventListener("DOMContentLoaded", () => {
               · ${escapeHtml(enumText(rule.category))}
               · ${escapeHtml(enumText(rule.priority))}</p>
             <p>${escapeHtml(finding.summary)}</p>
-            <p><strong>引用片段：</strong>${sourceCount} 条</p>
+            <p><strong>引用依据（含图片）：</strong>${sourceCount} 条</p>
           </article>
         `;
         }).join("")
@@ -246,19 +248,11 @@ document.addEventListener("DOMContentLoaded", () => {
         `<p><strong>${escapeHtml(enumText(category))}：</strong>${escapeHtml(summary)}</p>`
       )
       .join("");
-    const manualMaterials = classifications
-      .filter((record) => record.classification_status === "manual_review")
-      .map((record) =>
-        `<p><strong>${escapeHtml(record.file_name)}：</strong>${escapeHtml(record.reason)}</p>`
-      )
-      .join("");
     document.getElementById("dialog-body").innerHTML = `
       <p><strong>项目匹配：</strong>${escapeHtml(enumText(item.project_match.status))} · ${escapeHtml(item.project_match.reason)}</p>
       <p><strong>总体结论：</strong>${escapeHtml(enumText(item.overall_conclusion))}</p>
-      ${item.document_summary?.summary ? `<p><strong>文件摘要：</strong>${escapeHtml(item.document_summary.summary)}</p>` : ""}
       ${item.audit_summary ? `<p><strong>审核总结：</strong>${escapeHtml(item.audit_summary)}</p>` : ""}
       ${categorySummaries}
-      ${manualMaterials ? `<h3>需人工核验的资料</h3>${manualMaterials}` : ""}
       ${findings}
     `;
     document.getElementById("detail-dialog").showModal();

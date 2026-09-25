@@ -1,25 +1,27 @@
-# 当前审核任务
+# 当前审核文件
 
-- 项目：${project_name}
-- 投标文件：${bid_file}
-- 投标方：${bidder}
+${file_identity}
 
 ## 招标项目简介
 
 ${project_profile}
 
-## 投标文件详细摘要
+## 本次阅读范围
 
-${bid_summary}
+${reading_scope}
 
-## 审核规则
+## 当前投标文件原文
 
-```json
-${rule_groups}
-```
+${document_context}
 
-## 可用资料目录
+## 可用投标方资料（定位线索，不代表已核验）
 
-```json
 ${evidence_catalog}
-```
+
+## 已保存报告
+
+${report_content}
+
+## 当前批次交接
+
+${continuation}

@@ -1,4 +1,4 @@
-"""独立资料库及入库模型；后半部分保留尚待迁移的审核侧契约。"""
+"""独立资料库及入库模型；保留旧分类辅助函数使用的 DTO。审核子 Agent 直接返回正文。"""
 
 from typing import Annotated, Literal
 
@@ -6,7 +6,6 @@ from pydantic import Field, StringConstraints, model_validator
 
 from app.models.common import (
     ClassificationStatus,
-    EvidenceReviewStatus,
     EvidenceType,
     StrictModel,
 )
@@ -116,36 +115,3 @@ class EvidenceCatalogItem(StrictModel):
     file_id: str
     status: ClassificationStatus
     summary: str
-
-
-class EvidenceFileSummary(StrictModel):
-    file_id: str
-    evidence_summary: str
-
-
-class EvidenceReviewTask(StrictModel):
-    """子图内部状态；身份字段由系统维护，不暴露给子 Agent。"""
-
-    task_id: str
-    project_id: str
-    bidder_id: str
-    rule_id: str
-    evidence_type: EvidenceType
-    verification_request: str
-    files: list[EvidenceFileSummary] = Field(default_factory=list)
-
-
-class EvidenceReviewDecision(StrictModel):
-    status: EvidenceReviewStatus
-    summary: str = Field(min_length=2, max_length=500)
-    evidence_chunk_ids: list[str] = Field(default_factory=list)
-
-
-class EvidenceReviewResult(StrictModel):
-    """资料核验工具返回给主 Agent 的外层结果。"""
-
-    rule_id: str
-    evidence_type: EvidenceType
-    status: EvidenceReviewStatus
-    summary: str = Field(min_length=2, max_length=500)
-    evidence_chunk_ids: list[str] = Field(default_factory=list)

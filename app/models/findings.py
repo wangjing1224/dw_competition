@@ -12,3 +12,4 @@ class Finding(StrictModel):
     tender_chunk_ids: list[str] = Field(default_factory=list)
     bid_chunk_ids: list[str] = Field(default_factory=list)
     evidence_chunk_ids: list[str] = Field(default_factory=list)
+    image_paths: list[str] = Field(default_factory=list)

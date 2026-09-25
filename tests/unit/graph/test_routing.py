@@ -1,58 +1,34 @@
-"""主 Agent 结果和截断重试路由测试。"""
+"""路由只分发已发出的行为，轮次判断属于模型调用前。"""
 
 from langchain_core.messages import AIMessage
+from langgraph.graph import END
 
 from app.graph.routing import route_bid_agent
-from app.models.rules import RuleSet
-from app.models.tasks import AgentAuditDecision
 
 
-def _state(message):
-    return {
-        "messages": [message],
-        "react_step_count": 1,
-        "length_retry_count": 0,
-        "format_retry_count": 0,
-        "rule_set": RuleSet(project_id="project-1"),
-    }
+def test_plain_content_ends_graph_without_parsing_json():
+    assert route_bid_agent({"messages": [AIMessage(content="处理完毕")]}) == END
 
 
-def test_valid_decision_is_applied():
-    decision = AgentAuditDecision(summary="完成", categories=[])
-    assert route_bid_agent(
-        _state(AIMessage(content=decision.model_dump_json())),
-    ) == "apply_output"
-
-
-def test_length_response_gets_one_compact_retry():
-    message = AIMessage(
-        content='{"summary":"截断"',
-        response_metadata={"finish_reason": "length"},
-    )
-    assert route_bid_agent(_state(message)) == "retry_length"
-
-
-def test_invalid_json_gets_one_format_only_retry():
-    current = _state(AIMessage(content='{"summary":"损坏"'))
-    current["react_step_count"] = 8
-    assert route_bid_agent(current) == "retry_format"
-
-    current["format_retry_count"] = 1
-    assert route_bid_agent(current) == "limit_reached"
-
-
-def test_tool_calls_must_be_closed_before_retry():
-    current = _state(
-        AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "id": "call-1",
-                    "name": "search_bid_response",
-                    "args": {"checks": []},
-                }
-            ],
+def test_tool_behavior_is_routed_to_tools_even_at_limit():
+    assert (
+        route_bid_agent(
+            {
+                "model_calls": 8,
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "search_documents",
+                                "args": {},
+                                "id": "call-1",
+                                "type": "tool_call",
+                            }
+                        ],
+                    )
+                ],
+            }
         )
+        == "tools"
     )
-    current["react_step_count"] = 8
-    assert route_bid_agent(current) == "tools"

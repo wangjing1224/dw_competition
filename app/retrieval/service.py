@@ -20,10 +20,13 @@ class RetrievalService:
         embedding_model: EmbeddingModel,
         rerank_model: RerankModel,
         settings: AppSettings | None = None,
+        *,
+        indexes: dict[str, object] | None = None,
     ) -> None:
         self.embedding_model = embedding_model
         self.rerank_model = rerank_model
         self.settings = settings or get_settings()
+        self.indexes = indexes
 
     async def search(
         self,
@@ -33,12 +36,15 @@ class RetrievalService:
         candidate_top_k: int | None = None,
         final_top_k: int | None = None,
     ) -> list[SearchResult]:
-        index = load_index(
-            query_filter.scope_id,
-            expected_fingerprint=embedding_config_fingerprint(
-                self.settings.embedding_model
-            ),
-        )
+        if self.indexes is not None:
+            index = self.indexes[query_filter.scope_id]
+        else:
+            index = load_index(
+                query_filter.scope_id,
+                expected_fingerprint=embedding_config_fingerprint(
+                    self.settings.embedding_model
+                ),
+            )
         allowed = filter_chunk_indices(index.chunks, query_filter)
         if not allowed:
             return []

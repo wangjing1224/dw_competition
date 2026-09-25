@@ -55,6 +55,10 @@ class CommonTool:
         default_file_ids: list[str] | None = None,
         current_file_id: str | None = None,
         on_source_read: Callable[[str], None] | None = None,
+        file_filters: dict[str, IndexFilter] | None = None,
+        on_chunk_read: Callable | None = None,
+        on_image_read: Callable[[str], None] | None = None,
+        strict_errors: bool = False,
     ):
         # 仅接收当前业务授权范围，不在这里推测 project/bidder/task 归属。
         self.parsed_documents = dict(parsed_documents)
@@ -64,19 +68,53 @@ class CommonTool:
         self.default_file_ids = list(default_file_ids or [])
         self.current_file_id = current_file_id
         self.on_source_read = on_source_read
+        self.file_filters = dict(file_filters or {})
+        self.on_chunk_read = on_chunk_read
+        self.on_image_read = on_image_read
+        self.strict_errors = strict_errors
         if not set(self.default_file_ids) <= self.parsed_documents.keys():
             raise ValueError("默认检索范围必须是授权文件的子集")
 
     def search_tool(self) -> StructuredTool:
-        if self.retrieval is None or self.query_filter is None:
+        if self.retrieval is None or (
+            self.query_filter is None and not self.file_filters
+        ):
             raise ValueError("公共检索需要业务注入检索服务和范围")
-        scope = self.query_filter
-        for parsed in self.parsed_documents.values():
+        for file_id, parsed in self.parsed_documents.items():
+            scope = self.file_filters.get(file_id, self.query_filter)
+            if scope is None:
+                raise ValueError("授权文件缺少检索范围")
             if any(
                 getattr(parsed.document, key) != getattr(scope, key)
                 for key in ("data_role", "project_id", "bidder_id", "task_id")
             ):
                 raise ValueError("授权文件角色或归属与检索范围不符")
+
+        async def search_scopes(query, ids):
+            # 多角色查询先按代码绑定的索引分组，不接受模型传 scope/project/bidder。
+            scopes = {}
+            for file_id in ids:
+                scope = self.file_filters.get(file_id, self.query_filter)
+                scopes.setdefault(scope.scope_id, (scope, []))[1].append(file_id)
+            found = []
+            for scope, selected in scopes.values():
+                try:
+                    results = await self.retrieval.search(
+                        query, scope.model_copy(update={"file_ids": selected})
+                    )
+                except Exception as exc:
+                    if self.strict_errors:
+                        raise RuntimeError(f"原文检索执行失败：{exc}") from exc
+                    raise
+                for result in results:
+                    if result.source.file_id not in selected or any(
+                        getattr(result, key) != getattr(scope, key)
+                        for key in ("project_id", "bidder_id", "task_id")
+                    ):
+                        error = RuntimeError if self.strict_errors else ValueError
+                        raise error("检索返回越界文件")
+                    found.append(result)
+            return sorted(found, key=lambda result: result.score, reverse=True)
 
         async def search_documents(querylist: list[DocumentSearchGroup]) -> str:
             groups = []
@@ -96,7 +134,7 @@ class CommonTool:
                 try:
                     if not set(ids) <= self.parsed_documents.keys():
                         raise ValueError(
-                            "只能查询当前文件及已完成历史文件，不能查询未来或越界文件"
+                            "只能查询当前会话授权文件，不能查询未来或越界文件"
                         )
                     if not ids:
                         lines.append("状态：当前无可检索历史文件，不扩大范围。")
@@ -116,23 +154,17 @@ class CommonTool:
                         )
                     hits = {}
                     for query in dict.fromkeys(group.queries):
-                        results = await self.retrieval.search(
-                            query, scope.model_copy(update={"file_ids": ids})
-                        )
+                        results = await search_scopes(query, ids)
                         for result in results:
-                            if result.source.file_id not in ids or any(
-                                getattr(result, key) != getattr(scope, key)
-                                for key in ("project_id", "bidder_id", "task_id")
-                            ):
-                                raise ValueError("检索返回越界文件")
                             parsed = self.parsed_documents[result.source.file_id]
                             if (
                                 not parsed.markdown_path
                                 or result.parse_version != parsed.markdown_path
                             ):
-                                raise ValueError(
-                                    "索引解析版本与会话不一致，需要重建索引"
+                                error = (
+                                    RuntimeError if self.strict_errors else ValueError
                                 )
+                                raise error("索引解析版本与会话不一致，需要重建索引")
                             registered = {
                                 image.path
                                 for section in parsed.sections
@@ -140,7 +172,10 @@ class CommonTool:
                                 for image in block.images
                             }
                             if not set(result.image_paths) <= registered:
-                                raise ValueError(
+                                error = (
+                                    RuntimeError if self.strict_errors else ValueError
+                                )
+                                raise error(
                                     "索引图片未登记在固定解析版本，需要重建索引"
                                 )
                             hits.setdefault(result.chunk_id, (result, []))[1].append(
@@ -172,6 +207,18 @@ class CommonTool:
                             [
                                 "命中查询：" + "；".join(queries),
                                 f"文件：{result.source.file_id}（{result.source.file_name}）",
+                                "角色："
+                                + {
+                                    "rule_source": "招标原文",
+                                    "bid_document": "当前投标原文",
+                                    "evidence_material": "投标方资料",
+                                }[
+                                    str(
+                                        self.parsed_documents[
+                                            result.source.file_id
+                                        ].document.data_role
+                                    )
+                                ],
                                 f"位置：{result.source.section or '章节未知'}；页码：{'、'.join(map(str, result.page_numbers)) or '未知'}",
                                 "原文：\n" + content,
                             ]
@@ -184,8 +231,12 @@ class CommonTool:
                             )
                         if displayed and self.on_source_read:
                             self.on_source_read(result.source.file_id)
+                        if displayed and self.on_chunk_read:
+                            self.on_chunk_read(result)
                         used += len(content)
                 except Exception as exc:
+                    if self.strict_errors and not isinstance(exc, ValueError):
+                        raise
                     lines.append(
                         f"状态：本组未执行或未完整完成。原因：{type(exc).__name__}: {exc}"
                     )
@@ -201,7 +252,7 @@ class CommonTool:
             + "、".join(self.parsed_documents)
             + "\nfile_ids=null 默认范围："
             + ("、".join(self.default_file_ids) or "空；当前无历史文件")
-            + "。查询当前文件请显式填写其 ID。",
+            + "。显式列表只能包含以上授权 ID。",
         )
 
     def tools(self) -> list[StructuredTool]:
@@ -227,6 +278,8 @@ class CommonTool:
                 max_side=settings.vision_image_max_side,
             )
             result.name = "view_image"
+            if self.on_image_read:
+                self.on_image_read(path)
             return result
 
         result = [

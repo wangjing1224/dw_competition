@@ -81,7 +81,13 @@ def test_rule_budget_configuration_and_legacy_roles():
     assert settings.rule_extraction_model.max_output_tokens is None
     assert settings.rule_extraction_model.compaction_trigger_ratio == 0.90
     assert settings.rule_extraction_model.tokenizer == "DeepSeek"
-    assert settings.bid_chat_model.max_output_tokens is not None
+    for role in (
+        settings.bid_summary_model,
+        settings.bid_chat_model,
+        settings.evidence_chat_model,
+    ):
+        assert role.max_output_tokens is None
+        assert role.context_window_tokens == 1_000_000
 
 
 @pytest.mark.parametrize(
@@ -104,6 +110,8 @@ def test_invalid_budget_settings_rejected(values):
 
 def test_unmigrated_roles_cannot_silently_drop_output_limit():
     data = get_settings().model_dump()
-    data["bid_chat_model"].update(context_window_tokens=10000, max_output_tokens=None)
+    data["parser_vision_model"].update(
+        context_window_tokens=10000, max_output_tokens=None
+    )
     with pytest.raises(ValidationError, match="尚未接入"):
         config.AppSettings.model_validate(data)

@@ -1,21 +1,15 @@
-# 当前文件
+# 当前投标文件
 
-```json
 ${file_identity}
-```
 
-# 当前项目概况
+## 招标项目简介
 
-```json
 ${project_profile}
-```
 
-# 六类审核方向
+## 本次实际阅读范围
 
-```json
-${rule_categories}
-```
+${reading_scope}
 
-# 投标文件解析内容
+## 解析原文
 
 ${document_context}

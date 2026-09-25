@@ -3,6 +3,11 @@ rule_agent_max_steps: 8
 # 资料入库也按阅读批次计数，正常换批重置、压缩续跑保留。
 evidence_ingestion_max_steps: 8
 
+# 文件调度和实际模型请求使用不同名额，等待子 Agent 时释放模型请求名额。
+audit:
+  file_concurrency: 2
+  model_concurrency: 3
+
 # 规则库总条数上限预留值，10000 用于当前近似不限制的试运行。
 # 整批增量超过上限时调用预留处理函数，当前只打印警告，不拒绝、截断或自动合并。
 rule_limit: 10000
@@ -19,7 +24,7 @@ rule_extraction_model:
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
-  # 规则和资料入库 Agent 接入输入控制器；审核侧仍保留原有输出额度。
+  # 每次模型调用前由输入控制器计算真实请求预算。
   context_window_tokens: 1000000
   compaction_trigger_ratio: 0.90
   tokenizer: DeepSeek
@@ -43,7 +48,7 @@ evidence_classification_model:
   enable_thinking: false
   structured_output_mode: prompt_only
 
-# 投标文件详细摘要与项目相关性路由模型：每个投标文件进入索引前调用一次。
+# 项目相关性路由模型：仅输出状态和理由，不生成投标摘要。
 bid_summary_model:
   platform: deepseek
   # 独立配置 URL 和 Key，允许与主审核 Agent 分别切换模型服务或账号。
@@ -53,7 +58,9 @@ bid_summary_model:
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
-  max_output_tokens: 8192
+  context_window_tokens: 1000000
+  compaction_trigger_ratio: 0.90
+  tokenizer: DeepSeek
   enable_thinking: false
   structured_output_mode: prompt_only
 
@@ -66,8 +73,9 @@ bid_chat_model:
   temperature: 0.2
   timeout_seconds: 120
   max_retries: 2
-  # 规则审核结论需要足够的完整 JSON 输出空间，输入规模仍需实际验证。
-  max_output_tokens: 16384
+  context_window_tokens: 1000000
+  compaction_trigger_ratio: 0.90
+  tokenizer: DeepSeek
   enable_thinking: false
   structured_output_mode: prompt_only
 
@@ -80,7 +88,9 @@ evidence_chat_model:
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
-  max_output_tokens: 4096
+  context_window_tokens: 1000000
+  compaction_trigger_ratio: 0.90
+  tokenizer: DeepSeek
   enable_thinking: false
   structured_output_mode: prompt_only
 

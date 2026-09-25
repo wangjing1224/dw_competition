@@ -61,12 +61,30 @@ def test_missing_prompt_variable_fails_fast():
         render_prompt("rule_extraction")
 
 
+def test_audit_report_template_is_a_standalone_static_fragment():
+    # 报告模板独立维护，由主 Agent System 引用。
+    rendered = render_prompt("audit_report_template")
+    assert "${" not in rendered
+    assert "# 当前投标文件审核报告" in rendered
+    assert "## 总体总结" in rendered
+    assert "### 分类总结" in rendered
+    assert "### 〈rule_id〉" in rendered
+    for label in (
+        "结论：",
+        "审核说明：",
+        "招标片段：",
+        "投标片段：",
+        "资料片段：",
+        "图片来源：",
+    ):
+        assert label in rendered
+    assert "AgentAuditDecision" not in rendered
+
+
 def test_all_tool_descriptions_are_available():
     for name in (
-        "search_bid_response",
-        "search_tender_source",
         "request_evidence_review",
-        "search_evidence",
+        "report_document",
         "search_documents",
         "save_evidence_material",
         "submit_rule_delta",
@@ -75,26 +93,14 @@ def test_all_tool_descriptions_are_available():
         assert load_tool_description(name)
 
 
-@pytest.mark.parametrize(
-    ("name", "schema_variable", "model_name"),
-    [
-        ("bid_agent", "agent_audit_decision_schema", "AgentAuditDecision"),
-        (
-            "evidence_subagent",
-            "evidence_review_schema",
-            "EvidenceReviewDecision",
-        ),
-    ],
-)
-def test_agent_prompt_contains_runtime_output_schema(name, schema_variable, model_name):
-    rendered = render_prompt(
-        name,
-        **{
-            schema_variable: {
-                "type": "object",
-                "title": model_name,
-            }
-        },
+def test_audit_system_uses_template_once_and_child_has_no_json_schema():
+    template = render_prompt("audit_report_template")
+    system = render_prompt(
+        "bid_agent", rule_view="规则视图", report_markdown_contract=template
     )
-    assert model_name in rendered
-    assert f"${{{schema_variable}}}" not in rendered
+    assert system.count(template) == 1
+    assert "AgentAuditDecision" not in system
+    assert "规则视图" in system
+    child = render_prompt("evidence_subagent")
+    assert "EvidenceReviewDecision" not in child
+    assert "JSON" in child

@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "description": "路由只判断项目归属；审核直接读取解析原文。",
+  "properties": {
+    "match_status": {
+      "title": "Match Status",
+      "type": "string"
+    },
+    "match_reason": {
+      "minLength": 1,
+      "title": "Match Reason",
+      "type": "string"
+    }
+  },
+  "required": [
+    "match_status",
+    "match_reason"
+  ],
+  "title": "BidRouteDecision",
+  "type": "object"
+}

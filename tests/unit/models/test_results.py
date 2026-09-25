@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.models.documents import DocumentRef
+from app.models.evidence import EvidenceLibrary
 from app.models.results import AuditResult, FileAuditResult, ProjectMatch
 
 
@@ -29,10 +30,11 @@ def test_duplicate_file_result_is_rejected():
         overall_conclusion="not_applicable",
     )
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="重复文件结果"):
         AuditResult(
             task_id="audit-1",
             project_id="project-1",
             bidder_id="bidder-1",
+            evidence_library=EvidenceLibrary(bidder_id="bidder-1"),
             file_results=[file_result, file_result],
         )

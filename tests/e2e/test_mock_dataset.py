@@ -1,4 +1,4 @@
-"""使用 test-datas 验证新入库，并独立保留旧审核/报告契约回归。"""
+"""真实解析/索引/工具/导出，假模型验证新规则与资料库审核全链路。"""
 
 from io import BytesIO
 from pathlib import Path
@@ -8,12 +8,8 @@ import numpy as np
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.core.errors import BusinessError
 from app.evidence.storage import load_library
-from app.models.findings import Finding
-from app.models.results import AuditResult, FileAuditResult, ProjectMatch
-from app.models.rules import RuleReportItem, present_rule_for_model
-from app.parsers.service import load_parsed_document
+from app.graph.audit_task_graph import LangGraphAuditExecutor
 from app.reports.service import ReportService
 from app.services.audit_task_service import AuditTaskService, query_audit_task
 from app.services.background_runner import BackgroundRunner
@@ -21,7 +17,6 @@ from app.services.bidder_service import BidderService
 from app.services.project_service import ProjectService
 from app.storage.database import initialize_database
 from app.storage.file_store import FileStore
-from app.storage.repositories import BidderRepository
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "test-datas"
 
@@ -51,77 +46,65 @@ def folder_uploads(path: Path) -> list[tuple[str, str, BytesIO]]:
     ]
 
 
-class MockDatasetAuditExecutor:
-    async def run(self, context) -> AuditResult:
-        file_results: list[FileAuditResult] = []
-        for bid_file in context.bid_files:
-            parsed = load_parsed_document(bid_file.file_id)
-            content = "\n".join(
-                part
-                for section in parsed.sections
-                for part in [section.content, *section.tables]
-                if part
+class RouteModel:
+    async def ainvoke(self, messages, **kwargs):
+        import json
+
+        text = messages[1].content
+        status = "not_matched" if "机械加工" in text else "matched"
+        return AIMessage(
+            content=json.dumps(
+                {"match_status": status, "match_reason": "根据采购对象判断"},
+                ensure_ascii=False,
             )
-            if "机械加工" in content or "数控机床" in content:
-                file_results.append(
-                    FileAuditResult(
-                        file=bid_file,
-                        is_applicable=False,
-                        project_match=ProjectMatch(
-                            status="not_matched",
-                            reason="采购对象为机械加工设备，与当前项目不匹配",
-                        ),
-                        document_summary=context.bid_summaries[bid_file.file_id],
-                        exclusion_reason="采购对象不匹配",
-                        overall_conclusion="not_applicable",
-                    )
+        )
+
+
+class AuditModel:
+    def bind_tools(self, tools):
+        return self
+
+    async def ainvoke(self, messages, **kwargs):
+        import re
+
+        if any(m.type == "tool" for m in messages):
+            return AIMessage(content="处理完毕")
+        text = messages[1].content
+        report = text[text.index("# 当前投标文件审核报告") :]
+        report = report.split("\n## 续读")[0] if "\n## 续读" in report else report
+        # 使用实际初始化的骨架，不绕过 report_document 或报告校验。
+        headings = re.findall(r"^#{1,3} .+$", report, re.MULTILINE)
+        parts = []
+        for heading in headings:
+            if heading.startswith("### rule-"):
+                parts.extend(
+                    [heading, "结论：风险\n审核说明：报价待完善，技术响应已有说明。"]
                 )
-                continue
-            findings = [
-                Finding(
-                    rule_id=rule.rule_id,
-                    result=(
-                        "risk" if str(rule.category) == "commercial" else "compliant"
-                    ),
-                    summary=(
-                        "投标总价未填写，需要补充"
-                        if str(rule.category) == "commercial"
-                        else "投标响应明确给出640x480，满足技术要求"
-                    ),
-                )
-                for rule in context.rule_set.rules
-            ]
-            file_results.append(
-                FileAuditResult(
-                    file=bid_file,
-                    is_applicable=True,
-                    project_match=ProjectMatch(
-                        status="matched",
-                        reason="项目名称和采购对象一致",
-                    ),
-                    document_summary=context.bid_summaries[bid_file.file_id],
-                    overall_conclusion="risk",
-                    audit_summary="技术响应满足要求，但报价信息存在缺口",
-                    findings=findings,
-                    suggestions=["补充投标总价并复核报价文件"],
-                )
-            )
-        return AuditResult(
-            task_id=context.task_id,
-            project_id=context.project_id,
-            bidder_id=context.bidder_id,
-            rules=[
-                RuleReportItem.model_validate(
-                    present_rule_for_model(rule).model_dump(mode="json")
-                )
-                for rule in context.rule_set.rules
+            elif heading == "## 总体总结" or heading == "### 分类总结":
+                parts.extend([heading, "存在待完善项，需要复核。"])
+            elif heading == "# 当前投标文件审核报告" or re.search(
+                r"（[a-z_]+）", heading
+            ):
+                parts.append(heading)
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "report_document",
+                    "id": "save-report",
+                    "args": {
+                        "action": "write",
+                        "content": "\n\n".join(parts) + "\n",
+                        "edits": None,
+                    },
+                    "type": "tool_call",
+                }
             ],
-            file_results=file_results,
         )
 
 
 @pytest.mark.asyncio
-async def test_mock_dataset_ingestion_and_legacy_audit_contract(
+async def test_mock_dataset_new_libraries_through_route_agent_and_reports(
     monkeypatch, temp_settings
 ):
     monkeypatch.setattr(
@@ -131,7 +114,6 @@ async def test_mock_dataset_ingestion_and_legacy_audit_contract(
     monkeypatch.setattr("app.storage.file_store.get_settings", lambda: temp_settings)
     monkeypatch.setattr("app.parsers.service.get_settings", lambda: temp_settings)
     monkeypatch.setattr("app.retrieval.store.get_settings", lambda: temp_settings)
-    monkeypatch.setattr("app.reports.word_report.get_settings", lambda: temp_settings)
     initialize_database(temp_settings.storage.database_path)
 
     class RuleModel:
@@ -148,13 +130,13 @@ async def test_mock_dataset_ingestion_and_legacy_audit_contract(
             return AIMessage(
                 content="",
                 tool_calls=[
-                    dict(
-                        name="submit_rule_delta",
-                        id="call-1",
-                        args=dict(
-                            project_profile="某省电网有限公司采购红外热成像仪",
-                            return_view="changed",
-                            operations=[
+                    {
+                        "name": "submit_rule_delta",
+                        "id": "call-1",
+                        "args": {
+                            "project_profile": "某省电网有限公司采购红外热成像仪",
+                            "return_view": "changed",
+                            "operations": [
                                 {
                                     "action": "add",
                                     "category": "technical",
@@ -172,9 +154,9 @@ async def test_mock_dataset_ingestion_and_legacy_audit_contract(
                                     "reason": "报价要求明确",
                                 },
                             ],
-                        ),
-                        type="tool_call",
-                    )
+                        },
+                        "type": "tool_call",
+                    }
                 ],
             )
 
@@ -233,23 +215,22 @@ async def test_mock_dataset_ingestion_and_legacy_audit_contract(
     task_service = AuditTaskService(
         temp_settings,
         embedding,
-        MockDatasetAuditExecutor(),
+        LangGraphAuditExecutor(
+            temp_settings,
+            SimpleNamespace(
+                bid_chat=AuditModel(),
+                evidence_chat=AuditModel(),
+                embedding=embedding,
+                rerank=object(),
+            ),
+        ),
         ReportService(file_store=FileStore()),
         runner,
     )
-    with pytest.raises(BusinessError, match="资料库"):
-        await task_service.create_task(
-            project.project_id,
-            bidder.bidder_id,
-            folder_uploads(DATA_ROOT / "投标文件测试集"),
-        )
-
-    # 审核消费适配另属后续任务。以下是无资料查询的脚本审核器契约回归，
-    # 用独立 fixture 保留 JSON/Word 验证，不能冒充新资料库已接入审核。
-    audit_fixture_bidder = BidderRepository().create(status="evidence_ready")
+    task_service.summary_model = RouteModel()
     task = await task_service.create_task(
         project.project_id,
-        audit_fixture_bidder.bidder_id,
+        bidder.bidder_id,
         folder_uploads(DATA_ROOT / "投标文件测试集"),
     )
     await runner.wait()

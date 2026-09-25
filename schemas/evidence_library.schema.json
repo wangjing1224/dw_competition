@@ -1,0 +1,103 @@
+{
+  "$defs": {
+    "EvidenceMaterial": {
+      "additionalProperties": false,
+      "properties": {
+        "bid_summary": {
+          "description": "简洁说明当前文件的对象、可查事项及读取限制，不放图片路径，不下审核结论。",
+          "minLength": 1,
+          "title": "Bid Summary",
+          "type": "string"
+        },
+        "evidence_summary": {
+          "description": "当前文件完整的详细摘要：关键事实、对象编号、范围、局部读取限制及关联依据；看图获得且正文无转写的事实必须附真实图片路径，不因精简关系而省略，不写阅读批次等运行状态。",
+          "minLength": 1,
+          "title": "Evidence Summary",
+          "type": "string"
+        },
+        "relations": {
+          "description": "二元组列表：[一个简短关系短语, 已完成历史文件ID]。第一项自由填写而非枚举，只写是什么联系，不写解释句、编号、主体或数值；具体依据放evidence_summary。仅记录有依据且需联合理解或核验的联系，仅同一主体不建立关系，无明确联系填[]。",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "minLength": 1,
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Relations",
+          "type": "array"
+        },
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bid_summary",
+        "evidence_summary",
+        "relations",
+        "file_id"
+      ],
+      "title": "EvidenceMaterial",
+      "type": "object"
+    },
+    "EvidenceSourceFile": {
+      "additionalProperties": false,
+      "properties": {
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        },
+        "file_name": {
+          "title": "File Name",
+          "type": "string"
+        },
+        "source_path": {
+          "title": "Source Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_id",
+        "file_name",
+        "source_path"
+      ],
+      "title": "EvidenceSourceFile",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "bidder_id": {
+      "title": "Bidder Id",
+      "type": "string"
+    },
+    "source_files": {
+      "items": {
+        "$ref": "#/$defs/EvidenceSourceFile"
+      },
+      "title": "Source Files",
+      "type": "array"
+    },
+    "materials": {
+      "items": {
+        "$ref": "#/$defs/EvidenceMaterial"
+      },
+      "title": "Materials",
+      "type": "array"
+    }
+  },
+  "required": [
+    "bidder_id"
+  ],
+  "title": "EvidenceLibrary",
+  "type": "object"
+}

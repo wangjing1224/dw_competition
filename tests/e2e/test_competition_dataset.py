@@ -1,4 +1,7 @@
-"""真实比赛材料的规则/独立资料入库验收；审核消费适配另行接入。"""
+"""显式开启的真实材料全链路烟测；通过不等于审核质量达标。"""
+
+import os
+import time
 
 from fastapi.testclient import TestClient
 
@@ -6,7 +9,7 @@ from app.main import app
 from tests.e2e.conftest import multipart_folder
 
 
-def test_competition_dataset_ingestion(competition_dataset):
+def test_competition_dataset_audit(competition_dataset):
     with TestClient(app) as client:
         files, data = multipart_folder(competition_dataset["tender"])
         project_response = client.post("/api/projects", files=files, data=data)
@@ -48,5 +51,29 @@ def test_competition_dataset_ingestion(competition_dataset):
             files=files,
             data=data,
         )
-        assert task_response.status_code == 400
-        assert task_response.json()["error"]["code"] == "evidence_audit_not_adapted"
+        task_response.raise_for_status()
+        task_id = task_response.json()["task_id"]
+        deadline = time.monotonic() + int(os.getenv("MODEL_E2E_TIMEOUT", "1800"))
+        while True:
+            response = client.get(f"/api/audit-tasks/{task_id}")
+            response.raise_for_status()
+            task = response.json()
+            if task["status"] != "running":
+                break
+            assert time.monotonic() < deadline, f"审核超时：{task_id}"
+            time.sleep(1)
+        assert task["status"] == "completed", task.get("error")
+        result = task["result"]
+        assert result["schema_version"] == "2.0"
+        assert not result["file_errors"]
+        file_results = result["file_results"]
+        assert len(file_results) == len(files)
+        assert len(task["outputs"]["word"]) == len(files)
+        rules = {rule["rule_id"] for rule in result["rules"]}
+        for item in file_results:
+            if item["is_applicable"]:
+                assert {finding["rule_id"] for finding in item["findings"]} == rules
+            else:
+                assert item["exclusion_reason"] and not item["findings"]
+        # 路由把所有文件排除也可能程序成功，不能算审核 Agent 已跑通。
+        assert any(item["is_applicable"] for item in file_results)

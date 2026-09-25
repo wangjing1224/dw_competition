@@ -1,30 +1,19 @@
-"""使用占位凭据验证主/子 LangGraph 和五个 BaseTool 可正常编译。"""
+"""主图只含执行和工具，报告导出不作为图节点。"""
 
-from pydantic import SecretStr
+import asyncio
 
+from app.audit.session import make_controller
 from app.graph.audit_task_graph import build_audit_graph
-from app.llm.factory import build_model_registry
+from tests.helpers.audit import SequenceModel
 
 
-def test_graph_compiles_without_calling_external_models(temp_settings):
-    def with_key(value):
-        return value.model_copy(update={"api_key": SecretStr("test-key")})
-
-    settings = temp_settings.model_copy(
-        update={
-            "rule_extraction_model": with_key(
-                temp_settings.rule_extraction_model
-            ),
-            "evidence_classification_model": with_key(
-                temp_settings.evidence_classification_model
-            ),
-            "bid_summary_model": with_key(temp_settings.bid_summary_model),
-            "bid_chat_model": with_key(temp_settings.bid_chat_model),
-            "evidence_chat_model": with_key(temp_settings.evidence_chat_model),
-            "embedding_model": with_key(temp_settings.embedding_model),
-        }
+def test_graph_compiles_without_external_models(temp_settings):
+    graph = build_audit_graph(
+        model=SequenceModel([]),
+        tools=[],
+        controller=make_controller(temp_settings.bid_chat_model),
+        max_steps=8,
+        limiter=asyncio.Semaphore(1),
+        trace_context={},
     )
-
-    graph = build_audit_graph(settings, build_model_registry(settings))
-
-    assert graph is not None
+    assert set(graph.get_graph().nodes) == {"__start__", "agent", "tools", "__end__"}

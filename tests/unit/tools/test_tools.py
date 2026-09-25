@@ -1,235 +1,267 @@
-"""BaseTool 对模型隐藏图状态，只暴露业务参数。"""
+"""公共读取授权、委派会话和通用报告编辑工具。"""
+
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.messages import AIMessage
-from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
+from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from app.graph.audit_state import AuditState
-from app.models.documents import DocumentRef, SourceRef
-from app.models.evidence import EvidenceCatalogItem
-from app.models.rules import RuleItem, RuleSet, RuleSourceFile
+from app.audit.context import evidence_view, scope_for
+from app.audit.sources import SourceLedger
+from app.reports.markdown_report import ReportDocument, parse_report
 from app.retrieval.models import SearchResult
-from app.retrieval.service import RetrievalService
-from app.storage.repositories import AuditEventRepository
-from app.tools.bid_tools import (
-    EvidenceReviewCheck,
-    EvidenceReviewToolInput,
-    RequestEvidenceReviewTool,
-    SearchBidResponseInput,
-    SearchBidResponseTool,
-    SearchTenderSourceInput,
-)
-from app.tools.evidence_tools import SearchEvidenceInput, SearchEvidenceTool
+from app.tools.bid_tools import build_evidence_review_tool
+from app.tools.common_tools import CommonTool
+from app.tools.report_tools import report_tool
+from tests.helpers.audit import SequenceModel, audit_context, filled_report
 
 
-def test_search_schema_requires_grouped_checks():
-    bid_schema = SearchBidResponseInput.model_json_schema()
-    tender_schema = SearchTenderSourceInput.model_json_schema()
-    assert "checks" in bid_schema["properties"]
-    assert bid_schema["properties"]["checks"]["description"]
-    assert bid_schema["properties"]["checks"]["maxItems"] == 8
-    assert (
-        bid_schema["$defs"]["BidSearchCheck"]["properties"]["queries"]["maxItems"] == 5
-    )
-    assert tender_schema["properties"]["checks"]["description"]
-    assert tender_schema["properties"]["checks"]["maxItems"] == 8
-    assert (
-        tender_schema["$defs"]["TenderSearchCheck"]["properties"]["queries"]["maxItems"]
-        == 5
-    )
-    assert (
-        bid_schema["properties"]["checks"]["description"]
-        != tender_schema["properties"]["checks"]["description"]
-    )
+def call(name, args, id="call-1"):
+    return {"name": name, "args": args, "id": id, "type": "tool_call"}
 
 
-def test_injected_state_is_hidden_from_tool_call_schema():
-    schema = (
-        SearchBidResponseTool.model_construct().tool_call_schema.model_json_schema()
-    )
-    assert set(schema["properties"]) == {"checks"}
-    # 输入 DTO 中保留状态注入点，但模型实际看到的工具 Schema 不包含它。
-    assert "state" in SearchBidResponseInput.model_fields
-    evidence_schema = (
-        SearchEvidenceTool.model_construct().tool_call_schema.model_json_schema()
-    )
-    assert set(evidence_schema["properties"]) == {"checks", "file_ids"}
-
-
-def test_evidence_review_input_is_business_only_except_injected_state():
-    assert set(EvidenceReviewToolInput.model_fields) == {
-        "checks",
-        "state",
+@pytest.mark.asyncio
+async def test_common_search_routes_roles_and_records_only_displayed(temp_settings):
+    context = audit_context()
+    parsed = {
+        key: p
+        for key, p in context.parsed_documents.items()
+        if key in {"bid-1", "tender-1"}
     }
-    schema = EvidenceReviewToolInput.model_json_schema()
-    assert schema["properties"]["checks"]["description"]
-    assert schema["properties"]["checks"]["maxItems"] == 10
+    ledger = SourceLedger(parsed)
+    searches = []
 
-
-def test_evidence_search_can_optionally_limit_files():
-    assert set(SearchEvidenceInput.model_fields) == {
-        "checks",
-        "file_ids",
-        "state",
-    }
-    schema = SearchEvidenceInput.model_json_schema()
-    assert schema["properties"]["checks"]["description"]
-    assert schema["properties"]["file_ids"]["description"]
-    assert (
-        schema["$defs"]["EvidenceSearchCheck"]["properties"]["queries"]["maxItems"] == 5
-    )
-
-
-class NoopEvents(AuditEventRepository):
-    def append(self, *args, **kwargs):
-        return None
-
-
-class FakeRetrieval(RetrievalService):
-    def __init__(self):
-        pass
-
-    async def search(self, _query, _filter, **_kwargs):
+    async def search(query, scope):
+        searches.append(scope)
+        file_id = scope.file_ids[0]
         return [
             SearchResult(
-                chunk_id="chunk-1-1-1-1",
-                score=0.9,
-                source=SourceRef(
-                    file_id="file-1",
-                    chunk_id="chunk-1-1-1-1",
-                    file_name="投标.md",
-                    source_path="投标.md",
-                    section="技术参数",
-                ),
-                content="探测器分辨率为640x480",
-                project_id="project-1",
-                bidder_id="bidder-1",
-                task_id="audit-1",
+                chunk_id="chunk-" + file_id,
+                score=1,
+                source={
+                    "file_id": file_id,
+                    "file_name": file_id + ".md",
+                    "source_path": file_id + ".md",
+                    "section": "正文",
+                },
+                content="实际展示原文",
+                parse_version=parsed[file_id].markdown_path,
+                project_id=scope.project_id,
+                bidder_id=scope.bidder_id,
+                task_id=scope.task_id,
             )
         ]
 
-
-@pytest.mark.asyncio
-async def test_tool_node_injects_state_without_model_identity_arguments(
-    temp_settings,
-):
-    tool = SearchBidResponseTool(
-        retrieval_service=FakeRetrieval(),
+    tool = CommonTool(
+        parsed_documents=parsed,
         settings=temp_settings,
-        event_repository=NoopEvents(),
-    )
-    state = {
-        "messages": [
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "search_bid_response",
-                        "args": {
-                            "checks": [
-                                {
-                                    "topic": "探测器分辨率",
-                                    "queries": ["探测器分辨率"],
-                                }
-                            ]
-                        },
-                        "id": "call-1",
-                        "type": "tool_call",
-                    }
-                ],
-            )
-        ],
-        "task_id": "audit-1",
-        "project_id": "project-1",
-        "bidder_id": "bidder-1",
-        "bid_files": [
-            DocumentRef(
-                file_id="file-1",
-                file_name="投标.md",
-                source_path="投标.md",
-                data_role="bid_document",
-                parse_status="parsed",
-                project_id="project-1",
-                bidder_id="bidder-1",
-                task_id="audit-1",
-            )
-        ],
-        "current_bid_index": 0,
-    }
-    # 使用真实 AuditState，防止输入模型前向引用导致 InjectedState 失效。
-    graph = StateGraph(AuditState)
-    graph.add_node("tools", ToolNode([tool]))
-    graph.set_entry_point("tools")
-    graph.add_edge("tools", END)
-    output = await graph.compile().ainvoke(state)
-    tool_message = output["messages"][-1]
-    assert "chunk-1-1-1-1" in tool_message.content
-    assert '"topic": "探测器分辨率"' in tool_message.content
-
-
-class UnexpectedEvidenceGraph:
-    async def ainvoke(self, *_args, **_kwargs):
-        raise AssertionError("只有人工读取资料时不应启动子 Agent")
-
-
-@pytest.mark.asyncio
-async def test_evidence_review_batch_preserves_rule_and_category(temp_settings):
-    tool = RequestEvidenceReviewTool(
-        evidence_graph=UnexpectedEvidenceGraph(),
-        settings=temp_settings,
-        event_repository=NoopEvents(),
-    )
-    rule = RuleItem(
-        rule_id="rule-1",
-        category="qualification",
-        requirement="投标人应提供有效营业执照",
-        priority="critical",
-        verification="evidence_check",
-        provenance="ai_generated",
-        reason="招标资格条款",
-        sources=[
-            RuleSourceFile(
-                file_id="rule-file",
-                file_name="招标文件.docx",
-                source_path="招标文件.docx",
-            )
-        ],
-    )
-    response = await tool._arun(
-        checks=[
-            EvidenceReviewCheck(
-                rule_id="rule-1",
-                evidence_type="business_license",
-                verification_request="核验营业执照主体名称和经营状态",
-            )
-        ],
-        state={
-            "task_id": "audit-1",
-            "project_id": "project-1",
-            "bidder_id": "bidder-1",
-            "rule_set": RuleSet(
-                project_id="project-1", rules=[rule], source_files=rule.sources
-            ),
-            "evidence_catalog": {
-                "business_license": [
-                    EvidenceCatalogItem(
-                        file_id="file-1",
-                        status="manual_review",
-                        summary="营业执照正文为图片",
-                    )
+        retrieval=SimpleNamespace(search=search),
+        file_filters={key: scope_for(p.document) for key, p in parsed.items()},
+        default_file_ids=["bid-1"],
+        on_chunk_read=ledger.chunk_read,
+        strict_errors=True,
+    ).search_tool()
+    response = await tool.ainvoke(
+        call(
+            tool.name,
+            {
+                "querylist": [
+                    {"queries": ["分辨率", "分辨率"], "file_ids": ["bid-1", "tender-1"]}
                 ]
             },
-        },
+        )
     )
-    assert response == {
-        "results": [
+    assert response.content.count("实际展示原文") == 2
+    assert {s.scope_id for s in searches} == {"bid-audit-1", "rules-project-1"}
+    assert set(ledger.sources) == {"chunk-bid-1", "chunk-tender-1"}
+    searches.clear()
+    response = await tool.ainvoke(
+        call(tool.name, {"querylist": [{"queries": ["参数"], "file_ids": None}]})
+    )
+    assert len(searches) == 1 and searches[0].file_ids == ["bid-1"]
+    searches.clear()
+    response = await tool.ainvoke(
+        call(tool.name, {"querylist": [{"queries": ["参数"], "file_ids": ["e-1"]}]})
+    )
+    assert "越界" in response.content and not searches
+
+
+@pytest.mark.asyncio
+async def test_model_failure_in_child_is_not_business_uncertainty(temp_settings):
+    context = audit_context()
+    tool = build_evidence_review_tool(
+        context=context,
+        settings=temp_settings,
+        model=SequenceModel([RuntimeError("402 Balance")]),
+        retrieval=SimpleNamespace(search=AsyncMock()),
+        ledger=SourceLedger(context.parsed_documents),
+        limiter=asyncio.Semaphore(1),
+        trace_context={},
+        records=[],
+    )
+    with pytest.raises(RuntimeError, match="402"):
+        await tool.ainvoke(
+            call(
+                tool.name,
+                {
+                    "checks": [
+                        {
+                            "rule_id": "rule-1",
+                            "verification_request": "确认分辨率",
+                            "file_ids": ["e-1"],
+                        }
+                    ]
+                },
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_delegate_one_hop_raw_content_and_call_id_idempotency(temp_settings):
+    context = audit_context()
+    ledger = SourceLedger(context.parsed_documents)
+    records = []
+    model = SequenceModel(["信息不足。资料原文未读，无法确认。", "与声明一致。"])
+    tool = build_evidence_review_tool(
+        context=context,
+        settings=temp_settings,
+        model=model,
+        retrieval=SimpleNamespace(search=AsyncMock()),
+        ledger=ledger,
+        limiter=asyncio.Semaphore(1),
+        trace_context={},
+        records=records,
+    )
+    args = {
+        "checks": [
             {
                 "rule_id": "rule-1",
-                "evidence_type": "business_license",
-                "status": "ocr_required",
-                "summary": "当前类别资料存在，但正文不可自动读取，需要人工核验",
-                "evidence_chunk_ids": [],
-            }
+                "verification_request": "确认分辨率",
+                "file_ids": ["e-1"],
+            },
+            {
+                "rule_id": "rule-1",
+                "verification_request": "确认数量",
+                "file_ids": ["e-3"],
+            },
         ]
     }
+    result = await tool.ainvoke(call(tool.name, args))
+    assert "信息不足" in result.content and "与声明一致" in result.content
+    assert len(records) == len(model.calls) == 2
+    human = model.calls[0][0][1].content
+    assert "资料1详细事实" in human and "资料2详细事实" in human
+    assert "资料3详细事实" not in human and "rule-1" not in human
+    assert not ledger.sources  # 子模型声称的来源不会凭空加入台账。
+    assert (await tool.ainvoke(call(tool.name, args))).content == result.content
+    assert len(model.calls) == 2
+    schema = convert_to_openai_tool(tool)["function"]["parameters"]
+    assert set(schema["properties"]) == {"checks"}
+    assert "evidence_types" not in str(schema)
+
+
+def test_one_hop_relations_do_not_expand_transitively():
+    selected, relations, _ = evidence_view(audit_context().evidence_library, ["e-1"])
+    assert selected == ["e-1", "e-2"]
+    assert "e-2 → e-1" in relations
+
+
+@pytest.mark.asyncio
+async def test_report_tool_atomic_edit_idempotency_and_source_validation(tmp_path):
+    context = audit_context()
+    ledger = SourceLedger(context.parsed_documents)
+    report = ReportDocument(tmp_path / "draft.md", context.rule_set, ledger)
+    tool = report_tool(report)
+    schema = convert_to_openai_tool(tool)["function"]["parameters"]
+    assert set(schema["properties"]) == {"action", "content", "edits"}
+    text = filled_report(context.rule_set)
+    await tool.ainvoke(
+        call(tool.name, {"action": "write", "content": text, "edits": None})
+    )
+    assert report.finish().categories[0].rules[0].result == "compliant"
+    edit = {
+        "action": "edit",
+        "content": None,
+        "edits": [{"old_text": "分辨率满足要求", "new_text": "核验事实明确"}],
+    }
+    result = await tool.ainvoke(call(tool.name, edit, "edit-1"))
+    assert "已保存" in result.content
+    assert (
+        await tool.ainvoke(call(tool.name, edit, "edit-1"))
+    ).content == result.content
+    before = report.read()
+    with pytest.raises(ValueError, match="未唯一命中"):
+        await tool.ainvoke(
+            call(
+                tool.name,
+                {
+                    "action": "edit",
+                    "content": None,
+                    "edits": [
+                        {"old_text": "核验事实明确", "new_text": "新文字"},
+                        {"old_text": "不存在", "new_text": "无"},
+                    ],
+                },
+                "edit-bad",
+            )
+        )
+    assert report.read() == before
+
+    with pytest.raises(ValueError, match="未解决"):
+        report.finish()
+    await tool.ainvoke(
+        call(tool.name, {"action": "write", "content": before, "edits": None}, "fix")
+    )
+    assert report.finish()
+    with pytest.raises(ValueError, match="未实际读取"):
+        await tool.ainvoke(
+            call(
+                tool.name,
+                {
+                    "action": "write",
+                    "content": before + "图片来源：e-1/images/1.png\n",
+                    "edits": None,
+                },
+                "image-fake",
+            )
+        )
+    assert report.read() == before
+
+
+@pytest.mark.asyncio
+async def test_new_batch_can_reuse_provider_tool_call_id(tmp_path):
+    context = audit_context()
+    report = ReportDocument(
+        tmp_path / "draft.md", context.rule_set, SourceLedger(context.parsed_documents)
+    )
+    report.start_batch(1)
+    await report.apply("write", filled_report(context.rule_set), None, "call-0")
+    report.start_batch(2)
+    await report.apply(
+        "write",
+        filled_report(context.rule_set, reason="后续原文补充的新判断"),
+        None,
+        "call-0",
+    )
+    assert "后续原文补充的新判断" in report.read()
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [
+        lambda text: text.replace("rule-1", "rule-999"),
+        lambda text: text + "### rule-1\n结论：符合\n审核说明：重复",
+        lambda text: text.replace("结论：符合", "结论：好像行"),
+        lambda text: text.replace("审核说明：分辨率满足要求", "审核说明："),
+    ],
+)
+def test_invalid_report_is_rejected(transform):
+    context = audit_context()
+    with pytest.raises(ValueError):
+        parse_report(
+            transform(filled_report(context.rule_set)),
+            context.rule_set,
+            SourceLedger(context.parsed_documents),
+            final=True,
+        )

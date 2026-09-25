@@ -440,7 +440,7 @@ async def test_common_retrieval_uses_history_default_checks_bidder_and_version(
             {"querylist": [{"queries": ["合同", "合同编号"], "file_ids": None}]},
         )
     )
-    assert result.content.count("HT-001原文") == 1 and "chunk-1" not in result.content
+    assert result.content.count("HT-001原文") == 1 and "chunk-1" in result.content
     assert retrieval.search.call_args.args[1].file_ids == ["file-1"]
     hit.bidder_id = "bidder-2"
     result = await tool.ainvoke(

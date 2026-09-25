@@ -4,17 +4,19 @@ import json
 from pathlib import Path
 
 from app.core.config import PROJECT_ROOT
-from app.models.evidence import EvidenceClassification, EvidenceReviewDecision
+from app.models.documents import BidRouteDecision
+from app.models.evidence import EvidenceClassification, EvidenceLibrary
 from app.models.results import AuditResult
 from app.models.rules import RuleSet
 from app.models.tasks import AgentAuditDecision
 
-
 SCHEMA_MODELS = {
     "rule_set.schema.json": RuleSet,
     "evidence_classification.schema.json": EvidenceClassification,
-    "bid_agent_decision.schema.json": AgentAuditDecision,
-    "evidence_review_result.schema.json": EvidenceReviewDecision,
+    # MD 解析后的内部对象，不绑定给模型。
+    "report_decision.schema.json": AgentAuditDecision,
+    "evidence_library.schema.json": EvidenceLibrary,
+    "bid_route.schema.json": BidRouteDecision,
     "audit_result.schema.json": AuditResult,
 }
 

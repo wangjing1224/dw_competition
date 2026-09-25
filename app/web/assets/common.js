@@ -83,7 +83,7 @@ const ReviewUI = (() => {
     const names = {
       saving_files: "保存文件",
       parsing_bid_documents: "解析投标文件",
-      summarizing_bid_documents: "摘要与相关性判断",
+      routing_bid_documents: "项目相关性判断",
       building_bid_index: "构建投标索引",
       auditing: "智能审核",
       writing_outputs: "生成报告",

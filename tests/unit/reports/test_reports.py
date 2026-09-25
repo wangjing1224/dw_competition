@@ -2,7 +2,8 @@
 
 from docx import Document
 
-from app.models.documents import BidDocumentSummary, DocumentRef
+from app.models.documents import DocumentRef
+from app.models.evidence import EvidenceLibrary
 from app.models.findings import Finding
 from app.models.results import AuditResult, FileAuditResult, ProjectMatch
 from app.models.rules import RuleReportItem
@@ -42,6 +43,7 @@ def test_word_is_generated_for_every_file_result(monkeypatch, temp_settings):
         project_id="project-1",
         bidder_id="bidder-1",
         file_results=[bid("applicable", True), bid("ignored", False)],
+        evidence_library=EvidenceLibrary(bidder_id="bidder-1"),
     )
 
     json_path = write_json_result("audit-1", result, store)
@@ -57,18 +59,10 @@ def test_word_renders_markdown_and_enums_as_chinese(monkeypatch, temp_settings):
     store = FileStore()
     file_result = bid("applicable", True).model_copy(
         update={
-            "document_summary": BidDocumentSummary(
-                file_id="applicable",
-                match_status="matched",
-                match_reason="项目一致",
-                summary=(
-                    "## 文件基本信息\n"
-                    "- **投标方**：某某科技有限公司\n"
-                    "- 已提交技术响应文件"
-                ),
+            "audit_summary": (
+                "## 文件基本信息\n- **投标方**：某某科技有限公司\n- 已提交技术响应文件"
             ),
             "overall_conclusion": "non_compliant",
-            "audit_summary": "报价信息未填写。",
             "category_summaries": {"commercial": "商务响应存在缺失。"},
             "findings": [
                 Finding(
@@ -95,6 +89,7 @@ def test_word_renders_markdown_and_enums_as_chinese(monkeypatch, temp_settings):
             )
         ],
         file_results=[file_result],
+        evidence_library=EvidenceLibrary(bidder_id="bidder-1"),
     )
     json_path = write_json_result("audit-1", result, store)
     word_path = store.resolve_relative(generate_word_reports(json_path, store)[0])

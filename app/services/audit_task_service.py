@@ -2,30 +2,35 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import BinaryIO, Protocol
 
 from pydantic import Field
 
 from app.audit.bid_summary import (
-    load_bid_summary,
     summarize_and_route_bid_document,
     write_bid_summary,
 )
+from app.audit.concurrency import model_limiter
+from app.audit.context import fixed_parsed, verify_indexes
 from app.core.config import AppSettings, ChatModelSettings
 from app.core.errors import BusinessError
-from app.evidence.catalog import build_evidence_catalog
-from app.evidence.storage import load_evidence_classification
+from app.evidence.storage import load_library
 from app.llm.embedding_model import EmbeddingModel
 from app.models.common import StrictModel
 from app.models.documents import (
     BidDocumentSummary,
     DocumentRef,
+    ParsedDocument,
     document_ref_from_record,
 )
-from app.models.evidence import EvidenceCatalogItem, EvidenceClassificationRecord
+from app.models.evidence import EvidenceLibrary
 from app.models.results import AuditResult, FileAuditResult, ProjectMatch
 from app.models.rules import RuleSet
+from app.parsers.assets import atomic_write
 from app.parsers.service import prepare_document
+from app.prompts.loader import load_prompt
 from app.retrieval.index import build_document_index
 from app.retrieval.models import IndexScope
 from app.services.background_runner import BackgroundRunner
@@ -39,6 +44,8 @@ from app.storage.repositories import (
     ProjectRepository,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class AuditTaskContext(StrictModel):
     task_id: str
@@ -48,10 +55,11 @@ class AuditTaskContext(StrictModel):
     bid_files: list[DocumentRef] = Field(default_factory=list)
     bid_summaries: dict[str, BidDocumentSummary] = Field(default_factory=dict)
     routed_file_results: list[FileAuditResult] = Field(default_factory=list)
-    evidence_catalog: dict[str, list[EvidenceCatalogItem]] = Field(default_factory=dict)
-    evidence_classifications: list[EvidenceClassificationRecord] = Field(
-        default_factory=list
-    )
+    evidence_library: EvidenceLibrary
+    parsed_documents: dict[str, ParsedDocument] = Field(default_factory=dict)
+    file_order: list[str] = Field(default_factory=list)
+    file_errors: dict[str, str] = Field(default_factory=dict)
+    report_template: str
 
 
 class AuditExecutor(Protocol):
@@ -81,7 +89,9 @@ class AuditTaskService:
         self.settings = settings
         self.embedding_model = embedding_model
         self.summary_model = summary_model
-        self.summary_model_settings = summary_model_settings or settings.bid_chat_model
+        self.summary_model_settings = (
+            summary_model_settings or settings.bid_summary_model
+        )
         self.audit_executor = audit_executor
         self.output_finalizer = output_finalizer
         self.background_runner = background_runner
@@ -104,19 +114,13 @@ class AuditTaskService:
                 "rule_not_ready", "项目规则尚未准备完成", http_status=409
             )
         bidder = BidderRepository().require(bidder_id)
-        # 新资料库的审核消费侧留给后续任务；不能静默按旧分类目录审核空资料。
-        from app.evidence.storage import load_library
-
-        if load_library(bidder_id, self.settings) is not None:
-            raise BusinessError(
-                "evidence_audit_not_adapted", "新版资料库已入库，审核侧适配尚未接入"
-            )
         if bidder.status != "evidence_ready":
             raise BusinessError(
                 "evidence_not_ready",
                 "投标方资料尚未准备完成",
                 http_status=409,
             )
+        rule_set, library, parsed = self._load_libraries(project, bidder)
         task = self.task_repository.create(
             project_id,
             bidder_id,
@@ -151,11 +155,24 @@ class AuditTaskService:
                 error_message=str(exc),
             )
             raise
-        self.background_runner.submit(
-            self._run_task,
-            task.task_id,
-            [record.file_id for record in records],
-        )
+        try:
+            context = AuditTaskContext(
+                task_id=task.task_id,
+                project_id=project_id,
+                bidder_id=bidder_id,
+                rule_set=rule_set,
+                evidence_library=library,
+                parsed_documents=parsed,
+                file_order=[record.file_id for record in records],
+                report_template=load_prompt("audit_report_template"),
+            )
+            self._save_context(context)
+        except Exception as exc:
+            self.task_repository.mark_failed(
+                task.task_id, error_code=type(exc).__name__, error_message=str(exc)
+            )
+            raise
+        self.background_runner.submit(self._run_task, task.task_id, context.file_order)
         return self.task_repository.require(task.task_id)
 
     async def _run_task(self, task_id: str, file_ids: list[str]) -> None:
@@ -172,94 +189,99 @@ class AuditTaskService:
                 title="开始解析投标文件",
                 detail={"file_count": len(file_ids)},
             )
-            records = [self.file_repository.require(file_id) for file_id in file_ids]
-            documents = [document_ref_from_record(record) for record in records]
-            parsed_documents = [
-                await prepare_document(document) for document in documents
-            ]
-
-            task = self.task_repository.require(task_id)
-            project = ProjectRepository().require(task.project_id)
-            if not project.rule_set_path:
-                raise BusinessError("rule_set_missing", "项目 RuleSet 路径缺失")
-            rule_set = RuleSet.model_validate_json(
-                self.file_store.resolve_relative(project.rule_set_path).read_text(
-                    "utf-8"
+            context = self.build_context(task_id)
+            if self.summary_model is None:
+                raise RuntimeError("未配置路由模型，不能默认放行")
+            parsed_documents = []
+            for file_id in file_ids:
+                document = document_ref_from_record(
+                    self.file_repository.require(file_id)
                 )
-            )
+                try:
+                    parsed_documents.append(await prepare_document(document))
+                except Exception as exc:
+                    logger.exception("投标文件解析失败 file_id=%s", file_id)
+                    context.file_errors[file_id] = (
+                        f"解析失败：{type(exc).__name__}: {exc}"
+                    )
 
             self.task_repository.update_progress(
-                task_id, {"stage": "summarizing_bid_documents"}
+                task_id, {"stage": "routing_bid_documents"}
             )
-            self.event_repository.append(
-                task_id,
-                actor="pipeline",
-                event_type="stage_changed",
-                title="开始生成投标文件摘要并判断项目相关性",
-            )
-            matched_documents: list[DocumentRef] = []
-            for parsed in parsed_documents:
-                if self.summary_model is None:
-                    summary = BidDocumentSummary(
-                        file_id=parsed.document.file_id,
-                        summary="测试执行器未配置摘要模型，默认进入审核",
-                        match_status="matched",
-                        match_reason="测试执行器默认放行",
-                    )
-                else:
-                    summary = await summarize_and_route_bid_document(
+            limit = asyncio.Semaphore(self.settings.audit.file_concurrency)
+
+            async def route(parsed):
+                async with limit:
+                    return await summarize_and_route_bid_document(
                         parsed,
-                        rule_set,
+                        context.rule_set,
                         self.summary_model,
                         self.summary_model_settings,
+                        limiter=model_limiter(self.settings.audit.model_concurrency),
+                        trace_context={
+                            "metadata": {
+                                "task_id": task_id,
+                                "file_id": parsed.document.file_id,
+                            }
+                        },
                     )
-                write_bid_summary(summary, self.settings)
-                if summary.match_status == "matched":
-                    matched_documents.append(parsed.document)
+
+            outcomes = await asyncio.gather(
+                *(route(parsed) for parsed in parsed_documents), return_exceptions=True
+            )
+            for parsed, value in zip(parsed_documents, outcomes, strict=True):
+                file_id = parsed.document.file_id
+                if isinstance(value, asyncio.CancelledError):
+                    raise value
+                if isinstance(value, Exception):
+                    logger.error(
+                        "投标文件路由失败 file_id=%s",
+                        file_id,
+                        exc_info=(type(value), value, value.__traceback__),
+                    )
+                    context.file_errors[file_id] = (
+                        f"路由失败：{type(value).__name__}: {value}"
+                    )
+                    continue
+                context.bid_summaries[file_id] = value
+                write_bid_summary(value, self.settings)
+                if value.match_status == "matched":
+                    context.bid_files.append(parsed.document)
+                    context.parsed_documents[file_id] = parsed
+                else:
+                    context.routed_file_results.append(
+                        _routed_file_result(parsed.document, value)
+                    )
                 self.event_repository.append(
                     task_id,
                     actor="pipeline",
                     event_type="bid_document_routed",
                     title="投标文件相关性判断完成",
                     detail={
-                        "file_id": parsed.document.file_id,
-                        "file_name": parsed.document.file_name,
-                        "match_status": summary.match_status,
-                        "reason": summary.match_reason,
+                        "file_id": file_id,
+                        "match_status": value.match_status,
+                        "reason": value.match_reason,
                     },
                 )
-
-            self.task_repository.update_progress(
-                task_id, {"stage": "building_bid_index"}
-            )
-            self.event_repository.append(
-                task_id,
-                actor="pipeline",
-                event_type="stage_changed",
-                title="开始构建投标文件索引",
-            )
-            if matched_documents:
+            self._save_context(context)
+            if context.bid_files:
+                self.task_repository.update_progress(
+                    task_id, {"stage": "building_bid_index"}
+                )
                 await build_document_index(
                     IndexScope(
                         scope_id=f"bid-{task_id}",
                         data_role="bid_document",
-                        project_id=task.project_id,
-                        bidder_id=task.bidder_id,
+                        project_id=context.project_id,
+                        bidder_id=context.bidder_id,
                         task_id=task_id,
                     ),
-                    matched_documents,
+                    context.bid_files,
                     self.embedding_model,
                     self.settings,
                 )
-
             self.task_repository.update_progress(task_id, {"stage": "auditing"})
-            self.event_repository.append(
-                task_id,
-                actor="pipeline",
-                event_type="stage_changed",
-                title="进入智能审核阶段",
-            )
-            result = await self.audit_executor.run(self.build_context(task_id))
+            result = await self.audit_executor.run(context)
 
             self.task_repository.update_progress(task_id, {"stage": "writing_outputs"})
             self.event_repository.append(
@@ -273,8 +295,8 @@ class AuditTaskService:
             self.event_repository.append(
                 task_id,
                 actor="pipeline",
-                event_type="task_completed",
-                title="审核任务执行完成",
+                event_type="task_failed" if result.file_errors else "task_completed",
+                title="审核任务处理结束",
                 detail={"file_result_count": len(result.file_results)},
             )
         except Exception as exc:
@@ -301,72 +323,45 @@ class AuditTaskService:
                 )
             raise
 
-    def build_context(self, task_id: str) -> AuditTaskContext:
-        task = self.task_repository.require(task_id)
-        project = ProjectRepository().require(task.project_id)
+    def _load_libraries(self, project, bidder):
         if not project.rule_set_path:
-            raise BusinessError("rule_set_missing", "项目 RuleSet 路径缺失")
-        rule_set = RuleSet.model_validate_json(
+            raise BusinessError("rule_set_missing", "项目规则库路径缺失")
+        rules = RuleSet.model_validate_json(
             self.file_store.resolve_relative(project.rule_set_path).read_text("utf-8")
         )
-        records = self.file_repository.list_by_scope(
-            project_id=task.project_id,
-            bidder_id=task.bidder_id,
-            task_id=task.task_id,
-            data_role="bid_document",
+        library = load_library(bidder.bidder_id, self.settings)
+        if rules.project_id != project.project_id or not rules.rules:
+            raise ValueError("规则库归属错误或规则为空")
+        if library is None or library.bidder_id != bidder.bidder_id:
+            raise ValueError("资料库缺失或归属错误")
+        if not library.materials or {x.file_id for x in library.materials} != {
+            x.file_id for x in library.source_files
+        }:
+            raise ValueError("资料库尚未完成所有登记文件的入库")
+        parsed = fixed_parsed(
+            rules.source_files,
+            self.file_repository,
+            role="rule_source",
+            project_id=project.project_id,
         )
-        files = [document_ref_from_record(record) for record in records]
-        summaries = {
-            file.file_id: load_bid_summary(file.file_id, self.settings)
-            for file in files
-        }
-        routed_results = [
-            _routed_file_result(file, summaries[file.file_id])
-            for file in files
-            if summaries[file.file_id].match_status != "matched"
-        ]
-        evidence_documents = [
-            document_ref_from_record(record)
-            for record in self.file_repository.list_by_scope(
-                bidder_id=task.bidder_id,
-                data_role="evidence_material",
+        parsed.update(
+            fixed_parsed(
+                library.source_files,
+                self.file_repository,
+                role="evidence_material",
+                bidder_id=bidder.bidder_id,
             )
-        ]
-        evidence_classifications: list[EvidenceClassificationRecord] = []
-        for document in evidence_documents:
-            classification = load_evidence_classification(
-                document.file_id,
-                self.settings,
-            )
-            if classification is not None:
-                evidence_classifications.append(
-                    EvidenceClassificationRecord(
-                        file_id=document.file_id,
-                        file_name=document.file_name,
-                        **classification.model_dump(),
-                    )
-                )
-        return AuditTaskContext(
-            task_id=task.task_id,
-            project_id=task.project_id,
-            bidder_id=task.bidder_id,
-            rule_set=rule_set,
-            bid_files=[
-                file
-                for file in files
-                if summaries[file.file_id].match_status == "matched"
-            ],
-            bid_summaries=summaries,
-            routed_file_results=routed_results,
-            evidence_catalog={
-                str(category): entry
-                for category, entry in build_evidence_catalog(
-                    evidence_documents,
-                    self.settings,
-                ).items()
-            },
-            evidence_classifications=evidence_classifications,
         )
+        verify_indexes(parsed, self.settings)
+        return rules, library, parsed
+
+    def _save_context(self, context):
+        path = self.file_store.task_output_dir(context.task_id) / "audit_context.json"
+        atomic_write(path, context.model_dump_json(indent=2).encode("utf-8"))
+
+    def build_context(self, task_id):
+        path = self.file_store.task_output_dir(task_id) / "audit_context.json"
+        return AuditTaskContext.model_validate_json(path.read_text("utf-8"))
 
     def get_task(self, task_id: str) -> dict[str, object]:
         return query_audit_task(task_id, self.task_repository, self.file_store)
@@ -400,7 +395,7 @@ def query_audit_task(
             for event in AuditEventRepository().list_by_task(task_id)
         ],
     }
-    if task.status in {"completed", "completed_with_report_error"}:
+    if task.json_path:
         response["outputs"] = {
             "json": task.json_path,
             "word": task.word_paths or [],
@@ -429,7 +424,6 @@ def _routed_file_result(
             status=summary.match_status,
             reason=summary.match_reason,
         ),
-        document_summary=summary,
         exclusion_reason=summary.match_reason,
         overall_conclusion=("not_applicable" if not_matched else "manual_review"),
         suggestions=(

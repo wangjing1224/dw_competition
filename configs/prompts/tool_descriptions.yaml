@@ -49,34 +49,12 @@ submit_rule_delta: |-
   失败时整批不生效，明确返回哪项操作及原因；纠正后再提交，不得把候选变更当成已保存。
   查看失败与提交失败不同：查看失败只需纠正查看参数，不能为此重复已保存的操作。
 
-# 主审核 Agent：按当前 RuleItem 检索当前投标文件中的响应。
-search_bid_response: >-
-  当摘要不足以判断重点规则时，检索当前正在审核的投标文件原文；只检索当前文件，不检索
-  其他投标文件。输入checks按核验事实分组，每个check包含topic和1至5个互补queries；
-  一个topic只表达一个事实。返回{"results":[{"topic","chunks":[{"chunk_id","file_id",
-  "section","content"}]}]}，每个topic独立保留召回片段；空chunks只表示当前topic没有找到
-  有效原文。content是召回原文，chunk_id用于最终结论的bid_chunk_ids溯源。
-
-# 主审核 Agent：规则要求或适用范围不清楚时检索招标原文。
-search_tender_source: >-
-  仅当规则要求、适用范围或重要性无法从精简规则确认时，检索当前项目招标文件原文；不要用它
-  查询投标方如何响应规则。输入checks按招标要求分组，每个check包含topic和1至5个互补
-  queries。返回{"results":[{"topic","chunks":[{"chunk_id","file_id","section","content"}]}]}，
-  每个topic独立保留召回片段；空chunks只表示当前topic没有找到有效原文。chunk_id用于最终
-  结论的tender_chunk_ids溯源。
-
 # 主审核 Agent：把单条明确核验任务交给资料核验子 Agent。
-request_evidence_review: >-
-  批量委派投标方资料核验。输入checks；每个check必须只包含一个rule_id、一个evidence_type
-  和该类别内的一个明确verification_request。同一规则需要多类资料时拆成多个check。
-  返回{"results":[{"rule_id","evidence_type","status","summary","evidence_chunk_ids"}]}。
-  unsupported表示当前资料目录没有对应的可自动核验类别，不等于投标方必然未提交材料；
-  ocr_required表示该类别资料存在但正文不可自动读取。
-
-# 资料核验子 Agent：按系统注入的投标方和资料类型检索原文。
-search_evidence: >-
-  检索当前核验任务允许访问的投标方资料原文，只能查询主Agent指定的资料类别和允许的文件。
-  输入checks按核验事实分组，每个check包含topic和1至5个互补queries，并可用file_ids缩小
-  文件范围。返回{"results":[{"topic","chunks":[{"chunk_id","file_id","section","content"}]}]}。
-  只有content可以作为自动核验依据；空chunks只表示当前topic在允许范围内没有找到可靠证据，
-  不代表投标方在全部文件中未提交该材料。
+request_evidence_review: |-
+  作用：围绕指定事实委派资料核验子 Agent，读取所选文件及一层直接关联资料。目录和关联仅是线索，不是核验通过。
+  输入：checks 为1至10项。每项 rule_id 引用当前规则；verification_request 写清投标声明、对象/主体、编号/数值及判断要求；file_ids 从简洁目录选择非空起始文件列表。同一事项可联合多份资料，不按资料类别机械拆分；不同事项分别提交。同一规则允许多项核验。
+  返回：按请求顺序分别返回核验正文，标题带 rule_id 和原核验事项。正文含结论、事实、来源及限制，不是最终报告判断，不回传子 Agent 全部历史。找不到不等于未提交；工具失败不等于材料缺失。等待核验返回后再据此写报告。
+report_document: |-
+  作用：读取、完整写入或精确编辑当前投标文件的唯一报告。路径由系统绑定，不能访问其他文件。
+  输入：action=read 时 content、edits 均为 null；write 时 content 为完整 Markdown，edits=null；edit 时 content=null，edits 为非空 old_text/new_text 列表。old_text 须在当前稿中恰好出现一次，可包含标题定位；new_text 可为空表示删除，但不能破坏报告骨架。以 System 中的独立报告模板为准，不需最后输出报告 JSON。
+  返回：read 返回当前全文及缺项；write/edit 成功返回简短保存确认和缺项。不匹配、歧义、非法引用或格式错误时整批未保存，先读取当前稿再修正，不模糊匹配。write 是整稿覆盖，日常增量优先一次 edit 修改多处。

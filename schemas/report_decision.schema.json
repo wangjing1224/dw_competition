@@ -7,8 +7,7 @@
           "$ref": "#/$defs/RuleCategory"
         },
         "summary": {
-          "maxLength": 500,
-          "minLength": 2,
+          "minLength": 1,
           "title": "Summary",
           "type": "string"
         },
@@ -63,8 +62,7 @@
       "additionalProperties": false,
       "properties": {
         "reason": {
-          "maxLength": 200,
-          "minLength": 2,
+          "minLength": 1,
           "title": "Reason",
           "type": "string"
         },
@@ -87,6 +85,13 @@
             "type": "string"
           },
           "title": "Evidence Chunk Ids",
+          "type": "array"
+        },
+        "image_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Image Paths",
           "type": "array"
         }
       },
@@ -112,8 +117,7 @@
   "additionalProperties": false,
   "properties": {
     "summary": {
-      "maxLength": 800,
-      "minLength": 2,
+      "minLength": 1,
       "title": "Summary",
       "type": "string"
     },

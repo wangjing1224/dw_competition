@@ -1,110 +1,127 @@
-"""投标文件详细清洗摘要、项目相关性路由及 JSON 持久化。"""
+"""项目路由：完整结构前缀、两字段 JSON、一次有界格式修复；不生成摘要。"""
 
+import json
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.core.config import AppSettings, ChatModelSettings
-from app.llm.chat_model import invoke_structured
-from app.models.documents import BidDocumentSummary, BidRouteDecision, ParsedDocument
-from app.models.rules import RuleSet
+from app.audit.session import make_controller
+from app.llm.agent_tracing import invoke_agent_model
+from app.llm.context_compaction import InputBudgetError
+from app.llm.errors import InvalidStructuredOutput
+from app.llm.factory import budgeted_generation_options
+from app.llm.input_budget import InputContext, plan_document_input
+from app.llm.platforms import ChatProtocol
+from app.llm.structured_output import extract_json_value
+from app.models.documents import BidDocumentSummary, BidRouteDecision
+from app.parsers.assets import atomic_write
+from app.parsers.reading import build_document_units, render_document_range
 from app.prompts.loader import render_prompt
-
-RULE_CATEGORY_GUIDE = {
-    "format": "签字盖章、文件组成、授权和格式完整性",
-    "qualification": "主体资格、证照、资质和准入条件",
-    "commercial": "报价、税率、有效期、交付和商务响应",
-    "technical": "产品、型号、参数、性能、接口和标准响应",
-    "performance_capacity": "合同业绩、生产能力、人员和售后能力",
-    "consistency_risk": "跨章节、附件和资料的主体、型号、数量等一致性",
-}
-
-
-def build_bid_summary_context(
-    parsed: ParsedDocument,
-    *,
-    max_chars: int = 180_000,
-) -> str:
-    """优先保留完整章节；极端超长文件才按章节边界截断。"""
-
-    blocks = [
-        f"## {section.title}\n"
-        + "\n".join(part for part in [section.content, *section.tables] if part)
-        for section in parsed.sections
-        if section.content or section.tables
-    ]
-    joined = "\n\n".join(blocks)
-    if len(joined) <= max_chars:
-        return joined
-    selected: list[str] = []
-    used = 0
-    for block in blocks:
-        remaining = max_chars - used
-        if remaining <= 0:
-            break
-        selected.append(block[:remaining])
-        used += len(selected[-1])
-    return "\n\n".join(selected)
 
 
 async def summarize_and_route_bid_document(
-    parsed: ParsedDocument,
-    rule_set: RuleSet,
-    model: object,
-    model_settings: ChatModelSettings,
-    **_: object,
-) -> BidDocumentSummary:
-    result = await invoke_structured(
-        model,
-        [
-            SystemMessage(
-                content=render_prompt(
-                    "bid_document_summary",
-                    bid_document_summary_schema=(BidRouteDecision.model_json_schema()),
-                )
+    parsed, rule_set, model, model_settings, *, limiter=None, trace_context=None
+):
+    from app.audit.concurrency import model_limiter
+
+    limiter = limiter or model_limiter(3)
+    controller = make_controller(model_settings)
+    units = build_document_units(parsed)
+
+    def build(start, end):
+        return InputContext(
+            (
+                SystemMessage(
+                    content=render_prompt(
+                        "bid_document_summary",
+                        bid_route_schema=json.dumps(
+                            BidRouteDecision.model_json_schema(), ensure_ascii=False
+                        ),
+                    )
+                ),
+                HumanMessage(
+                    content=render_prompt(
+                        "bid_document_summary_input",
+                        file_identity=f"文件ID：{parsed.document.file_id}\n文件名：{parsed.document.file_name}",
+                        project_profile=rule_set.project_profile,
+                        reading_scope=f"从开头第1至{end}个完整结构，共{len(units)}个；"
+                        + (
+                            "已提供全文。"
+                            if end == len(units)
+                            else "仅提供前部，后部未读。"
+                        ),
+                        document_context=render_document_range(
+                            parsed, units, start, end
+                        ),
+                    )
+                ),
             ),
-            HumanMessage(
-                content=render_prompt(
-                    "bid_document_summary_input",
-                    file_identity={
-                        "file_name": parsed.document.file_name,
-                        "source_path": parsed.document.source_path,
-                    },
-                    project_profile=rule_set.project_profile,
-                    rule_categories=RULE_CATEGORY_GUIDE,
-                    document_context=build_bid_summary_context(parsed),
-                )
-            ),
-        ],
-        BidRouteDecision,
-        model_settings.structured_output_mode,
+            protocol=ChatProtocol.from_settings(model_settings),
+        )
+
+    batch = plan_document_input(
+        units=units,
+        cursor=0,
+        build_context=build,
+        budget_settings=controller.budget,
+        counter=controller.counter,
     )
-    return BidDocumentSummary(
-        file_id=parsed.document.file_id,
-        **result.model_dump(),
-    )
+    if batch.status != "ready":
+        raise InputBudgetError(batch.blocked_reason)
+    context = batch.context
+    for attempt in range(2):
+        tokens = controller.output_tokens(context)
+        async with limiter:
+            response = await invoke_agent_model(
+                model,
+                list(context.messages),
+                [],
+                trace_context or {},
+                trace_name="bid_route",
+                **budgeted_generation_options(model_settings, tokens),
+            )
+        controller.observe(context, response)
+        try:
+            if response.tool_calls or getattr(response, "invalid_tool_calls", None):
+                raise ValueError("路由不允许工具调用")
+            if response.response_metadata.get("finish_reason") not in (None, "stop"):
+                raise ValueError("路由输出未正常结束")
+            decision = BidRouteDecision.model_validate(
+                extract_json_value(response.content)
+            )
+            return BidDocumentSummary(
+                file_id=parsed.document.file_id,
+                reading_end=batch.end,
+                total_units=len(units),
+                **decision.model_dump(),
+            )
+        except (ValueError, TypeError, InvalidStructuredOutput) as exc:
+            if attempt:
+                raise ValueError(f"路由 JSON 修复失败：{exc}") from exc
+            # 不复送截断的长响应或活跃 tool_calls，反馈只含校验问题。
+            context = InputContext(
+                (
+                    *batch.context.messages,
+                    HumanMessage(
+                        content=f"上次输出未通过校验：{str(exc)[:1000]}。请仅输出 match_status、match_reason 的合法 JSON。"
+                    ),
+                ),
+                protocol=batch.context.protocol,
+            )
+    raise RuntimeError("路由未产生结果")
 
 
-def summary_path(file_id: str, settings: AppSettings) -> Path:
-    return settings.storage.data_root / "parsed" / "bid_summaries" / f"{file_id}.json"
+def summary_path(file_id, settings) -> Path:
+    return settings.storage.data_root / "parsed" / "bid_routes" / f"{file_id}.json"
 
 
-def write_bid_summary(
-    summary: BidDocumentSummary,
-    settings: AppSettings,
-) -> Path:
+def write_bid_summary(summary, settings):
     path = summary_path(summary.file_id, settings)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(summary.model_dump_json(indent=2), encoding="utf-8")
-    temporary.replace(path)
+    atomic_write(path, summary.model_dump_json(indent=2).encode("utf-8"))
     return path
 
 
-def load_bid_summary(
-    file_id: str,
-    settings: AppSettings,
-) -> BidDocumentSummary:
+def load_bid_summary(file_id, settings):
     return BidDocumentSummary.model_validate_json(
         summary_path(file_id, settings).read_text("utf-8")
     )

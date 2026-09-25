@@ -1,192 +1,130 @@
-"""主子 Agent 最后一轮必须禁用工具并强制输出。"""
+"""最后一轮调用前撤掉工具；错误不变成人工审核业务结论。"""
 
-from types import SimpleNamespace
+import asyncio
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.tools import StructuredTool
 
-from app.agents.bid_agent import bid_agent_node
-from app.agents.evidence_subagent import evidence_agent_node, route_evidence_agent
-from app.graph.audit_state import build_initial_audit_state
-from app.models.documents import BidDocumentSummary, DocumentRef
-from app.models.evidence import EvidenceFileSummary, EvidenceReviewTask
-from app.models.rules import RuleItem, RuleSet, RuleSourceFile
-from app.models.tasks import AgentAuditDecision
-from app.services.audit_task_service import AuditTaskContext
-from app.storage.repositories import AuditEventRepository
+from app.audit.session import prepare_request, run_session
+from tests.helpers.audit import SequenceModel, tool_response
 
 
-class NoopEvents(AuditEventRepository):
-    def append(self, *args, **kwargs):
-        return None
-
-
-class FinalOnlyModel:
-    def __init__(self, response: str):
-        self.response = response
-        self.bound = False
-        self.messages = None
-
-    def bind_tools(self, _tools):
-        self.bound = True
-        raise AssertionError("最后一轮不应绑定工具")
-
-    async def ainvoke(self, messages):
-        self.messages = messages
-        return AIMessage(content=self.response)
-
-
-def _bid_state():
-    bid_file = DocumentRef(
-        file_id="bid-file",
-        file_name="投标.docx",
-        source_path="投标.docx",
-        data_role="bid_document",
-        parse_status="parsed",
-        project_id="project-1",
-        bidder_id="bidder-1",
-        task_id="audit-1",
-    )
-    rule = RuleItem(
-        rule_id="rule-1",
-        category="technical",
-        requirement="探测器分辨率不低于640x480",
-        priority="critical",
-        verification="bid_only",
-        provenance="ai_generated",
-        reason="技术规范明确要求",
-        sources=[
-            RuleSourceFile(
-                file_id="rule-file",
-                file_name="规则.docx",
-                source_path="规则.docx",
-            )
-        ],
-    )
-    state = build_initial_audit_state(
-        AuditTaskContext(
-            task_id="audit-1",
-            project_id="project-1",
-            bidder_id="bidder-1",
-            rule_set=RuleSet(
-                project_id="project-1", rules=[rule], source_files=rule.sources
-            ),
-            bid_files=[bid_file],
-            bid_summaries={
-                "bid-file": BidDocumentSummary(
-                    file_id="bid-file",
-                    summary="红外热成像仪投标文件",
-                    match_status="matched",
-                    match_reason="项目一致",
-                )
-            },
-        )
-    )
-    state["react_step_count"] = 7
-    return state
+def messages(handoff=""):
+    return [
+        SystemMessage(content="核验事实"),
+        HumanMessage(content="当前材料。" + handoff),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_bid_agent_final_step_does_not_bind_tools():
-    decision = AgentAuditDecision(
-        summary="完成审核",
-        categories=[
-            {
-                "category": "technical",
-                "summary": "技术规则已审核",
-                "rules": [
-                    {
-                        "rule_id": "rule-1",
-                        "result": "manual_review",
-                        "summary": {"reason": "现有信息不足"},
-                    }
-                ],
-            }
-        ],
-    )
-    model = FinalOnlyModel(decision.model_dump_json())
+@pytest.mark.parametrize("role", ["bid_agent", "evidence_subagent"])
+async def test_penultimate_tools_and_final_plain_content(temp_settings, role):
+    async def lookup(query: str):
+        return "原文"
 
-    updated = await bid_agent_node(
-        _bid_state(),
-        model=model,
-        tools=[SimpleNamespace()],
-        max_steps=8,
-        event_repository=NoopEvents(),
-    )
-
-    assert updated["react_step_count"] == 8
-    assert model.bound is False
-    assert "第8轮" in model.messages[-1].content
-    assert "禁止继续调用任何工具" in model.messages[-1].content
-
-
-@pytest.mark.asyncio
-async def test_evidence_agent_final_step_does_not_bind_tools():
-    model = FinalOnlyModel(
-        '{"status":"unverifiable","summary":"现有资料不足","evidence_chunk_ids":[]}'
-    )
-    state = {
-        "messages": [],
-        "task_id": "audit-1",
-        "project_id": "project-1",
-        "bidder_id": "bidder-1",
-        "review_task": EvidenceReviewTask(
-            task_id="audit-1",
-            project_id="project-1",
-            bidder_id="bidder-1",
-            rule_id="rule-1",
-            evidence_type="contract",
-            verification_request="核验合同业绩是否满足要求",
-            files=[
-                EvidenceFileSummary(
-                    file_id="file-1",
-                    evidence_summary="红外热成像仪供货合同",
-                )
-            ],
-        ),
-        "review_decision": None,
-        "errors": [],
-        "step_count": 2,
-    }
-
-    updated = await evidence_agent_node(
-        state,
-        model=model,
-        tools=[SimpleNamespace()],
-        max_steps=3,
-        event_repository=NoopEvents(),
-    )
-
-    assert updated["step_count"] == 3
-    assert model.bound is False
-    assert "第3轮" in model.messages[-1].content
-    assert "禁止继续调用任何工具" in model.messages[-1].content
-
-
-def test_evidence_tool_calls_must_be_closed_before_finalize():
-    state = {
-        "messages": [
+    tool = StructuredTool.from_function(coroutine=lookup, description="查询原文")
+    model = SequenceModel(
+        [
             AIMessage(
                 content="",
                 tool_calls=[
                     {
-                        "id": "call-1",
-                        "name": "search_evidence",
-                        "args": {"checks": []},
-                    }
+                        "name": "lookup",
+                        "args": {"query": "A"},
+                        "id": "a",
+                        "type": "tool_call",
+                    },
+                    {
+                        "name": "lookup",
+                        "args": {"query": "B"},
+                        "id": "b",
+                        "type": "tool_call",
+                    },
                 ],
-            )
-        ],
-        "step_count": 3,
-    }
+            ),
+            "处理完毕",
+        ]
+    )
+    result = await run_session(
+        model=model,
+        tools=[tool],
+        settings=temp_settings.bid_chat_model,
+        max_steps=2,
+        role=role,
+        limiter=asyncio.Semaphore(1),
+        trace_context={},
+        build_messages=messages,
+    )
+    assert result == "处理完毕"
+    assert model.bindings == [["lookup"]]
+    assert [m.tool_call_id for m in model.calls[1][0] if m.type == "tool"] == ["a", "b"]
+    assert model.calls[1][0][-1].type == "human"
+    assert "2" in model.calls[1][0][-1].content
+    assert model.calls[0][1]["max_tokens"] > 0
 
-    assert route_evidence_agent(state) == "tools"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response,match",
+    [
+        (AIMessage(content=""), "非空"),
+        (
+            AIMessage(content="截断", response_metadata={"finish_reason": "length"}),
+            "截断",
+        ),
+        (tool_response("unknown", {}), "无工具末轮"),
+        (RuntimeError("HTTP 402"), "HTTP 402"),
+    ],
+)
+async def test_failure_is_not_fabricated_manual_review(temp_settings, response, match):
+    model = SequenceModel([response])
+    with pytest.raises(RuntimeError, match=match):
+        await run_session(
+            model=model,
+            tools=[],
+            settings=temp_settings.bid_chat_model,
+            max_steps=1,
+            role="bid_agent",
+            limiter=asyncio.Semaphore(1),
+            trace_context={},
+            build_messages=messages,
+        )
+    assert len(model.calls) == 1
+    assert not model.bindings
 
 
-def test_evidence_invalid_text_finalizes_to_fallback():
-    state = {
-        "messages": [AIMessage(content="不是合法 JSON")],
-        "step_count": 3,
-    }
+@pytest.mark.asyncio
+async def test_validation_error_closes_tool_message_before_next_call(temp_settings):
+    async def lookup(query: str):
+        raise ValueError("查询范围不合法")
 
-    assert route_evidence_agent(state) == "finalize"
+    tool = StructuredTool.from_function(coroutine=lookup, description="查原文")
+    model = SequenceModel([tool_response("lookup", {"query": "错误"}), "无法确认"])
+    assert (
+        await run_session(
+            model=model,
+            tools=[tool],
+            settings=temp_settings.bid_chat_model,
+            max_steps=2,
+            role="evidence_subagent",
+            limiter=asyncio.Semaphore(1),
+            trace_context={},
+            build_messages=messages,
+        )
+        == "无法确认"
+    )
+    tool_message = model.calls[1][0][-2]
+    assert tool_message.type == "tool" and tool_message.tool_call_id == "call-1"
+    assert tool_message.status == "error"
+
+
+def test_limit_is_checked_before_model_call(temp_settings):
+    with pytest.raises(RuntimeError, match="轮次上限"):
+        prepare_request(
+            {"messages": messages(), "model_calls": 8},
+            tools=[],
+            max_steps=8,
+            settings=temp_settings.bid_chat_model,
+            role="bid_agent",
+        )

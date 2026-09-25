@@ -1,35 +1,5 @@
 {
   "$defs": {
-    "BidDocumentSummary": {
-      "additionalProperties": false,
-      "description": "代码补充文件身份后的持久化摘要。",
-      "properties": {
-        "match_status": {
-          "title": "Match Status",
-          "type": "string"
-        },
-        "match_reason": {
-          "title": "Match Reason",
-          "type": "string"
-        },
-        "summary": {
-          "title": "Summary",
-          "type": "string"
-        },
-        "file_id": {
-          "title": "File Id",
-          "type": "string"
-        }
-      },
-      "required": [
-        "match_status",
-        "match_reason",
-        "summary",
-        "file_id"
-      ],
-      "title": "BidDocumentSummary",
-      "type": "object"
-    },
     "ClassificationStatus": {
       "enum": [
         "classified",
@@ -70,8 +40,16 @@
           "default": "pending"
         },
         "project_id": {
-          "title": "Project Id",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
         },
         "bidder_id": {
           "anyOf": [
@@ -124,40 +102,91 @@
         "file_id",
         "file_name",
         "source_path",
-        "data_role",
-        "project_id"
+        "data_role"
       ],
       "title": "DocumentRef",
       "type": "object"
     },
-    "EvidenceClassificationRecord": {
+    "EvidenceLibrary": {
       "additionalProperties": false,
-      "description": "代码补充文件 ID 后保存到最终结果，不进入主 Agent 输入。",
       "properties": {
-        "evidence_type": {
-          "$ref": "#/$defs/EvidenceType"
-        },
-        "classification_status": {
-          "$ref": "#/$defs/ClassificationStatus"
-        },
-        "reason": {
-          "maxLength": 500,
-          "minLength": 2,
-          "title": "Reason",
+        "bidder_id": {
+          "title": "Bidder Id",
           "type": "string"
         },
+        "source_files": {
+          "items": {
+            "$ref": "#/$defs/EvidenceSourceFile"
+          },
+          "title": "Source Files",
+          "type": "array"
+        },
+        "materials": {
+          "items": {
+            "$ref": "#/$defs/EvidenceMaterial"
+          },
+          "title": "Materials",
+          "type": "array"
+        }
+      },
+      "required": [
+        "bidder_id"
+      ],
+      "title": "EvidenceLibrary",
+      "type": "object"
+    },
+    "EvidenceMaterial": {
+      "additionalProperties": false,
+      "properties": {
         "bid_summary": {
-          "maxLength": 500,
-          "minLength": 2,
+          "description": "简洁说明当前文件的对象、可查事项及读取限制，不放图片路径，不下审核结论。",
+          "minLength": 1,
           "title": "Bid Summary",
           "type": "string"
         },
         "evidence_summary": {
-          "maxLength": 2000,
-          "minLength": 2,
+          "description": "当前文件完整的详细摘要：关键事实、对象编号、范围、局部读取限制及关联依据；看图获得且正文无转写的事实必须附真实图片路径，不因精简关系而省略，不写阅读批次等运行状态。",
+          "minLength": 1,
           "title": "Evidence Summary",
           "type": "string"
         },
+        "relations": {
+          "description": "二元组列表：[一个简短关系短语, 已完成历史文件ID]。第一项自由填写而非枚举，只写是什么联系，不写解释句、编号、主体或数值；具体依据放evidence_summary。仅记录有依据且需联合理解或核验的联系，仅同一主体不建立关系，无明确联系填[]。",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "minLength": 1,
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Relations",
+          "type": "array"
+        },
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bid_summary",
+        "evidence_summary",
+        "relations",
+        "file_id"
+      ],
+      "title": "EvidenceMaterial",
+      "type": "object"
+    },
+    "EvidenceSourceFile": {
+      "additionalProperties": false,
+      "properties": {
         "file_id": {
           "title": "File Id",
           "type": "string"
@@ -165,18 +194,18 @@
         "file_name": {
           "title": "File Name",
           "type": "string"
+        },
+        "source_path": {
+          "title": "Source Path",
+          "type": "string"
         }
       },
       "required": [
-        "evidence_type",
-        "classification_status",
-        "reason",
-        "bid_summary",
-        "evidence_summary",
         "file_id",
-        "file_name"
+        "file_name",
+        "source_path"
       ],
-      "title": "EvidenceClassificationRecord",
+      "title": "EvidenceSourceFile",
       "type": "object"
     },
     "EvidenceType": {
@@ -209,17 +238,6 @@
         },
         "project_match": {
           "$ref": "#/$defs/ProjectMatch"
-        },
-        "document_summary": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BidDocumentSummary"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         },
         "exclusion_reason": {
           "anyOf": [
@@ -268,6 +286,13 @@
           },
           "title": "Suggestions",
           "type": "array"
+        },
+        "sources": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ReadSource"
+          },
+          "title": "Sources",
+          "type": "object"
         }
       },
       "required": [
@@ -312,6 +337,13 @@
             "type": "string"
           },
           "title": "Evidence Chunk Ids",
+          "type": "array"
+        },
+        "image_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Image Paths",
           "type": "array"
         }
       },
@@ -397,6 +429,65 @@
       "title": "ProjectMatchStatus",
       "type": "string"
     },
+    "ReadSource": {
+      "additionalProperties": false,
+      "description": "本次实际展示的来源快照，离开聊天历史仍能校验、导出。",
+      "properties": {
+        "file_id": {
+          "title": "File Id",
+          "type": "string"
+        },
+        "file_name": {
+          "title": "File Name",
+          "type": "string"
+        },
+        "source_path": {
+          "title": "Source Path",
+          "type": "string"
+        },
+        "data_role": {
+          "title": "Data Role",
+          "type": "string"
+        },
+        "parse_version": {
+          "title": "Parse Version",
+          "type": "string"
+        },
+        "section": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Section"
+        },
+        "page_numbers": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Page Numbers",
+          "type": "array"
+        },
+        "quote": {
+          "default": "",
+          "title": "Quote",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_id",
+        "file_name",
+        "source_path",
+        "data_role",
+        "parse_version"
+      ],
+      "title": "ReadSource",
+      "type": "object"
+    },
     "RuleCategory": {
       "enum": [
         "format",
@@ -475,8 +566,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "const": "2.0",
+      "default": "2.0",
       "title": "Schema Version",
       "type": "string"
     },
@@ -499,11 +590,17 @@
       "title": "Rules",
       "type": "array"
     },
-    "evidence_classifications": {
+    "evidence_library": {
+      "$ref": "#/$defs/EvidenceLibrary"
+    },
+    "rule_source_files": {
       "items": {
-        "$ref": "#/$defs/EvidenceClassificationRecord"
+        "additionalProperties": {
+          "type": "string"
+        },
+        "type": "object"
       },
-      "title": "Evidence Classifications",
+      "title": "Rule Source Files",
       "type": "array"
     },
     "file_results": {
@@ -512,12 +609,20 @@
       },
       "title": "File Results",
       "type": "array"
+    },
+    "file_errors": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "File Errors",
+      "type": "object"
     }
   },
   "required": [
     "task_id",
     "project_id",
     "bidder_id",
+    "evidence_library",
     "file_results"
   ],
   "title": "AuditResult",
