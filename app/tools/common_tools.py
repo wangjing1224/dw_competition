@@ -164,9 +164,12 @@ class CommonTool:
                             if displayed
                             else "完整结构超过本组预算，原文未展示，不截断表格。"
                         )
+                        lines.append(f"### 命中 {hit_number}")
+                        if displayed:
+                            # 直接展示索引中的真实 ID；未展示正文不能作为已读依据。
+                            lines.append(f"片段：{result.chunk_id}")
                         lines.extend(
                             [
-                                f"### 命中 {hit_number}",
                                 "命中查询：" + "；".join(queries),
                                 f"文件：{result.source.file_id}（{result.source.file_name}）",
                                 f"位置：{result.source.section or '章节未知'}；页码：{'、'.join(map(str, result.page_numbers)) or '未知'}",

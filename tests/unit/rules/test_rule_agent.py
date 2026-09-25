@@ -477,6 +477,9 @@ async def test_group_search_enforces_history_scope_and_version(env):
         )
     )
     assert response.content.count("期限原文90日") == 1
+    assert response.content.count("片段：chunk-1") == 1
+    assert "命中查询：期限；起算" in response.content
+    assert "文件：file-1（1.md）" in response.content
     assert retrieval.search.await_count == 3
     assert "未执行" in response.content and "页码：1" in response.content
     assert session.accessed_history == {"file-1"}
@@ -489,6 +492,61 @@ async def test_group_search_enforces_history_scope_and_version(env):
         )
     )
     assert "重建索引" in response.content
+    assert "片段：chunk-1" not in response.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_fits", [True, False])
+async def test_group_search_hides_chunk_ids_when_content_not_displayed(env, first_fits):
+    current = parsed_file(1)
+    settings = env.model_copy(
+        update={
+            "retrieval": env.retrieval.model_copy(update={"max_source_chars": 20})
+        }
+    )
+    first = SearchResult(
+        chunk_id="chunk-first",
+        score=1,
+        project_id="project-1",
+        content="已展示的原文" if first_fits else "超长表格" * 20,
+        source=SourceRef(
+            file_id="file-1", file_name="1.md", source_path="目录/1.md"
+        ),
+        parse_version=current.markdown_path,
+    )
+    second = first.model_copy(
+        update={"chunk_id": "chunk-second", "content": "后续长表格" * 20}
+    )
+    retrieval = SimpleNamespace(
+        settings=settings, search=AsyncMock(return_value=[first, second])
+    )
+    session = RuleSession(
+        RuleSet(project_id="project-1"),
+        current,
+        {},
+        AsyncMock(),
+        retrieval,
+        rule_limit=settings.rule_limit,
+    )
+    response = await build_rule_tools(session)[0].ainvoke(
+        tool_call(
+            "search_documents",
+            "limited-search",
+            {"querylist": [{"queries": ["参数"], "file_ids": ["file-1"]}]},
+        )
+    )
+    assert "chunk-second" not in response.content
+    assert second.content not in response.content
+    assert "返回达到本组长度预算" in response.content
+    if first_fits:
+        assert "片段：chunk-first" in response.content
+        assert first.content in response.content
+        assert session.accessed_history == {"file-1"}
+    else:
+        assert "chunk-first" not in response.content
+        assert first.content not in response.content
+        assert "原文未展示，不截断表格" in response.content
+        assert not session.accessed_history
 
 
 @pytest.mark.asyncio
