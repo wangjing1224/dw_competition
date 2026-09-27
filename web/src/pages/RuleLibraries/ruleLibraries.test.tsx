@@ -1,14 +1,24 @@
 // @vitest-environment jsdom
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import {
+  render,
+  screen,
+  cleanup,
+  waitFor,
+  fireEvent,
+  within,
+} from '@testing-library/react';
 import { App } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
+import { layout } from '@/app';
 import Workbench from '../Workbench';
 import Libraries from './List';
 import LibraryDetail from './Detail';
 import { validateFiles } from './Create';
 import { safeMarkdown } from './Detail/SourcePreview';
-import { mergeChanges } from './Progress';
+import { PageHeading } from './shared';
+import ProgressPage, { mergeChanges } from './Progress';
 import {
   api,
   ApiError,
@@ -31,6 +41,209 @@ afterEach(() => {
 });
 
 describe('规则库工作台', () => {
+  it('页面标题提供明确的返回入口，子页面默认返回规则库', () => {
+    const { rerender } = render(<PageHeading title="新建规则库" />);
+    expect(screen.getByRole('link', { name: '返回规则库' })).toHaveAttribute(
+      'href',
+      '/rule-libraries',
+    );
+    rerender(<PageHeading title="处理进度" />);
+    expect(screen.getAllByRole('link', { name: '返回规则库' })).toHaveLength(1);
+    rerender(<PageHeading title="规则详情" />);
+    expect(screen.getByRole('link', { name: '返回规则库' })).toHaveAttribute(
+      'href',
+      '/rule-libraries',
+    );
+  });
+  it('侧栏收起时隐藏两段说明，展开后恢复', () => {
+    const config = layout({} as Parameters<typeof layout>[0]);
+    const actions = config.actionsRender;
+    const footer = config.menuFooterRender;
+    if (typeof actions !== 'function' || typeof footer !== 'function') {
+      throw new Error('布局应提供侧栏渲染函数');
+    }
+    const sidebar = (collapsed: boolean) => (
+      <>
+        {config.logo}
+        {actions({ collapsed } as Parameters<typeof actions>[0])}
+        {footer({ collapsed } as Parameters<typeof footer>[0])}
+      </>
+    );
+    const { rerender } = render(sidebar(false));
+    expect(screen.getByText('招投标智能审核 · 规则管理')).toBeInTheDocument();
+    expect(screen.getByText(/智能整理 · 依据可查/)).toBeInTheDocument();
+    rerender(sidebar(true));
+    expect(
+      screen.queryByText('招投标智能审核 · 规则管理'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/智能整理 · 依据可查/)).not.toBeInTheDocument();
+    expect(screen.getByText('审')).toBeInTheDocument();
+    rerender(sidebar(false));
+    expect(screen.getByText(/智能整理 · 依据可查/)).toBeInTheDocument();
+  });
+  it('切换有数据和空状态时保持相同的满宽容器，空提示在列表内部', async () => {
+    const styles = readFileSync('src/global.less', 'utf8');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input: string) => {
+        const status = new URL(input, 'http://localhost').searchParams.get(
+          'status',
+        );
+        const items =
+          !status || status === 'rule_ready'
+            ? [
+                {
+                  project_id: 'project-1',
+                  display_name: '布局测试库',
+                  status: 'rule_ready',
+                  updated_at: '2026-09-27T10:00:00Z',
+                  file_count: 1,
+                  rule_count: 71,
+                  category_counts: { technical: 71 },
+                  warning: null,
+                },
+              ]
+            : [];
+        return {
+          ok: true,
+          json: async () => ({
+            items,
+            total: items.length,
+            overview: {
+              project_count: 1,
+              ready_count: 1,
+              processing_count: 0,
+              failed_count: 0,
+              attention_count: 0,
+            },
+          }),
+        };
+      }),
+    );
+    render(
+      <>
+        <style>{styles}</style>
+        <App>
+          <Libraries />
+        </App>
+      </>,
+    );
+    await screen.findByRole('heading', { name: '布局测试库' });
+    expect(screen.getByRole('link', { name: '返回工作台' })).toHaveAttribute(
+      'href',
+      '/home',
+    );
+    const page = screen.getByRole('main');
+    const heading = screen.getByRole('heading', { name: '规则库', level: 1 });
+    const pagination = screen.getByRole('navigation', { name: '规则库分页' });
+    const controls = pagination.querySelector(
+      '.list-pagination-controls',
+    ) as HTMLElement;
+    const pageItems = controls.querySelectorAll('.ant-pagination > li').length;
+    for (const name of ['已完成', '处理中', '失败', '全部']) {
+      fireEvent.click(screen.getByRole('radio', { name }));
+      if (name === '处理中' || name === '失败') {
+        const empty = await screen.findByText(
+          name === '处理中' ? '暂无正在处理的规则库' : '暂无处理失败的规则库',
+        );
+        expect(empty.closest('.library-grid')).not.toBeNull();
+        expect(
+          within(empty.closest('.library-empty') as HTMLElement).queryByRole(
+            'button',
+          ),
+        ).not.toBeInTheDocument();
+        expect(
+          within(pagination).getByText('共 0 个规则库'),
+        ).toBeInTheDocument();
+        expect(controls).not.toBeVisible();
+        expect(controls).toHaveAttribute('aria-hidden', 'true');
+        expect(controls).toHaveAttribute('inert');
+        expect(within(controls).queryAllByRole('button')).toHaveLength(0);
+        expect(
+          screen.queryByRole('heading', { name: '布局测试库' }),
+        ).not.toBeInTheDocument();
+      } else {
+        await screen.findByRole('heading', { name: '布局测试库' });
+        expect(controls).toBeVisible();
+        expect(controls).not.toHaveAttribute('inert');
+      }
+      // 0 条和 1 条使用同一套页码占位，仅改变可见性，不移除布局元素。
+      expect(pagination.querySelector('.list-pagination-controls')).toBe(
+        controls,
+      );
+      expect(controls.querySelector('.ant-pagination')).toBeInTheDocument();
+      expect(controls.querySelectorAll('.ant-pagination > li')).toHaveLength(
+        pageItems,
+      );
+      expect(getComputedStyle(controls).display).not.toBe('none');
+      expect(getComputedStyle(controls).flexShrink).toBe('0');
+      expect(screen.getByRole('main')).toBe(page);
+      expect(screen.getByRole('heading', { name: '规则库', level: 1 })).toBe(
+        heading,
+      );
+      // jsdom不计算像素布局；这里锁定修复所依赖的宽度契约，而非冒充浏览器视觉测试。
+      expect(getComputedStyle(page).width).toBe('100%');
+      expect(getComputedStyle(page).minWidth).toBe('0px');
+      expect(getComputedStyle(page).marginTop).toBe('0px');
+      expect(getComputedStyle(page).display).toBe('flex');
+      expect(getComputedStyle(page).flexDirection).toBe('column');
+      expect(
+        getComputedStyle(page.querySelector('.library-results') as HTMLElement)
+          .flexGrow,
+      ).toBe('1');
+      expect(getComputedStyle(pagination).flexShrink).toBe('0');
+      expect(screen.getByRole('navigation', { name: '规则库分页' })).toBe(
+        pagination,
+      );
+    }
+  });
+  it('已结束的进度页也使用公共满宽容器', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input: string) => ({
+        ok: true,
+        json: async () =>
+          input.includes('/progress')
+            ? {
+                project_id: 'project-1',
+                display_name: '进度布局测试',
+                status: 'rule_ready',
+                phase: 'completed',
+                document_count: 0,
+                completed_file_ids: [],
+                saved_rule_count: 0,
+                files: [],
+                recent_rules: [],
+                error: null,
+                trace: {
+                  trace_status: 'completed',
+                  changes: [],
+                  next_cursor: 0,
+                  has_more: false,
+                  warning: null,
+                },
+              }
+            : {
+                project: { project_id: 'project-1', status: 'rule_ready' },
+                rule_set: { rules: [] },
+                warning: null,
+              },
+      })),
+    );
+    render(
+      <>
+        <style>{readFileSync('src/global.less', 'utf8')}</style>
+        <App>
+          <ProgressPage />
+        </App>
+      </>,
+    );
+    await screen.findByText('处理完成，但未提取到规则');
+    const page = screen.getByRole('main');
+    expect(page).toHaveClass('business-page');
+    expect(getComputedStyle(page).width).toBe('100%');
+    expect(getComputedStyle(page).marginTop).toBe('0px');
+  });
   it('首页只有业务入口，不请求统计、不展示使用说明条', () => {
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
@@ -45,6 +258,9 @@ describe('规则库工作台', () => {
     expect(screen.getByRole('heading', { name: '规则库' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '创建审核任务' })).toBeDisabled();
     expect(screen.queryByText('结果如何使用')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: /返回/ }),
+    ).not.toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalled();
   });
   it('列表空状态不回退到假数据', async () => {
@@ -68,8 +284,23 @@ describe('规则库工作台', () => {
         <Libraries />
       </App>,
     );
-    expect(await screen.findByText('暂无符合条件的规则库')).toBeInTheDocument();
+    expect(await screen.findByText('尚未创建规则库')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /新建规则库/ })).toHaveLength(
+      2,
+    );
     expect(fetch).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('radio', { name: '失败' }));
+    await screen.findByText('暂无处理失败的规则库');
+    expect(screen.getAllByRole('button', { name: /新建规则库/ })).toHaveLength(
+      1,
+    );
+    fireEvent.change(screen.getByPlaceholderText('搜索规则库名称或 ID'), {
+      target: { value: '不存在的名称' },
+    });
+    await screen.findByText('暂无符合条件的规则库');
+    expect(screen.getAllByRole('button', { name: /新建规则库/ })).toHaveLength(
+      1,
+    );
   });
   it('列表展示后端错误而非伪装空列表', async () => {
     vi.stubGlobal(

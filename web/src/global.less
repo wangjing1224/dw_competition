@@ -51,8 +51,11 @@ body {
   border-top: 1px solid #edf0f5;
 }
 .business-page {
+  /* ProLayout 内容区是纵向 flex：明确占满可用宽度，避免空列表时按内容收缩。 */
+  width: 100%;
+  min-width: 0;
   max-width: 1600px;
-  margin: auto;
+  margin: 0 auto;
   padding-bottom: 32px;
 }
 .page-heading {
@@ -73,8 +76,26 @@ body {
   line-height: 1.7;
 }
 .back-link {
-  font-size: 12px;
-  color: #7c8da7;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 4px 10px;
+  border: 1px solid #e4eaf3;
+  border-radius: 6px;
+  background: white;
+  font-size: 13px;
+  line-height: 22px;
+  color: #53647d;
+}
+.back-link:hover {
+  color: #2563eb;
+  border-color: #a3bce9;
+  background: #f8fbff;
+}
+.back-link:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 .section-gap {
   margin-top: 18px;
@@ -255,11 +276,35 @@ body {
   gap: 12px;
   margin: 28px 0 20px;
 }
+.library-list-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+/* 结果区域吸收剩余高度；页脚不跟着卡片或空提示的高度上下跳动。 */
+.library-results,
+.library-results > .ant-spin-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+}
+.library-results {
+  min-height: 360px;
+}
 .library-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 20px;
   min-height: 180px;
+  flex: 1;
+  align-content: start;
+}
+.library-grid-empty {
+  align-content: center;
+}
+.library-empty {
+  grid-column: 1 / -1;
+  padding: 48px 0;
 }
 .library-card {
   border: 1px solid #e4eaf3;
@@ -312,8 +357,21 @@ body {
   line-height: 1.7;
 }
 .list-pagination {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
   justify-content: flex-end;
+  gap: 16px;
+  min-height: 32px;
   margin-top: 28px;
+}
+.list-pagination-controls {
+  flex: 0 0 auto;
+}
+/* 零结果时仍保留页码宽度，避免总数右移；隐藏区域同时由 inert 禁止交互。 */
+.list-pagination-controls[aria-hidden="true"] {
+  visibility: hidden;
+  pointer-events: none;
 }
 .creation-steps {
   padding: 24px 32px;

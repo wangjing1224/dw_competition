@@ -102,10 +102,24 @@ export default function Libraries() {
       ['正在处理', data.overview.processing_count],
       ['需关注', data.overview.attention_count],
     ] as const);
+  const firstLibrary =
+    data?.overview.project_count === 0 && !q && !status && !attention;
+  const emptyDescription = firstLibrary
+    ? '尚未创建规则库'
+    : q || attention
+      ? '暂无符合条件的规则库'
+      : status === 'processing_rules'
+        ? '暂无正在处理的规则库'
+        : status === 'rule_failed'
+          ? '暂无处理失败的规则库'
+          : status === 'rule_ready'
+            ? '暂无已完成的规则库'
+            : '暂无符合条件的规则库';
   return (
-    <main className="business-page">
+    <main className="business-page library-list-page">
       <PageHeading
-        back={false}
+        backTo="/home"
+        backLabel="返回工作台"
         title="规则库"
         description="独立管理招标要求，为投标文件审核提供统一依据。"
         actions={
@@ -198,8 +212,10 @@ export default function Libraries() {
         </Space>
       </div>
       {error && <Failure error={error} retry={() => setReload((n) => n + 1)} />}
-      <Spin spinning={loading}>
-        <div className="library-grid">
+      <Spin spinning={loading} wrapperClassName="library-results">
+        <div
+          className={`library-grid${data?.items.length === 0 ? ' library-grid-empty' : ''}`}
+        >
           {data?.items.map((item) => (
             <Card className="library-card" key={item.project_id}>
               <div className="library-top">
@@ -245,24 +261,38 @@ export default function Libraries() {
               </div>
             </Card>
           ))}
+          {!loading && !error && data?.items.length === 0 && (
+            <Empty className="library-empty" description={emptyDescription}>
+              {firstLibrary && (
+                <Link to="/rule-libraries/new">
+                  <Button type="primary">新建规则库</Button>
+                </Link>
+              )}
+            </Empty>
+          )}
         </div>
-        {!loading && !error && data?.items.length === 0 && (
-          <Empty description="暂无符合条件的规则库">
-            <Link to="/rule-libraries/new">
-              <Button type="primary">新建规则库</Button>
-            </Link>
-          </Empty>
-        )}
       </Spin>
-      <Pagination
-        className="list-pagination"
-        current={page}
-        total={data?.total || 0}
-        pageSize={12}
-        showSizeChanger={false}
-        onChange={setPage}
-        showTotal={(total) => `共 ${total} 个规则库`}
-      />
+      <nav className="list-pagination" aria-label="规则库分页">
+        {data && !error && (
+          <>
+            <span>共 {data.total} 个规则库</span>
+            <div
+              className="list-pagination-controls"
+              aria-hidden={data.total === 0}
+              inert={data.total === 0}
+            >
+              <Pagination
+                current={page}
+                total={data.total}
+                pageSize={12}
+                showSizeChanger={false}
+                disabled={data.total === 0}
+                onChange={setPage}
+              />
+            </div>
+          </>
+        )}
+      </nav>
     </main>
   );
 }

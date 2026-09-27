@@ -1,6 +1,10 @@
 import { Alert, Button, Empty, Space, Tag } from 'antd';
 import { Link } from '@umijs/max';
-import { EditOutlined, FileTextOutlined } from '@ant-design/icons';
+import {
+  ArrowLeftOutlined,
+  EditOutlined,
+  FileTextOutlined,
+} from '@ant-design/icons';
 import type { ReactNode } from 'react';
 import {
   priorities,
@@ -15,18 +19,23 @@ export function PageHeading({
   description,
   actions,
   back = true,
+  backTo = '/rule-libraries',
+  backLabel = '返回规则库',
 }: {
   title: string;
   description?: string;
   actions?: ReactNode;
   back?: boolean;
+  backTo?: string;
+  backLabel?: string;
 }) {
   return (
     <header className="page-heading">
       <div>
         {back && (
-          <Link className="back-link" to="/rule-libraries">
-            规则库 /
+          <Link className="back-link" to={backTo}>
+            <ArrowLeftOutlined aria-hidden />
+            {backLabel}
           </Link>
         )}
         <h1>{title}</h1>

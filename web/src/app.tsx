@@ -21,11 +21,15 @@ export const layout: RunTimeLayoutConfig = () => ({
   menu: { locale: false },
   siderWidth: 224,
   logo: <span className="brand-mark">审</span>,
-  actionsRender: () => [
-    <span key="label" className="header-note">
-      招投标智能审核 · 规则管理
-    </span>,
-  ],
+  // side 布局会把 actions 放进侧栏；收起时不输出长文案，避免挤成竖排。
+  actionsRender: ({ collapsed }) =>
+    collapsed
+      ? []
+      : [
+          <span key="label" className="header-note">
+            招投标智能审核 · 规则管理
+          </span>,
+        ],
   avatarProps: undefined,
   footerRender: false,
   menuItemRender: (item, dom) =>
@@ -34,12 +38,13 @@ export const layout: RunTimeLayoutConfig = () => ({
     ) : (
       <Link to={item.path || '/home'}>{dom}</Link>
     ),
-  menuFooterRender: () => (
-    <div className="sidebar-note">
-      智能整理 · 依据可查
-      <br />
-      人工审阅 · 规则可复用
-    </div>
-  ),
+  menuFooterRender: (props) =>
+    props?.collapsed ? null : (
+      <div className="sidebar-note">
+        智能整理 · 依据可查
+        <br />
+        人工审阅 · 规则可复用
+      </div>
+    ),
 });
 export const request: RequestConfig = { baseURL: '' };
