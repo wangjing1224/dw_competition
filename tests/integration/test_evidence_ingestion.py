@@ -43,6 +43,9 @@ def environment(monkeypatch, temp_settings):
 
 
 class Embedding:
+    async def embed_query(self, query):
+        return (await self.embed([query]))[0]
+
     def __init__(self, dimension):
         self.dimension, self.calls = dimension, []
 

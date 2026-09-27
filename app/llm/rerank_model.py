@@ -1,9 +1,10 @@
-"""进程内 Qwen3 Reranker 懒加载、设备选择、稳定 ID 排序和降级。"""
+"""本地/百炼 Rerank 统一排序；本地权重懒加载及设备降级保持独立。"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import threading
 from pathlib import Path
 from typing import Any, ClassVar, Protocol
@@ -11,8 +12,8 @@ from typing import Any, ClassVar, Protocol
 from pydantic import BaseModel, ConfigDict
 
 from app.core.config import RerankSettings
+from app.llm.bailian_retrieval import BailianRerankBackend
 from app.llm.errors import ModelCallError
-
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +83,7 @@ class LocalCrossEncoderBackend:
 
     # 相同配置在一个进程中共享模型，防止并发审核任务重复占用内存。
     _models: ClassVar[dict[tuple[str, str, str, int, bool], Any]] = {}
-    _model_locks: ClassVar[
-        dict[tuple[str, str, str, int, bool], threading.Lock]
-    ] = {}
+    _model_locks: ClassVar[dict[tuple[str, str, str, int, bool], threading.Lock]] = {}
     _registry_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(self, settings: RerankSettings) -> None:
@@ -295,7 +294,15 @@ class RerankModel:
         backend: RerankBackend | None = None,
     ) -> None:
         self.settings = settings
-        self.backend = backend or LocalCrossEncoderBackend(settings)
+        self.backend = (
+            backend
+            if backend is not None
+            else (
+                BailianRerankBackend(settings)
+                if settings.platform == "bailian"
+                else LocalCrossEncoderBackend(settings)
+            )
+        )
 
     async def rerank(
         self,
@@ -308,10 +315,12 @@ class RerankModel:
         limit = min(top_n or self.settings.top_n, len(documents))
         try:
             scores = await self.backend.score(query, documents)
-            if len(scores) != len(documents):
+            if len(scores) != len(documents) or any(
+                not math.isfinite(score) for score in scores
+            ):
                 raise ModelCallError(
                     "invalid_rerank_response",
-                    "Rerank 分数数量与文档数量不一致",
+                    "Rerank 分数数量不一致或含非有限数值",
                     retryable=False,
                 )
             ranked = sorted(
@@ -332,6 +341,4 @@ class RerankModel:
                 ]
             if isinstance(exc, ModelCallError):
                 raise
-            raise ModelCallError(
-                "rerank_failed", str(exc), retryable=False
-            ) from exc
+            raise ModelCallError("rerank_failed", str(exc), retryable=False) from exc

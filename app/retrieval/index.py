@@ -6,7 +6,8 @@ import json
 import numpy as np
 
 from app.core.config import AppSettings, EmbeddingSettings, get_settings
-from app.llm.embedding_model import EmbeddingModel
+from app.llm.embedding_model import EmbeddingBatchError, EmbeddingModel
+from app.llm.errors import ModelCallError
 from app.models.documents import DocumentRef
 from app.parsers.service import load_parsed_document
 from app.retrieval.chunker import chunk_parsed_document
@@ -18,9 +19,14 @@ from app.retrieval.store import atomic_index_directory, write_index
 def embedding_config_fingerprint(settings: EmbeddingSettings) -> str:
     # Key 不影响向量语义，故意不进入指纹。
     payload = {
+        "platform": settings.platform,
         "base_url": settings.base_url.rstrip("/"),
         "model": settings.model,
         "dimension": settings.dimension,
+        "text_modes": "document/query"
+        if settings.platform == "bailian"
+        else "openai-compatible",
+        "input_version": "section-hint-content-v1",
     }
     encoded = json.dumps(payload, sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -54,24 +60,37 @@ async def build_document_index(
                 overlap_tokens=resolved.retrieval.chunk_overlap,
             )
         )
-    vectors = (
-        await embedding_model.embed(
-            [
-                "\n".join(
-                    part
-                    for part in [
-                        chunk.section,
-                        chunk.retrieval_hint,
-                        chunk.content,
-                    ]
-                    if part
-                )
-                for chunk in chunks
-            ]
+    try:
+        vectors = (
+            await embedding_model.embed(
+                [
+                    "\n".join(
+                        part
+                        for part in [
+                            chunk.section,
+                            chunk.retrieval_hint,
+                            chunk.content,
+                        ]
+                        if part
+                    )
+                    for chunk in chunks
+                ]
+            )
+            if chunks
+            else np.empty((0, resolved.embedding_model.dimension), dtype=np.float32)
         )
-        if chunks
-        else np.empty((0, resolved.embedding_model.dimension), dtype=np.float32)
-    )
+    except ModelCallError as exc:
+        failed = (
+            chunks[exc.start : exc.end]
+            if isinstance(exc, EmbeddingBatchError)
+            else chunks
+        )
+        locations = ",".join(f"{chunk.file_id}/{chunk.chunk_id}" for chunk in failed)
+        raise ModelCallError(
+            exc.code,
+            f"{exc.message}；索引 {scope.scope_id}；失败批次文件/片段：{locations}",
+            retryable=exc.retryable,
+        ) from exc
     manifest = IndexManifest(
         dimension=resolved.embedding_model.dimension,
         chunk_count=len(chunks),

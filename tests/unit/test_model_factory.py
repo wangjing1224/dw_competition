@@ -315,7 +315,17 @@ def test_llama_cpp_embedding_does_not_send_dimensions(
 
     monkeypatch.setattr(factory, "OpenAIEmbeddings", FakeOpenAIEmbeddings)
 
-    model = factory.build_embedding_model(temp_settings.embedding_model)
+    model = factory.build_embedding_model(
+        temp_settings.embedding_model.model_copy(
+            update={
+                "platform": "local",
+                "model": "text-embedding-v4",
+                "base_url": "http://localhost:8081/v1",
+            }
+        )
+    )
 
     assert "dimensions" not in captured
+    assert "text_type" not in captured
+    assert captured["model"] == "text-embedding-v4"
     assert model.dimension == 1024

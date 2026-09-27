@@ -1,3 +1,7 @@
+# 本文件每个顶层键必须与工具名一致，值为非空多行字符串，供bind_tools注入。
+# 只改说明文本不能改变参数Schema/权限/返回字段，须同步app/tools相应类与测试。
+# YAML #注释不进入模型；块字符串内的任何文字都会进入模型。修改后重启以刷新缓存。
+# 通用检索：CommonTool，规则入库/资料入库/审核主子Agent使用；参数与返回见common_tools.py。
 search_documents: |-
   用途：按具体问题回查授权文档的原文、完整表格和图片入口，补足范围、前文和准确措辞；不是遍历整库。
   输入：querylist 为1至12组，每组有1至12个 queries 和必填 file_ids。查询可针对不同问题或提供互补表达。
@@ -8,6 +12,7 @@ search_documents: |-
   无命中不代表无要求；失败、截取或超预算会明确标记。多个查询的重复命中合并展示。
   当前文件的补查可能命中后续段落，不代表其已按批次处理，不推进阅读进度；不要求每批强制检索。
 
+# 资料入库读写工具：app/tools/evidence_ingestion_tools.py；不是资料核验子Agent的工具。
 save_evidence_material: |-
   用途：保存当前文件的完整双摘要和跨文件关系，或查看已完成历史文件的摘要；不生成审核结论。
   输入：material、file_ids 两参数必须显式填写，且恰好一项为 null。
@@ -25,6 +30,7 @@ save_evidence_material: |-
   只读不写库、不生成新摘要、不做向量检索。预算不足明确标记未展示文件，请分批查询，不将未展示当作不存在。
   保存失败说明真实原因，纠正后再提交；查询成功不能代替失败写入。
 
+# 通用看图：CommonTool，按已登记路径和当前作用域校验；不是parser_vision_model解析调用。
 view_image: |-
   用途：直接查看授权材料中的图片、扫描页或表格回查图，核实转写不足或关键视觉信息。
   输入：唯一参数 path，原样使用材料或检索结果提供的 file_id/images/编号.png 路径，
@@ -32,6 +38,7 @@ view_image: |-
   返回：包含真实图片的多模态工具消息及必要来源说明；由你自行理解，不会额外调用识图模型。
   读取失败只返回真实原因，不代表图片本身不可读，也不能据此判定材料不存在。
 
+# 规则入库增量读写：app/tools/rule_tools.py；参数验证/保存语义由代码维护。
 submit_rule_delta: |-
   用途：原子保存当前文件有依据的规则增量及项目简介，或只读查看当前规则库。
   输入：三个参数 operations、project_profile、return_view 必须显式填写。
@@ -50,10 +57,12 @@ submit_rule_delta: |-
   查看失败与提交失败不同：查看失败只需纠正查看参数，不能为此重复已保存的操作。
 
 # 主审核 Agent：把单条明确核验任务交给资料核验子 Agent。
+# 主审核委派子Agent：app/tools/bid_tools.py；权限和资料范围由状态确定，不由描述授权。
 request_evidence_review: |-
   作用：围绕指定事实委派资料核验子 Agent，读取所选文件及一层直接关联资料。目录和关联仅是线索，不是核验通过。
   输入：checks 为1至10项。每项 rule_id 引用当前规则；verification_request 写清投标声明、对象/主体、编号/数值及判断要求；file_ids 从简洁目录选择非空起始文件列表。同一事项可联合多份资料，不按资料类别机械拆分；不同事项分别提交。同一规则允许多项核验。
   返回：按请求顺序分别返回核验正文，标题带 rule_id 和原核验事项。正文含结论、事实、来源及限制，不是最终报告判断，不回传子 Agent 全部历史。找不到不等于未提交；工具失败不等于材料缺失。等待核验返回后再据此写报告。
+# 主审核报告读写：app/tools/report_tools.py；报告模板单独在templates/audit_report_template.md。
 report_document: |-
   作用：读取、完整写入或精确编辑当前投标文件的唯一报告。路径由系统绑定，不能访问其他文件。
   输入：action=read 时 content、edits 均为 null；write 时 content 为完整 Markdown，edits=null；edit 时 content=null，edits 为非空 old_text/new_text 列表。old_text 须在当前稿中恰好出现一次，可包含标题定位；new_text 可为空表示删除，但不能破坏报告骨架。以 System 中的独立报告模板为准，不需最后输出报告 JSON。

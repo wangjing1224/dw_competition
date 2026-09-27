@@ -11,6 +11,9 @@ from app.retrieval.store import LoadedIndex
 
 
 class FakeEmbedding:
+    async def embed_query(self, query):
+        return (await self.embed([query]))[0]
+
     async def embed(self, texts):
         return np.asarray([[1.0, 0.0] for _ in texts], dtype=np.float32)
 

@@ -51,7 +51,7 @@ class RetrievalService:
         candidate_k = candidate_top_k or self.settings.retrieval.candidate_top_k
         final_k = final_top_k or self.settings.retrieval.final_top_k
 
-        query_vector = (await self.embedding_model.embed([query]))[0]
+        query_vector = await self.embedding_model.embed_query(query)
         semantic_scores = index.vectors[allowed] @ query_vector
         semantic_order = np.argsort(semantic_scores)[::-1][:candidate_k]
         recalls: dict[int, RecallItem] = {}

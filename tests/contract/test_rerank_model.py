@@ -49,6 +49,7 @@ class Backends:
 
 def settings(allow_degradation=True, cache_dir="/tmp/dw-models"):
     return RerankSettings(
+        platform="local",
         model="Qwen/Qwen3-Reranker-0.6B",
         source="modelscope",
         cache_dir=cache_dir,
@@ -145,9 +146,7 @@ def test_accelerator_failure_retries_on_cpu(monkeypatch):
                 )
             return [0.9]
 
-    backend_settings = settings().model_copy(
-        update={"device": "auto", "dtype": "auto"}
-    )
+    backend_settings = settings().model_copy(update={"device": "auto", "dtype": "auto"})
     backend = RecordingBackend(backend_settings)
     scores = backend._score_sync(
         "query",

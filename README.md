@@ -67,7 +67,7 @@ http://127.0.0.1:8000/web/
 
 ## 模型配置
 
-- `.env`：保存各职责 Chat 模型和 Embedding 的连接地址、Key，不提交 Git。
+- `.env`：保存各职责 Chat、Embedding 和 Rerank 的连接地址、Key，不提交 Git。
 - `configs/model.yaml`：保存 Chat 平台、模型名、思考开关、温度、超时、重试、维度和批大小。
 - `configs/retrieval.yaml`：保存分段、候选数量和混合召回权重。
 - `configs/storage.yaml`：保存数据目录、SQLite 路径和上传安全限制。
@@ -87,25 +87,36 @@ OpenAI 可切换思考示例为 `gpt-5.1`，开为 `medium`、关为 `none`；�
 参数参考 [DS 官方](https://api-docs.deepseek.com/guides/thinking_mode/)、
 [百炼](https://help.aliyun.com/zh/model-studio/deep-thinking)、
 [OpenAI](https://developers.openai.com/api/docs/models/gpt-5.1)。不自动替换平台或偷偷打开思考。
-Embedding 仍使用原有 OpenAI 兼容封装，本地配置不变；第三方 Chat 网关协议需另行核实，不能套用 DS 官方参数。
+第三方 Chat 网关协议需另行核实，不能套用 DS 官方参数。
 
-Rerank 使用进程内
-`sentence-transformers` CrossEncoder，默认加载 `Qwen3-Reranker-0.6B`：
-Mac 优先使用 MPS，Linux 优先使用可用的 NPU/CUDA，设备加载或推理失败时
-自动回退 CPU。模型在第一次检索时通过魔塔社区下载并复用本地缓存，不影响
-后端启动速度。离线服务器可提前下载模型，并把 `model` 改为本地目录、
-`source` 改为 `local`。
+Embedding 与 Rerank 各自支持 `platform: bailian` 或 `local`，可独立选择。
+当前配置使用百炼原生文本向量与重排接口，型号为 `qwen3.7-text-embedding`
+（1024维、每批16条）和 `qwen3.7-text-rerank`。
 
-Rerank 模型固定下载到项目根目录的
-`models/Qwen/Qwen3-Reranker-0.6B`，`models/` 已加入 `.gitignore`，
-不会使用或依赖可能被清理的 `~/.cache`。
+- 在 `.env` 填写 `EMBEDDING_BASE_URL/EMBEDDING_API_KEY` 与 `RERANK_BASE_URL/RERANK_API_KEY`。
+  地址采用百炼控制台实际 API Host 加 `/api/v1`，示例见 `.env.example`，必须替换工作空间占位符。
+  不要使用 Chat 兼容地址或追加具体 endpoint；Key、工作空间和地域须对应。
+- 文档向量与查询向量分别使用 `text_type: document/query`，本地仍做L2归一化、余弦召回、
+  关键词融合和索引存储。云端不会托管本项目的向量库。
+- 云端请求按配置共享并发名额，对网络错误/429/部分5xx有限重试；401/403/402等直接报错。
+  Rerank默认不降级，失败不会偷偷加载本地模型。`allow_degradation: true` 才允许保留初召回顺序。
+- 原文、表格等候选会发送给模型服务，使用前确认材料允许出域。服务启动本身不请求模型；
+  第一次入库/检索才实际计费，日志只保留请求标识、数量、耗时等诊断信息。
 
-当前 Embedding 使用本地 llama.cpp 部署的 `Qwen3-Embedding-0.6B`，按模型
-原生 1024 维输出进行校验。客户端不会发送 llama.cpp 未支持的
-`dimensions` 参数。
+完整本地备选块保留在 `configs/model.yaml` 注释中。切换时替换对应模型块并同步 `.env` 后重启：
+Embedding使用llama.cpp的OpenAI兼容接口，`text-embedding-v4`只是本地别名，不套用百炼同名限制，
+也不发送 `dimensions/text_type`；Rerank保持进程内 `Qwen3-Reranker-0.6B`，首次检索才加载，
+缓存位于 `models/`。`source: modelscope` 表示下载本地权重，不是云端推理；离线可用 `source: local`。
 
-Embedding 模型、URL 或维度变化后，停止服务并删除 `data/indexes/` 和
-`data/app.db`，再依次重新调用项目、投标方和审核任务接口。
+更换Embedding平台、地址、型号、维度或输入语义后必须使用新索引。不匹配的索引会明确拒绝，
+不自动迁移或删除历史数据；本轮用新上传的测试材料走正常入库流程即可，**无需删除数据库**。
+Rerank切换不改变向量索引。正文切片默认1024个本地近似Token、重叠160；表格和图片转写保持结构，
+不等于接口长度上限，也不自动合并短段落。字段完整说明见 `configs/` 内注释。
+
+协议参考：[百炼文本向量](https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api)、
+[百炼文本重排](https://help.aliyun.com/zh/model-studio/text-rerank-api)。先跑离线HTTP契约测试
+`uv run pytest tests/contract/test_bailian_retrieval.py`；填好真实连接后，再用少量脱敏材料
+检查文档/查询向量、重排顺序及完整检索链。离线通过不等于真实API权限或业务效果已验证。
 
 ## 规则抽取与增量维护
 

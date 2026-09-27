@@ -14,6 +14,7 @@ from app.api.projects import router as project_router
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
+from app.llm.bailian_retrieval import close_retrieval_clients
 from app.storage.database import initialize_database
 from app.storage.repositories import AuditTaskRepository, BidderRepository
 
@@ -33,7 +34,10 @@ async def lifespan(_: FastAPI):
     initialize_database(settings.storage.database_path)
     AuditTaskRepository().mark_interrupted_tasks_failed()
     BidderRepository().mark_interrupted_ingestions_failed()
-    yield
+    try:
+        yield
+    finally:
+        await close_retrieval_clients()
 
 
 def create_app() -> FastAPI:

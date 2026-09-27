@@ -22,6 +22,9 @@ DATA_ROOT = Path(__file__).resolve().parents[2] / "test-datas"
 
 
 class MockEmbedding:
+    async def embed_query(self, query):
+        return (await self.embed([query]))[0]
+
     def __init__(self, dimension: int) -> None:
         self.dimension = dimension
 

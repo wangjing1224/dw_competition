@@ -8,6 +8,53 @@ from app.core import config
 from app.core.config import get_settings
 
 
+def test_cloud_and_commented_local_examples_validate_without_network(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://workspace.test/api/v1")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "example-key")
+    monkeypatch.setenv("RERANK_BASE_URL", "https://workspace.test/api/v1")
+    monkeypatch.setenv("RERANK_API_KEY", "example-key")
+    raw = (config.PROJECT_ROOT / "configs/model.yaml").read_text("utf-8")
+    cloud_values = config._interpolate(yaml.safe_load(raw))
+    cloud_embedding = config.EmbeddingSettings.model_validate(
+        cloud_values["embedding_model"]
+    )
+    cloud_rerank = config.RerankSettings.model_validate(cloud_values["rerank_model"])
+    assert cloud_embedding.platform == cloud_rerank.platform == "bailian"
+    local_text = "# embedding_model:" + raw.split("# embedding_model:", 1)[1]
+    local = yaml.safe_load(
+        "\n".join(line.removeprefix("# ") for line in local_text.splitlines())
+    )
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "http://localhost:8081/v1")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "local")
+    local = config._interpolate(local)
+    embedding = config.EmbeddingSettings.model_validate(local["embedding_model"])
+    rerank = config.RerankSettings.model_validate(local["rerank_model"])
+    assert embedding.platform == rerank.platform == "local"
+    assert embedding.batch_size == 16 and embedding.model == "text-embedding-v4"
+    assert rerank.cache_dir.as_posix() == "models"
+    assert not rerank.api_key.get_secret_value()
+    # 两个职责分别选择平台，不受对方影响；本地无需云端凭据或下载权重。
+    for emb in (embedding, cloud_embedding):
+        for rank in (rerank, cloud_rerank):
+            values = get_settings().model_dump()
+            values.update(embedding_model=emb, rerank_model=rank)
+            assert (
+                config.AppSettings.model_validate(values).embedding_model.platform
+                == emb.platform
+            )
+
+
+def test_every_prompt_file_and_placeholder_is_documented():
+    from string import Template
+
+    prompt_root = config.PROJECT_ROOT / "configs/prompts"
+    readme = (prompt_root / "README.md").read_text("utf-8")
+    for path in (prompt_root / "templates").glob("*.md"):
+        assert path.name in readme, path.name
+        for name in Template(path.read_text("utf-8")).get_identifiers():
+            assert f"`{name}`" in readme or f"${{{name}}}" in readme, (path.name, name)
+
+
 def test_settings_load_yaml_and_environment(monkeypatch):
     monkeypatch.setenv("BID_CHAT_MODEL_API_KEY", "test-secret")
     get_settings.cache_clear()
@@ -23,7 +70,8 @@ def test_settings_load_yaml_and_environment(monkeypatch):
     assert settings.bid_chat_model.api_key.get_secret_value() == "test-secret"
     assert "test-secret" not in repr(settings.bid_chat_model)
     assert settings.storage.database_path.is_absolute()
-    assert settings.rerank_model.cache_dir == settings.project_root / "models"
+    assert settings.rerank_model.platform == "bailian"
+    assert settings.rerank_model.cache_dir is None
     assert settings.rule_limit == raw["rule_limit"]
     assert config.AppSettings.model_fields["rule_limit"].default == 10_000
 

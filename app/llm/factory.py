@@ -10,6 +10,7 @@ from app.core.config import (
     EmbeddingSettings,
     get_settings,
 )
+from app.llm.bailian_retrieval import BailianEmbeddings
 from app.llm.embedding_model import EmbeddingModel
 from app.llm.platforms import ChatProtocol, PlatformChatOpenAI
 from app.llm.rerank_model import RerankModel
@@ -48,17 +49,21 @@ def build_embedding_model(settings: EmbeddingSettings) -> EmbeddingModel:
     api_key = settings.api_key.get_secret_value()
     if not api_key:
         raise ValueError(f"Embedding 模型 {settings.model} 未配置 API Key")
-    client = OpenAIEmbeddings(
-        model=settings.model,
-        base_url=settings.base_url.rstrip("/"),
-        api_key=api_key,
-        # 本地 llama.cpp 的 OpenAI 兼容 Embedding 接口不支持
-        # dimensions 参数。配置中的 dimension 仅用于响应维度校验；
-        # Qwen3-Embedding-0.6B 直接返回原生 1024 维向量。
-        chunk_size=settings.batch_size,
-        timeout=settings.timeout_seconds,
-        max_retries=settings.max_retries,
-        check_embedding_ctx_length=False,
+    client = (
+        BailianEmbeddings(settings)
+        if settings.platform == "bailian"
+        else OpenAIEmbeddings(
+            model=settings.model,
+            base_url=settings.base_url.rstrip("/"),
+            api_key=api_key,
+            # 本地 llama.cpp 的 OpenAI 兼容 Embedding 接口不支持
+            # dimensions 参数。配置中的 dimension 仅用于响应维度校验；
+            # Qwen3-Embedding-0.6B 直接返回原生 1024 维向量。
+            chunk_size=settings.batch_size,
+            timeout=settings.timeout_seconds,
+            max_retries=settings.max_retries,
+            check_embedding_ctx_length=False,
+        )
     )
     return EmbeddingModel(
         client=client,

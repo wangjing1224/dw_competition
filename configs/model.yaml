@@ -1,14 +1,36 @@
-# 规则 Agent 每个阅读批次最多调用次数；压缩续跑不清零，最后一次不提供工具。
+# 修改后重启服务；所有 ${NAME} 都从环境变量或根目录 .env 读取，环境变量优先。
+# 不支持局部字符串插值；API Key 不要直接写在 YAML。缺失字段或未知字段会校验失败。
+# Chat 通用字段（下面六个模型块同义，不同角色连接信息相互独立）：
+# platform：必填 deepseek / bailian / openai，选择协议而非 tokenizer。
+# base_url/api_key：必填连接地址/密钥；URL 不加 /chat/completions。
+# model：必填服务端模型 ID；平台、URL、Key、ID 必须匹配。
+# temperature：必填非负浮点数，越低越稳定；可用上限及思考模式行为由平台决定。
+# timeout_seconds：单次请求超时秒数，>0；max_retries：失败后的额外重试次数，整数>=0。
+# context_window_tokens：正整数，输入+输出总窗口，必须按实际模型能力填写，非无限输出。
+# compaction_trigger_ratio：默认0.90，0<值<1；输入超此窗口比例触发控制器处理。
+# tokenizer：计数器注册名称，当前 DeepSeek / utf8；前者缺本地资源会估算兜底。
+# enable_thinking：默认false；平台适配层转换为各厂商参数，不同于开启工具调用。
+# structured_output_mode：可取 prompt_only / json_object / json_schema；当前业务统一用
+# prompt_only（提示词约束JSON+代码校验），Agent仍用原生tool call，不要求每轮吐JSON。
+# 固定 max_output_tokens 与 context_window_tokens 二选一；五个业务模型用窗口模式，
+# parser_vision_model 暂用固定输出上限。窗口/计数/限流与检索片段长度是不同概念。
+
+# 规则 Agent 每个阅读批次最多调用次数，整数>=2，默认8；最后一次不提供工具。
+# 压缩续跑不清零，正常换批重置。
 rule_agent_max_steps: 8
-# 资料入库也按阅读批次计数，正常换批重置、压缩续跑保留。
+# 资料入库同上，整数>=2，默认8。
 evidence_ingestion_max_steps: 8
 
 # 文件调度和实际模型请求使用不同名额，等待子 Agent 时释放模型请求名额。
 audit:
+  # 同一审核任务同时处理文件数，整数>=1，默认2；不等于模型HTTP并发数。
   file_concurrency: 2
+  # 审核Chat共享的请求名额，整数>=1，默认3；不控制Embedding/Rerank并发。
   model_concurrency: 3
+# 审核主/子Agent轮数当前从 .env 的 BID_AGENT_MAX_STEPS / EVIDENCE_AGENT_MAX_STEPS
+# 读取，默认8/3（正整数），不要在此增写同名字段期待覆盖环境配置。
 
-# 规则库总条数上限预留值，10000 用于当前近似不限制的试运行。
+# 规则库总条数上限预留值，正整数，默认10000，用于当前近似不限制的试运行。
 # 整批增量超过上限时调用预留处理函数，当前只打印警告，不拒绝、截断或自动合并。
 rule_limit: 10000
 
@@ -79,7 +101,7 @@ bid_chat_model:
   enable_thinking: false
   structured_output_mode: prompt_only
 
-# 资料核验子 Agent 模型：针对主 Agent 传入的精确 Claim，在最多三轮内核验资料。
+# 资料核验子 Agent 模型：针对主 Agent 派发的任务核验资料，轮数默认3，可用环境变量调整。
 evidence_chat_model:
   platform: deepseek
   base_url: ${EVIDENCE_CHAT_MODEL_BASE_URL}
@@ -104,65 +126,99 @@ parser_vision_model:
   temperature: 0
   timeout_seconds: 120
   max_retries: 2
+  # 仅此解析模型使用固定输出上限，正整数；16384不是整个上下文长度。
   max_output_tokens: 16384
   enable_thinking: false
   structured_output_mode: prompt_only
 
 parsing:
-  # 统一 prepare_document 入口；调用方显式参数优先，不传则使用此开关。
+  # bool，默认false；prepare_document调用方显式参数优先；开启须配置独立视觉模型。
   vision_enabled: false
+  # 单张原始图片字节/像素资源上限，正整数（默认20MB十进制 / 4000万像素）。
   max_image_bytes: 20000000
   max_image_pixels: 40000000
+  # 发送视觉模型前图片最长边像素，256~8192，默认2048；非OCR置信度或Token预算。
   vision_image_max_side: 2048
+  # PDF基础渲染DPI，72~300，默认120；越大越清晰也越耗内存。
   pdf_render_dpi: 120
-  # 嵌入图片区域按原图像素提高渲染分辨率，仍保留叠字/裁切；上限控制内存。
+  # 图片区域自适应提高清晰度的DPI上限，72~600，默认300；建议不低于基础DPI。
   pdf_render_max_dpi: 300
+  # 单PDF页数上限，正整数，默认1000；超限拒绝而非只解析前1000页。
   max_pdf_pages: 1000
+  # 单工作表检查的单元格规模上限，正整数，默认500000，防止巨型空白范围撑爆内存。
   max_sheet_cells: 500000
 
 # 文本向量模型：为规则来源、投标文件和投标方资料生成 Embedding。
 embedding_model:
+  # 必填 local / bailian；local=OpenAI兼容HTTP，bailian=百炼原生文本向量HTTP。
+  platform: bailian
+  # 百炼控制台对应地域/工作空间的 API Host + /api/v1，不是 /compatible-api/v1。
   base_url: ${EMBEDDING_BASE_URL}
+  # 使用该服务所属地域与工作空间的Key；与Chat Key独立配置，可以填同一个获授权Key。
   api_key: ${EMBEDDING_API_KEY}
-  # 该名称需要与 llama.cpp 启动时暴露的模型名一致。
-  model: text-embedding-v4
-  # Qwen3-Embedding-0.6B 原生输出 1024 维。此处只用于响应校验和索引清单，
-  # 不会作为 dimensions 参数发送给不支持该参数的 llama.cpp 服务。
-  # 修改模型、URL 或维度后必须删除旧索引并全量重建。
+  # 已登记：qwen3.7-text-embedding / qwen3.7-text-embedding-flash / text-embedding-v4。
+  # 前两者每请求最多20条、单条128000 Token；v4最多10条、单条8192 Token。
+  model: qwen3.7-text-embedding
+  # 正整数；3.7支持256/512/768/1024/1536/2048/2560，flash支持前四种，
+  # v4支持64/128/256/512/768/1024/1536/2048。云端发送dimension并校验响应。
+  # 平台/地址/模型/维度改变后旧向量不能复用；用新材料正常入库，不自动删改历史数据。
   dimension: 1024
-  # 0.6B Q4 模型内存占用较低，先使用 16；服务不稳定时再降为 8 或 4。
+  # 必填正整数，且不超过型号批量上限；先16，切换v4须同时调成<=10。
   batch_size: 16
+  # 请求超时秒数>0、额外重试数>=0；网络/限流/部分服务错误重试，鉴权/余额错误不重试。
   timeout_seconds: 120
   max_retries: 2
+  # 同事件循环中该云端服务共享HTTP并发名额，整数>=1，默认2；local暂不使用此限流器。
+  max_concurrency: 2
 
-# 本地重排序模型：在后端进程内对向量和关键词初召回结果进行相关性重排。
-# 模型不会在服务启动时加载，第一次实际检索时才懒加载。
+# 文本重排：候选仍在本地向量/关键词索引召回；只将候选文本交给远端评分。
 rerank_model:
-  # 魔塔模型 ID；若 model 填写的是已存在的本地目录，会直接使用本地文件。
-  model: Qwen/Qwen3-Reranker-0.6B
-  # modelscope：首次使用时从魔塔下载并复用缓存。
-  # local：只允许 model 指向已存在的本地目录，适合离线服务器。
-  source: modelscope
-  # 相对路径固定解析到项目根目录。实际模型位于
-  # models/Qwen/Qwen3-Reranker-0.6B，不使用 ~/.cache 临时缓存。
-  cache_dir: models
-  # auto 自动选择 npu、cuda、mps、cpu；加速设备失败时会自动改用 CPU。
-  # 你的 Mac 会优先选择 mps，服务器没有可用加速运行时则直接使用 cpu。
-  device: auto
-  # auto 在加速设备上使用 float16，在 CPU 上使用 float32。
-  dtype: auto
-  # Mac 内存较小时建议 2～4；服务器显存充足时可适当增大。
-  batch_size: 4
-  # 当前片段约 800 token，2048 足够且能控制内存；无需使用模型 32K 上限。
-  max_length: 2048
-  # 最多保留的重排结果数量。
+  # 必填local / bailian；与Embedding独立选择，不靠URL猜测，也不自动切回本地。
+  platform: bailian
+  base_url: ${RERANK_BASE_URL}  # 必填云端API Host + /api/v1，不能填Chat完整路径。
+  api_key: ${RERANK_API_KEY}  # 必填云端Key；不要直接写入本文件。
+  # 原生协议当前仅此型号；qwen3-rerank使用不同协议，不可直接替换名字。
+  model: qwen3.7-text-rerank
+  timeout_seconds: 120  # 秒，>0，默认120；不是整场审核超时。
+  max_retries: 2  # 额外重试次数>=0，默认2；有限重试，不重试鉴权/欠费。
+  max_concurrency: 2  # 云端共享并发请求数>=1，默认2；不影响本地权重推理。
+  # 最终保留数>0；调用方传top_n时覆盖此默认值，检索链使用retrieval.final_top_k。
+  # HTTP层取每批全部分数后按原始候选ID合并排序，再截取最终数量。
   top_n: 10
-  # 官方建议按具体任务定制 instruction，并优先使用英文。
+  # 任务说明字符串，必填；云端映射为instruct，本地作为查询指令。
   instruction: >-
     Given an electric power tender review requirement, rank the document
     passages by how directly and completely they provide evidence for the
     requirement.
-  # 使用魔塔缓存且禁止联网时可设为 true；完全离线部署更建议 source=local。
-  local_files_only: false
-  # Rerank 不可用时是否退回初召回顺序，避免整个审核任务直接失败。
-  allow_degradation: true
+  # bool，云端默认false、本地默认true；true允许记录警告后使用初召回顺序，
+  # 不是换用本地模型。false时失败明确上抛，避免误以为重排成功。
+  allow_degradation: false
+
+# 切回本地：替换对应块（不要创建重复YAML键），同步.env地址并重启服务。
+# 两个职责可以独立选择；本地不会请求百炼、也不需要百炼Key。
+# embedding_model:
+#   platform: local
+#   base_url: ${EMBEDDING_BASE_URL}  # .env: http://127.0.0.1:8081/v1
+#   api_key: ${EMBEDDING_API_KEY}    # .env: local（按本地服务鉴权要求）
+#   model: text-embedding-v4        # llama.cpp别名，实际为Qwen3-Embedding-0.6B，不套百炼v4限制
+#   dimension: 1024                # 只校验响应，不发送dimensions或text_type
+#   batch_size: 16                 # >0，本地资源不足可改8或4
+#   timeout_seconds: 120
+#   max_retries: 2
+#   max_concurrency: 2             # local暂不生效
+# rerank_model:
+#   platform: local
+#   model: Qwen/Qwen3-Reranker-0.6B # 或已下载权重目录；首次实际检索才加载，不是启动即下载
+#   source: modelscope             # modelscope可下载；local要求model为已存在目录
+#   cache_dir: models              # local必填，相对项目根目录；不使用系统临时缓存
+#   device: auto                   # auto依次探测npu/cuda/mps/cpu，或显式cpu/cuda/mps/npu；失败可退CPU
+#   dtype: auto                    # auto/float16/bfloat16/float32；auto在CPU用float32，加速设备float16
+#   batch_size: 4                  # local必填，>0，控制权重推理批量；不是远端500候选上限
+#   max_length: 2048               # local必填，>0，查询+文档分词截断长度；不发送到云端
+#   top_n: 10
+#   instruction: >-
+#     Given an electric power tender review requirement, rank the document
+#     passages by how directly and completely they provide evidence for the
+#     requirement.
+#   local_files_only: false        # bool，默认false；true仅用缓存，离线也可source=local
+#   allow_degradation: true

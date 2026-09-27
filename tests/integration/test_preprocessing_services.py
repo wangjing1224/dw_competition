@@ -20,6 +20,9 @@ from app.storage.file_store import FileOwner, FileStore
 
 
 class FakeEmbedding:
+    async def embed_query(self, query):
+        return (await self.embed([query]))[0]
+
     def __init__(self, dimension):
         self.dimension = dimension
 

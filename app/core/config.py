@@ -52,6 +52,7 @@ class ChatModelSettings(ConfigModel):
 class EmbeddingSettings(ConfigModel):
     """Embedding 服务配置；dimension 必须与服务实际输出一致。"""
 
+    platform: Literal["local", "bailian"]
     base_url: str
     api_key: SecretStr
     model: str
@@ -59,22 +60,57 @@ class EmbeddingSettings(ConfigModel):
     batch_size: int = Field(gt=0)
     timeout_seconds: float = Field(gt=0)
     max_retries: int = Field(ge=0)
+    max_concurrency: int = Field(default=2, ge=1)
+
+    @model_validator(mode="after")
+    def validate_platform(self):
+        if self.platform == "bailian":
+            from app.llm.bailian_retrieval import EMBEDDING_MODELS
+
+            limits = EMBEDDING_MODELS.get(self.model)
+            if limits is None:
+                raise ValueError(f"尚未登记百炼Embedding型号：{self.model}")
+            if self.dimension not in limits.dimensions:
+                raise ValueError(f"{self.model} 不支持维度 {self.dimension}")
+            if self.batch_size > limits.max_items:
+                raise ValueError(f"{self.model} 每批最多 {limits.max_items} 条")
+        return self
 
 
 class RerankSettings(ConfigModel):
-    """进程内 Rerank 模型、设备、批处理和降级配置。"""
+    """按平台校验；本地加载权重，百炼通过原生 HTTP 重排。"""
 
+    platform: Literal["local", "bailian"]
     model: str
+    base_url: str = ""
+    api_key: SecretStr = SecretStr("")
+    timeout_seconds: float = Field(default=120, gt=0)
+    max_retries: int = Field(default=2, ge=0)
+    max_concurrency: int = Field(default=2, ge=1)
     source: Literal["modelscope", "local"] = "modelscope"
-    cache_dir: Path
+    cache_dir: Path | None = None
     device: str = "auto"
     dtype: Literal["auto", "float16", "bfloat16", "float32"] = "auto"
-    batch_size: int = Field(gt=0)
-    max_length: int = Field(gt=0)
+    batch_size: int | None = Field(default=None, gt=0)
+    max_length: int | None = Field(default=None, gt=0)
     top_n: int = Field(gt=0)
     instruction: str
     local_files_only: bool = False
-    allow_degradation: bool = True
+    allow_degradation: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_platform(self):
+        if self.platform == "local":
+            if any(
+                value is None
+                for value in (self.cache_dir, self.batch_size, self.max_length)
+            ):
+                raise ValueError("本地Rerank必填 cache_dir、batch_size、max_length")
+        elif self.model != "qwen3.7-text-rerank":
+            raise ValueError("百炼Rerank当前仅适配 qwen3.7-text-rerank 原生协议")
+        if self.allow_degradation is None:
+            self.allow_degradation = self.platform == "local"
+        return self
 
 
 class RetrievalSettings(ConfigModel):
@@ -252,5 +288,8 @@ def get_settings() -> AppSettings:
     raw["storage"]["data_root"] = _resolve_path(raw["storage"]["data_root"])
     raw["storage"]["database_path"] = _resolve_path(raw["storage"]["database_path"])
     # 模型缓存也固定到项目根目录，避免依赖可能被系统清理的用户缓存目录。
-    raw["rerank_model"]["cache_dir"] = _resolve_path(raw["rerank_model"]["cache_dir"])
+    if raw["rerank_model"].get("cache_dir") is not None:
+        raw["rerank_model"]["cache_dir"] = _resolve_path(
+            raw["rerank_model"]["cache_dir"]
+        )
     return AppSettings.model_validate(raw)
