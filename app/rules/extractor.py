@@ -33,6 +33,7 @@ from app.rules.context import (
     build_rule_view,
     render_document_range,
 )
+from app.rules.local_trace import current_trace, trace_scope
 from app.rules.merger import finalize_rule_set
 from app.rules.tracing import invoke_rule_model
 from app.tools.common_tools import CommonTool
@@ -162,6 +163,8 @@ async def _run_file(*, model, session, settings):
         if batch.status != "ready":
             raise InputBudgetError(batch.blocked_reason or "没有可运行的阅读批次")
         session.batch_end = batch.end
+        if current_trace.get():
+            current_trace.get().hierarchy(session)
         controller.previous = batch.decision
         state = {
             "messages": list(batch.context.messages),
@@ -218,24 +221,30 @@ async def _run_file(*, model, session, settings):
                         **budgeted_generation_options(model_settings, allowance),
                     )
 
-                compacted = await compact_context(
-                    context=signal.context,
-                    constraints=constraints,
-                    controller=controller,
-                    invoke=invoke_summary,
-                )
-                rebuilt = _batch_context(
-                    session=session,
-                    units=units,
-                    start=batch.start,
-                    end=batch.end,
-                    tools=tools,
-                    settings=settings,
-                    model_calls=signal.state["model_calls"],
-                    handoff=compacted.summary,
-                )
-                controller.reset_history()
-                decision = controller.check(rebuilt)
+                with trace_scope(session, "compaction", "上下文压缩") as observation:
+                    compacted = await compact_context(
+                        context=signal.context,
+                        constraints=constraints,
+                        controller=controller,
+                        invoke=invoke_summary,
+                    )
+                    rebuilt = _batch_context(
+                        session=session,
+                        units=units,
+                        start=batch.start,
+                        end=batch.end,
+                        tools=tools,
+                        settings=settings,
+                        model_calls=signal.state["model_calls"],
+                        handoff=compacted.summary,
+                    )
+                    controller.reset_history()
+                    decision = controller.check(rebuilt)
+                    observation["output"] = {
+                        "before_tokens": signal.decision.estimate.total,
+                        "after_tokens": decision.estimate.total if decision.estimate else None,
+                        "counter_method": signal.decision.estimate.method,
+                    }
                 session.compaction_records.append(
                     {
                         "batch_index": session.batch_index,
@@ -268,6 +277,8 @@ async def _run_file(*, model, session, settings):
             session.next_unit_index = previous
             raise
         cursor = batch.end
+        if current_trace.get():
+            current_trace.get().close_scope(session, "batch")
     return session.rule_set
 
 
@@ -369,11 +380,15 @@ async def extract_rule_set(
             commits=list(commits),
         )
         try:
+            if current_trace.get():
+                current_trace.get().hierarchy(session)
             await persist(rule_set, commits)
             rule_set = await _run_file(model=model, session=session, settings=resolved)
             await persist(
                 rule_set, session.commits, completed=[*history, parsed.document.file_id]
             )
+            if current_trace.get():
+                current_trace.get().close_scope(session, "file")
         except Exception as exc:
             # 不覆盖正式结果；记录最近实际提交成功的规则以及当前失败范围。
             try:

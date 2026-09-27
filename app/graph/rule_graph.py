@@ -7,6 +7,7 @@ from langchain_core.messages import BaseMessage, ToolMessage
 from langgraph.graph import END, StateGraph
 
 from app.agents.rule_agent import rule_agent_node
+from app.rules.local_trace import current_trace, observe_tool_result, trace_scope
 from app.rules.tracing import invoke_rule_tool
 
 
@@ -38,14 +39,27 @@ def build_rule_graph(
             if not call_id:
                 raise ValueError("模型工具调用缺少 tool_call_id")
             try:
-                if name not in by_name:
-                    raise ValueError(f"未知工具 {name}")
-                result = await invoke_rule_tool(by_name[name], call, trace_context)
-                if (
-                    not isinstance(result, ToolMessage)
-                    or result.tool_call_id != call_id
-                ):
-                    raise ValueError("工具未返回匹配当前调用的 ToolMessage")
+                before_profile = session.rule_set.project_profile
+                commit_count = len(session.commits)
+                with trace_scope(
+                    session,
+                    "tool",
+                    name,
+                    name=name,
+                    tool_call_id=call_id,
+                    input={"arguments": call.get("args", {})},
+                ) as observation:
+                    if name not in by_name:
+                        raise ValueError(f"未知工具 {name}")
+                    result = await invoke_rule_tool(by_name[name], call, trace_context)
+                    if (
+                        not isinstance(result, ToolMessage)
+                        or result.tool_call_id != call_id
+                    ):
+                        raise ValueError("工具未返回匹配当前调用的 ToolMessage")
+                    observe_tool_result(
+                        observation, session, call, result, before_profile, commit_count
+                    )
                 if name == "view_image":
                     session.accessed_history.add(call["args"]["path"].split("/", 1)[0])
             except Exception as exc:
@@ -76,6 +90,8 @@ def build_rule_graph(
                     content=detail, tool_call_id=call_id, name=name, status="error"
                 )
             messages.append(result)
+        if current_trace.get():
+            current_trace.get().close_scope(session, "turn")
         return {"messages": messages}
 
     graph = StateGraph(RuleState)

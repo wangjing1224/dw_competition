@@ -8,6 +8,7 @@ from app.llm.factory import budgeted_generation_options
 from app.llm.input_budget import InputContext
 from app.llm.platforms import ChatProtocol
 from app.prompts.loader import render_prompt
+from app.rules.local_trace import current_trace, trace_scope
 from app.rules.tracing import invoke_rule_model
 
 
@@ -72,13 +73,33 @@ async def rule_agent_node(
     runnable = model if step == max_steps else model.bind_tools(tools)
     session.model_calls = step
     session.file_model_calls += 1
-    response = await invoke_rule_model(
-        runnable,
-        list(context.messages),
-        [] if step == max_steps else tools,
-        trace_context,
-        **budgeted_generation_options(controller.settings, tokens),
-    )
+    with trace_scope(
+        session,
+        "model",
+        "模型调用",
+        input={
+            "model_name": controller.settings.model,
+            "tools_enabled": step < max_steps,
+            "tool_names": [tool.name for tool in tools] if step < max_steps else [],
+        },
+    ) as observation:
+        response = await invoke_rule_model(
+            runnable,
+            list(context.messages),
+            [] if step == max_steps else tools,
+            trace_context,
+            **budgeted_generation_options(controller.settings, tokens),
+        )
+        observation["output"] = {
+            "content": response.content,
+            "tool_calls": [
+                {"id": c["id"], "name": c["name"], "arguments": c["args"]}
+                for c in response.tool_calls
+            ],
+            "finish_reason": response.response_metadata.get("finish_reason"),
+        }
+    if not response.tool_calls and current_trace.get():
+        current_trace.get().close_scope(session, "turn")
     controller.observe(context, response)
     if getattr(response, "invalid_tool_calls", None):
         raise RuntimeError("模型返回无法解析的工具调用，当前文件未完成")

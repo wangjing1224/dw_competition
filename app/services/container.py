@@ -4,7 +4,6 @@ from app.core.config import get_settings
 from app.llm.factory import (
     build_audit_models,
     build_evidence_ingestion_models,
-    build_model_registry,
 )
 from app.services.background_runner import background_runner
 from app.services.bidder_service import BidderService
@@ -13,7 +12,7 @@ from app.services.project_service import ProjectService
 
 def build_project_service() -> ProjectService:
     settings = get_settings()
-    return ProjectService(settings, build_model_registry(settings))
+    return ProjectService(settings)
 
 
 def build_bidder_service() -> BidderService:

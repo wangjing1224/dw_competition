@@ -42,6 +42,8 @@ def normalize_relative_path(value: str) -> str:
     path = PurePosixPath(normalized)
     if (
         not normalized
+        or not path.parts
+        or "\x00" in normalized
         or path.is_absolute()
         or any(part in {"", ".", ".."} for part in path.parts)
         or ":" in path.parts[0]

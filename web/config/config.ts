@@ -5,7 +5,7 @@ import { defineConfig } from '@umijs/max';
 import defaultSettings from './defaultSettings';
 import proxy from './proxy';
 
-import routes from './routes';
+import routes from './routes.application';
 
 const { UMI_ENV = 'dev' } = process.env;
 
@@ -114,9 +114,9 @@ export default defineConfig({
    * @name layout 插件
    * @doc https://umijs.org/docs/max/layout-menu
    */
-  title: 'Ant Design Pro',
+  title: '招投标智能审核',
   layout: {
-    locale: true,
+    locale: false,
     ...defaultSettings,
   },
   /**
@@ -136,8 +136,8 @@ export default defineConfig({
     // default zh-CN
     default: 'zh-CN',
     antd: true,
-    // default true, when it is true, will use `navigator.language` overwrite default
-    baseNavigator: true,
+    // 业务工作台统一中文，避免演示机器的浏览器语言改变组件文案。
+    baseNavigator: false,
   },
   /**
    * @name antd 插件
@@ -147,10 +147,15 @@ export default defineConfig({
   antd: {
     appConfig: {},
     configProvider: {
-      variant: 'filled',
+      variant: 'outlined',
       theme: {
         token: {
-          fontFamily: 'AlibabaSans, sans-serif',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif',
+          colorPrimary: '#2563EB',
+          colorBgLayout: '#F4F7FC',
+          colorText: '#18253D',
+          colorTextSecondary: '#66758C',
+          borderRadius: 10,
         },
       },
     },
@@ -173,14 +178,6 @@ export default defineConfig({
    * @doc https://umijs.org/docs/max/access
    */
   access: {},
-  /**
-   * @name Google Analytics
-   * @description 使用 GA4 (gtag.js) 进行站点分析
-   * @doc https://umijs.org/docs/max/analytics
-   */
-  analytics: {
-    ga_v2: 'G-59NF1VHHPF',
-  },
   /**
    * @name <head> 中额外的 script
    * @description 配置 <head> 中额外的 script
@@ -210,10 +207,7 @@ export default defineConfig({
 
   tailwindcss: {},
 
-  mock: {
-    include: ['src/pages/**/_mock.ts'],
-    exclude: ['mock/requestRecord.mock.js'],
-  },
+  mock: false,
   utoopack: {
     module: {
       rules: {
@@ -225,7 +219,6 @@ export default defineConfig({
     },
   },
   requestRecord: {},
-  exportStatic: {},
   define: {
     'process.env.CI': process.env.CI,
     'process.env.COMMIT_HASH': commitHash,

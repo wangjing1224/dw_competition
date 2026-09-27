@@ -130,11 +130,21 @@ document.addEventListener("DOMContentLoaded", () => {
     addLog(`${original}开始`, `${files.length} 个文件`);
     try {
       const target = typeof url === "function" ? url(ReviewUI.getIdentity()) : url;
-      const data = await ReviewUI.request(target, {
+      const form = ReviewUI.buildFolderForm(files);
+      if (prefix === "project") form.append("client_request_id", crypto.randomUUID());
+      let data = await ReviewUI.request(target, {
         method: "POST",
-        body: ReviewUI.buildFolderForm(files),
+        body: form,
       });
       success(data);
+      if (prefix === "project") {
+        while (data.status === "processing_rules") {
+          setStatus(prefix, "后台处理中", "running");
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          data = await ReviewUI.request(`/api/projects/${encodeURIComponent(data.project_id)}/progress`);
+        }
+        if (data.status === "rule_failed") throw new Error(data.error?.message || "规则库处理失败");
+      }
       const seconds = ((performance.now() - started) / 1000).toFixed(1);
       setStatus(prefix, data.status || "成功", "success");
       addLog(`${original}完成`, `耗时 ${seconds}s`);

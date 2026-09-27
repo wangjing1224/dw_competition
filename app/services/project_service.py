@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from app.core.config import AppSettings
-from app.llm.factory import ModelRegistry
+from app.llm.factory import ModelRegistry, build_model_registry
 from app.models.documents import document_ref_from_record
 from app.models.rules import RuleExtractionProgress, RuleSet
 from app.parsers.assets import atomic_write
@@ -15,17 +15,24 @@ from app.retrieval.index import build_document_index
 from app.retrieval.models import IndexScope
 from app.retrieval.service import RetrievalService
 from app.rules.extractor import extract_rule_set
+from app.rules.local_trace import LocalTrace, current_trace
 from app.storage.file_store import FileOwner, FileStore
-from app.storage.repositories import ProjectRecord, ProjectRepository
+from app.storage.project_management import update_management
+from app.storage.repositories import (
+    FileRepository,
+    ProjectRecord,
+    ProjectRepository,
+    utc_now,
+)
 
 
 class ProjectService:
-    """同步完成项目预处理；模型耗时较长时接口会等待结果。"""
+    """业务预处理流程；HTTP 上传接收完成后只把 project_id 交给后台。"""
 
     def __init__(
         self,
         settings: AppSettings,
-        models: ModelRegistry,
+        models: ModelRegistry | None = None,
         *,
         repository: ProjectRepository | None = None,
         file_store: FileStore | None = None,
@@ -41,7 +48,7 @@ class ProjectService:
     ) -> ProjectRecord:
         project = self.repository.create()
         try:
-            records = [
+            for file_name, relative_path, stream in uploads:
                 self.file_store.save(
                     owner=FileOwner(project_id=project.project_id),
                     data_role="rule_source",
@@ -49,39 +56,6 @@ class ProjectService:
                     file_name=file_name,
                     relative_path=relative_path,
                 )
-                for file_name, relative_path, stream in uploads
-            ]
-            documents = [document_ref_from_record(record) for record in records]
-            parsed = [await prepare_document(document) for document in documents]
-            if not parsed:
-                raise ValueError("没有待处理招标文件")
-
-            await build_document_index(
-                IndexScope(
-                    scope_id=f"rules-{project.project_id}",
-                    data_role="rule_source",
-                    project_id=project.project_id,
-                ),
-                documents,
-                self.models.embedding,
-                self.settings,
-            )
-            extracted = await extract_rule_set(
-                project.project_id,
-                parsed,
-                self.models.rule_extraction,
-                settings=self.settings,
-                retrieval_service=RetrievalService(
-                    self.models.embedding, self.models.rerank, self.settings
-                ),
-                progress_callback=self._write_rule_progress,
-            )
-            rule_path = self._write_rule_set(extracted)
-            return self.repository.update_status(
-                project.project_id,
-                "rule_ready",
-                rule_set_path=self.file_store.relative_to_data_root(rule_path),
-            )
         except Exception as exc:
             self.repository.update_status(
                 project.project_id,
@@ -90,6 +64,80 @@ class ProjectService:
                 error_message=str(exc),
             )
             raise
+        return await self.process_project(project.project_id)
+
+    async def process_project(self, project_id: str) -> ProjectRecord:
+        project = self.repository.require(project_id)
+        trace = LocalTrace(project_id)
+        token = current_trace.set(trace)
+        failure = None
+        phase = "received"
+        try:
+            update_management(
+                project_id, phase=phase, started_at=utc_now(), trace_status="recording"
+            )
+            # 在后台才构造模型，配置错误也能通过进度接口查看，而非丢失上传结果。
+            models = self.models or build_model_registry(self.settings)
+            records = FileRepository().list_by_scope(
+                project_id=project_id, data_role="rule_source"
+            )
+            documents = [document_ref_from_record(record) for record in records]
+            parsed = []
+            phase = "parsing"
+            for document in documents:
+                update_management(
+                    project_id, phase=phase, current_file_id=document.file_id
+                )
+                parsed.append(await prepare_document(document))
+            if not parsed:
+                raise ValueError("没有待处理招标文件")
+            phase = "indexing"
+            update_management(project_id, phase=phase, current_file_id=None)
+            await build_document_index(
+                IndexScope(
+                    scope_id=f"rules-{project.project_id}",
+                    data_role="rule_source",
+                    project_id=project.project_id,
+                ),
+                documents,
+                models.embedding,
+                self.settings,
+            )
+            phase = "extracting"
+            update_management(project_id, phase=phase)
+            extracted = await extract_rule_set(
+                project.project_id,
+                parsed,
+                models.rule_extraction,
+                settings=self.settings,
+                retrieval_service=RetrievalService(
+                    models.embedding, models.rerank, self.settings
+                ),
+                progress_callback=self._write_rule_progress,
+            )
+            phase = "saving"
+            update_management(project_id, phase=phase, current_file_id=None)
+            rule_path = self._write_rule_set(extracted)
+            result = self.repository.update_status(
+                project.project_id,
+                "rule_ready",
+                rule_set_path=self.file_store.relative_to_data_root(rule_path),
+            )
+            update_management(project_id, phase="completed")
+            return result
+        except BaseException as exc:
+            failure = exc
+            self.repository.update_status(
+                project.project_id,
+                "rule_failed",
+                error_code=type(exc).__name__,
+                error_message=str(exc),
+            )
+            update_management(project_id, phase="failed", failed_phase=phase)
+            raise
+        finally:
+            trace.close(failure)
+            current_trace.reset(token)
 
     def _write_rule_set(self, rule_set: RuleSet) -> Path:
         """RuleSet 使用临时文件校验后原子替换，避免半写入状态。"""

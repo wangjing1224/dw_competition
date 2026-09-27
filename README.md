@@ -34,6 +34,7 @@ app/tools        规则/审核工具及 CommonTool 通用工具
 app/agents       规则抽取、主审核和资料核验 Agent
 app/graph        LangGraph State、路由和更新
 app/reports      JSON 和 Word 输出
+web              Ant Design Pro 规则库工作台
 configs          模型、检索和存储配置
 data             运行时上传、解析、索引和输出
 schemas          导出的 JSON Schema
@@ -52,7 +53,27 @@ uv run uvicorn app.main:app --reload
 
 健康检查地址：`http://127.0.0.1:8000/health`
 
-演示前端：
+规则库工作台（Node.js 22 或以上；后端保持在 8000 端口）：
+
+```bash
+cd web
+npm ci
+npm run dev
+```
+
+打开 `http://localhost:3000`。首页进入规则库，支持文件/文件夹导入、后台进度、
+本地 Agent 执行轨迹、六类规则审阅、人工修订、来源原文/图片预览及 JSON/Markdown 导出。
+资料库和审核任务的新页面暂不开放；没有登录系统，也不会请求模板的演示服务。
+开发代理默认把 `/api/` 转到 `http://127.0.0.1:8000`，可通过启动环境变量
+`API_PROXY_TARGET` 修改。生产部署使用 `npm run build` 的 `web/dist`，Web 服务器需配置
+SPA 回退到 `index.html`，并将 `/api/` 反向代理到后端；开发代理不适用于生产静态文件。
+
+规则库上传保存文件后即返回 202，随后在单进程后台解析和整理。重启会将未完成任务
+标记为中断并保留已保存成果，不自动重复调用模型。当前不支持多进程任务调度，
+部署时不要增加 Uvicorn workers；本地展示轨迹不依赖 LangSmith 开启。
+人工编辑使用版本校验防止覆盖新修改。系统尚无鉴权，仅用于可信环境。
+
+保留的旧演示前端（仍可用于资料上传和审核）：
 
 ```text
 http://127.0.0.1:8000/web/
@@ -308,13 +329,20 @@ PDF 依赖 PyMuPDF；发布/分发项目前应核对其上游 AGPL/商业许可�
 
 ## API
 
-上传招标文件并同步生成 RuleSet：
+上传招标文件，保存材料后返回 202，在后台生成 RuleSet：
 
 ```bash
+request_id="$(uuidgen)"
 curl -X POST http://127.0.0.1:8000/api/projects \
+  -F "client_request_id=$request_id" \
+  -F 'display_name=示例招标规则库' \
   -F 'files=@/path/to/招标文件.docx' \
   -F 'relative_paths=示例招标文件/招标文件.docx'
 ```
+
+保存返回的 `project_id`，通过 `GET /api/projects/{project_id}/progress` 查询处理进度。
+同一次提交重试必须复用原 `request_id`、名称和文件；不要重新运行 `uuidgen`。
+需要确认是否已受理时，先查询 `GET /api/projects?client_request_id={request_id}`。
 
 上传一家投标方的支撑资料：
 
