@@ -454,17 +454,54 @@ body {
   color: #2563eb;
   margin-left: 8px;
 }
+.rule-progress-page {
+  display: flex;
+  flex-direction: column;
+  /* 扣除桌面内容区上下各24px边距，剩余高度由标题、阶段和三栏共同分配。 */
+  height: calc(100vh - 48px);
+  height: calc(100dvh - 48px);
+  padding-bottom: 0;
+}
+.rule-progress-page > :not(.trace-grid) {
+  flex-shrink: 0;
+}
 .trace-grid {
   display: grid;
+  flex: 1;
+  min-height: 280px;
   grid-template-columns: 240px minmax(360px, 1fr) 310px;
+  grid-template-rows: minmax(0, 1fr);
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
 }
-.trace-grid > .ant-card {
+.trace-grid > .trace-panel {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
-.trace-grid .ant-card-body {
+.trace-panel > .ant-card-head {
+  flex-shrink: 0;
+}
+.trace-panel > .ant-card-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+}
+/* 每列只滚动正文；标题留在卡片顶部，规则卡片本身不再套滚动条。 */
+.trace-panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
   padding: 18px;
+}
+.trace-panel-scroll:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
 }
 .file-progress {
   display: flex;
@@ -689,21 +726,30 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .trace-grid {
-    grid-template-columns: 200px minmax(320px, 1fr);
-  }
-  .trace-grid > .ant-card:last-child {
-    grid-column: 1 / -1;
-  }
-  .recent-rules {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
+    grid-template-columns: 190px minmax(300px, 1fr) 270px;
   }
   .home-flow {
     grid-template-columns: 1.35fr 80px 1fr;
   }
   .flow-connector span {
     display: none;
+  }
+}
+/* 窄屏或低矮窗口回到整页滚动，避免卡片正文被压成只有几行。 */
+@media (max-width: 1200px), (max-height: 700px) {
+  .rule-progress-page {
+    height: auto;
+    padding-bottom: 32px;
+  }
+  .trace-grid {
+    flex: none;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+  }
+  .trace-panel-scroll {
+    overflow: visible;
+    scrollbar-gutter: auto;
   }
 }
 @media (max-width: 1000px) {
@@ -739,12 +785,6 @@ body {
   }
   .category-nav button {
     min-width: 170px;
-  }
-  .trace-grid {
-    grid-template-columns: 1fr;
-  }
-  .trace-grid > .ant-card:last-child {
-    grid-column: auto;
   }
   .page-heading {
     flex-wrap: wrap;

@@ -197,7 +197,28 @@ describe('规则库工作台', () => {
       );
     }
   });
-  it('已结束的进度页也使用公共满宽容器', async () => {
+  it.each([
+    0, 24,
+  ])('进度页的三个面板统一约束高度并独立滚动（%i份文件）', async (fileCount) => {
+    const files = Array.from({ length: fileCount }, (_, i) => ({
+      file_id: `file-${i + 1}`,
+      file_name: `来源文件${i + 1}.docx`,
+      source_path: `材料/来源文件${i + 1}.docx`,
+      parse_status: 'parsed',
+      extraction_status: 'completed',
+    }));
+    const rules = fileCount
+      ? Array.from({ length: 3 }, (_, i) => ({
+          rule_id: `rule-${i + 1}`,
+          category: 'technical',
+          priority: 'critical',
+          verification: 'bid_only',
+          provenance: 'ai_generated',
+          requirement: '用于验证长规则仅在右栏滚动，不撑高整页。'.repeat(25),
+          reason: '依据当前文件明确要求。',
+          sources: [],
+        }))
+      : [];
     vi.stubGlobal(
       'fetch',
       vi.fn().mockImplementation(async (input: string) => ({
@@ -209,23 +230,36 @@ describe('规则库工作台', () => {
                 display_name: '进度布局测试',
                 status: 'rule_ready',
                 phase: 'completed',
-                document_count: 0,
-                completed_file_ids: [],
-                saved_rule_count: 0,
-                files: [],
-                recent_rules: [],
+                document_count: fileCount,
+                completed_file_ids: files.map((file) => file.file_id),
+                saved_rule_count: rules.length,
+                files,
+                recent_rules: rules,
                 error: null,
                 trace: {
                   trace_status: 'completed',
-                  changes: [],
-                  next_cursor: 0,
+                  changes: files.map((file, i) => ({
+                    seq: i + 1,
+                    node: {
+                      span_id: `span-${i + 1}`,
+                      parent_span_id: null,
+                      kind: 'file',
+                      title: `执行记录${i + 1}`,
+                      status: 'succeeded',
+                      started_at: '2026-09-28T10:00:00Z',
+                      duration_ms: 1000,
+                      has_detail: false,
+                      file_id: file.file_id,
+                    },
+                  })),
+                  next_cursor: fileCount,
                   has_more: false,
                   warning: null,
                 },
               }
             : {
                 project: { project_id: 'project-1', status: 'rule_ready' },
-                rule_set: { rules: [] },
+                rule_set: { rules },
                 warning: null,
               },
       })),
@@ -238,11 +272,39 @@ describe('规则库工作台', () => {
         </App>
       </>,
     );
-    await screen.findByText('处理完成，但未提取到规则');
+    await screen.findByText(
+      fileCount ? '处理结果已保存' : '处理完成，但未提取到规则',
+    );
     const page = screen.getByRole('main');
-    expect(page).toHaveClass('business-page');
+    expect(page).toHaveClass('business-page', 'rule-progress-page');
     expect(getComputedStyle(page).width).toBe('100%');
     expect(getComputedStyle(page).marginTop).toBe('0px');
+    expect(getComputedStyle(page).display).toBe('flex');
+    const grid = page.querySelector('.trace-grid') as HTMLElement;
+    expect(getComputedStyle(grid).gridTemplateRows).toBe('minmax(0, 1fr)');
+    expect(getComputedStyle(grid).alignItems).toBe('stretch');
+    expect(getComputedStyle(grid).flexGrow).toBe('1');
+    for (const label of [
+      '来源文件列表',
+      'Agent 执行轨迹内容',
+      '最近保存的规则内容',
+    ]) {
+      const body = screen.getByRole('region', { name: label });
+      const card = body.closest('.trace-panel') as HTMLElement;
+      const header = card.querySelector('.ant-card-head') as HTMLElement;
+      // jsdom不计算实际几何尺寸；锁定等高、滚动区域与标题分离的样式契约。
+      expect(getComputedStyle(card).display).toBe('flex');
+      expect(getComputedStyle(card).minHeight).toBe('0px');
+      expect(getComputedStyle(header).flexShrink).toBe('0');
+      expect(body).toHaveAttribute('tabindex', '0');
+      expect(getComputedStyle(body).overflow).toBe('auto');
+      expect(body.contains(header)).toBe(false);
+      expect(body.querySelector('.trace-panel-scroll')).toBeNull();
+    }
+    expect(page.querySelectorAll('.file-progress')).toHaveLength(fileCount);
+    expect(page.querySelectorAll('.recent-rules .rule-card')).toHaveLength(
+      rules.length,
+    );
   });
   it('首页只有业务入口，不请求统计、不展示使用说明条', () => {
     const fetch = vi.fn();

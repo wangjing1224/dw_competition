@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link, useParams } from '@umijs/max';
 import {
   Alert,
@@ -51,6 +52,28 @@ const statusLabels: Record<string, string> = {
   failed: '失败',
   interrupted: '中断',
 };
+
+function TracePanel({
+  title,
+  label,
+  extra,
+  children,
+}: {
+  title: ReactNode;
+  label: string;
+  extra?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Card className="trace-panel" title={title} extra={extra}>
+      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: 独立滚动区域需要支持键盘聚焦与方向键滚动。 */}
+      <section className="trace-panel-scroll" aria-label={label} tabIndex={0}>
+        {children}
+      </section>
+    </Card>
+  );
+}
+
 export default function ProgressPage() {
   const { projectId = '' } = useParams();
   const [data, setData] = useState<ProgressData>();
@@ -174,7 +197,7 @@ export default function ProgressPage() {
     'completed',
   ];
   return (
-    <main className="business-page">
+    <main className="business-page rule-progress-page">
       <PageHeading
         title={data?.display_name || '规则抽取进度'}
         description="追踪真实文件处理、模型调用与工具执行；已保存成果可随时查看。"
@@ -254,7 +277,10 @@ export default function ProgressPage() {
         />
       )}
       <div className="trace-grid">
-        <Card title={`来源文件 · ${data?.document_count || 0}`}>
+        <TracePanel
+          title={`来源文件 · ${data?.document_count || 0}`}
+          label="来源文件列表"
+        >
           <div className="file-progress-list">
             {data?.files.map((file) => (
               <div
@@ -300,8 +326,9 @@ export default function ProgressPage() {
               </div>
             ))}
           </div>
-        </Card>
-        <Card
+        </TracePanel>
+        <TracePanel
+          label="Agent 执行轨迹内容"
           title={
             <Space>
               <NodeIndexOutlined />
@@ -336,8 +363,8 @@ export default function ProgressPage() {
           ) : (
             <Empty description="尚无 Agent 调用记录；解析和建索引完成后显示。" />
           )}
-        </Card>
-        <Card title="最近保存的规则">
+        </TracePanel>
+        <TracePanel title="最近保存的规则" label="最近保存的规则内容">
           <div className="recent-rules">
             {data?.recent_rules.length ? (
               data.recent_rules.map((rule) => (
@@ -347,7 +374,7 @@ export default function ProgressPage() {
               <Empty description="暂无已保存规则" />
             )}
           </div>
-        </Card>
+        </TracePanel>
       </div>
       <Drawer
         title={detail?.node.title || '执行详情'}
