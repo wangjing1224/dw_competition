@@ -14,7 +14,6 @@ import {
   Select,
   Space,
   Spin,
-  Tag,
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import SourcePreview, {
@@ -119,9 +118,7 @@ export default function LibraryDetail() {
           .toLowerCase()
           .includes(q.toLowerCase()) &&
         (filter === 'all' ||
-          (filter === 'relations' &&
-            directRelations(materials, item.file_id).length > 0) ||
-          (filter === 'limits' && item.has_reading_limit) ||
+          (filter === 'ai' && item.provenance === 'ai_generated') ||
           (filter === 'human' && item.provenance === 'human_modified'))
       );
     }) || [];
@@ -177,7 +174,7 @@ export default function LibraryDetail() {
       result.warning
         ? message.warning(result.warning)
         : message.success(
-            result.changed ? '资料已保存，来源标记为人工修订' : '内容未变化',
+            result.changed ? '资料已保存，来源标记为人工修正' : '内容未变化',
           );
       setDraft(undefined);
       setReload((n) => n + 1);
@@ -292,15 +289,15 @@ export default function LibraryDetail() {
               onChange={(e) => setQ(e.target.value)}
             />
             <Select
+              aria-label="资料来源筛选"
               className="section-gap"
               style={{ width: '100%' }}
               value={filter}
               onChange={setFilter}
               options={[
-                { label: '全部文件', value: 'all' },
-                { label: '有直接关联', value: 'relations' },
-                { label: '有读取限制', value: 'limits' },
-                { label: '人工修订', value: 'human' },
+                { label: '全部', value: 'all' },
+                { label: 'AI 整理', value: 'ai' },
+                { label: '人工修正', value: 'human' },
               ]}
             />
             <nav
@@ -321,7 +318,6 @@ export default function LibraryDetail() {
                     <code>{item.file_id}</code>
                     <Provenance value={item.provenance} />
                   </Space>
-                  {item.has_reading_limit && <Tag color="orange">读取限制</Tag>}
                 </button>
               ))}
               {visibleFiles.length === 0 && (
@@ -350,7 +346,7 @@ export default function LibraryDetail() {
                 extra={
                   <Space wrap>
                     <Button onClick={() => setPreviewFile(selected)}>
-                      查看原文
+                      查看解析原文
                     </Button>
                     <Button
                       onClick={() =>
@@ -507,7 +503,7 @@ export default function LibraryDetail() {
       >
         <Alert
           type="info"
-          title="人工修订仅表示内容被修改，不代表已核验真实有效。"
+          title="人工修正仅表示内容被修改，不代表已核验真实有效。"
         />
         {editError && (
           <Alert

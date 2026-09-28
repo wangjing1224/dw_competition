@@ -184,6 +184,7 @@ export default function CreateLibrary() {
               disabled={locked}
               onChange={(e) => setName(e.target.value)}
             />
+            <small className="muted">资料库名称不能与已有资料库重复。</small>
           </Card>
           <Card className="section-gap" title="投标方材料">
             <div

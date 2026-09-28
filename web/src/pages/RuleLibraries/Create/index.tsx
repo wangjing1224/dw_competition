@@ -186,6 +186,7 @@ export default function CreateLibrary() {
               disabled={locked}
               onChange={(e) => setName(e.target.value)}
             />
+            <small className="muted">规则库名称不能与已有规则库重复。</small>
           </Card>
           <Card className="section-gap" title="招标材料">
             <div
@@ -301,7 +302,7 @@ export default function CreateLibrary() {
             <ul className="feature-list">
               <li>保留要求中的数值、范围与条件</li>
               <li>区分重要程度和核验方式</li>
-              <li>可查看原文、图片与执行轨迹</li>
+              <li>可查看解析原文、图片与执行轨迹</li>
               <li>支持人工新增与修订</li>
             </ul>
             <Alert

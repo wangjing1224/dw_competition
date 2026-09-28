@@ -199,9 +199,6 @@ export default function Progress() {
                   }
                 </Tag>
               </Space>
-              {file.has_reading_limit && (
-                <small>存在读取限制，请结合原件查看</small>
-              )}
             </div>
           ))}
         </TracePanel>

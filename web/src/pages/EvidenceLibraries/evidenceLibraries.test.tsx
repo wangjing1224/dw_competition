@@ -102,7 +102,7 @@ describe('投标方资料库', () => {
                   ...detail.bidder,
                   file_count: 1,
                   material_count: 1,
-                  has_reading_limit: false,
+                  has_reading_limit: true,
                   available_for_audit: true,
                   warning: null,
                 },
@@ -125,6 +125,11 @@ describe('投标方资料库', () => {
       </App>,
     );
     await screen.findByRole('heading', { name: '华衡资料库' });
+    expect(screen.queryByText('含读取限制')).not.toBeInTheDocument();
+    expect(document.querySelectorAll('.library-metric')).toHaveLength(2);
+    expect(
+      screen.getByText('可供审核选择', { selector: '.ant-tag' }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByText('失败', { exact: true }));
     await screen.findByText('暂无处理失败的资料库');
     expect(screen.getAllByRole('button', { name: /新建资料库/ })).toHaveLength(
@@ -204,6 +209,121 @@ describe('投标方资料库', () => {
     expect(screen.getAllByText('AI 整理').length).toBeGreaterThan(0);
   });
 
+  it('资料目录只按全部、AI 整理、人工修正筛选，不显示读取限制标签', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        reply({
+          ...detail,
+          files: [
+            { ...source, has_reading_limit: true },
+            {
+              ...source,
+              file_id: 'file-2',
+              file_name: '验收.md',
+              source_path: '业绩/验收.md',
+              provenance: 'human_modified',
+            },
+            {
+              ...source,
+              file_id: 'file-3',
+              file_name: '待整理.md',
+              source_path: '业绩/待整理.md',
+              provenance: null,
+            },
+          ],
+          library: {
+            ...detail.library,
+            materials: [
+              material,
+              {
+                ...material,
+                file_id: 'file-2',
+                provenance: 'human_modified',
+                relations: [['支持', 'file-1']],
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    render(
+      <App>
+        <LibraryDetail />
+      </App>,
+    );
+    const directory = await screen.findByRole('navigation', {
+      name: '资料文件目录',
+    });
+    await within(directory).findByRole('button', { name: /合同.md/ });
+    expect(within(directory).getAllByRole('button')).toHaveLength(3);
+    expect(
+      screen.queryByText('读取限制', { exact: true }),
+    ).not.toBeInTheDocument();
+    const choose = (label: string) => {
+      fireEvent.mouseDown(
+        screen.getByRole('combobox', { name: '资料来源筛选' }),
+      );
+      expect(screen.queryByText('有读取限制')).not.toBeInTheDocument();
+      expect(screen.queryByText('有直接关联')).not.toBeInTheDocument();
+      fireEvent.click(
+        screen.getByText(label, {
+          selector: '.ant-select-item-option-content',
+        }),
+      );
+    };
+    choose('AI 整理');
+    expect(within(directory).getAllByRole('button')).toHaveLength(1);
+    expect(
+      within(directory).getByRole('button', { name: /合同.md/ }),
+    ).toBeInTheDocument();
+    choose('人工修正');
+    expect(within(directory).getAllByRole('button')).toHaveLength(1);
+    expect(
+      within(directory).getByRole('button', { name: /验收.md/ }),
+    ).toBeInTheDocument();
+    choose('全部');
+    expect(within(directory).getAllByRole('button')).toHaveLength(3);
+  });
+
+  it('同名创建失败保留名称和文件，允许修改后重新提交', async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      reply(
+        {
+          error: {
+            code: 'duplicate_library_name',
+            message: '资料库名称已存在，请更换名称',
+          },
+        },
+        409,
+      ),
+    );
+    vi.stubGlobal('fetch', fetch);
+    render(
+      <App>
+        <Create />
+      </App>,
+    );
+    const name = screen.getByLabelText(/资料库名称/);
+    fireEvent.change(name, { target: { value: '重复名称' } });
+    fireEvent.change(
+      document.querySelector('input[type=file]') as HTMLInputElement,
+      {
+        target: {
+          files: [new File(['合同'], '合同.md', { type: 'text/markdown' })],
+        },
+      },
+    );
+    fireEvent.click(screen.getByRole('button', { name: /开始整理/ }));
+    await screen.findByText('资料库名称已存在，请更换名称');
+    expect(name).toHaveValue('重复名称');
+    expect(name).toBeEnabled();
+    expect(screen.getByText('已选择 1 份文件')).toBeInTheDocument();
+    expect(
+      sessionStorage.getItem('evidence-library-pending-submission'),
+    ).toBeNull();
+  });
+
   it('损坏快照仍可查看原件，但不能编辑、导出或伪造空资料', async () => {
     vi.stubGlobal(
       'fetch',
@@ -228,7 +348,7 @@ describe('投标方资料库', () => {
     );
     await screen.findByText('资料损坏');
     expect(screen.getByRole('button', { name: /导出 JSON/ })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '查看原文' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '查看解析原文' })).toBeEnabled();
     expect(screen.getByText('资料快照不可读取')).toBeInTheDocument();
   });
 
@@ -317,7 +437,7 @@ describe('投标方资料库', () => {
         document_count: 2,
         completed_file_ids: ['file-1'],
         saved_material_count: 2,
-        files: [source],
+        files: [{ ...source, has_reading_limit: true }],
         recent_materials: [material],
         error: { code: 'test', message: '第二份未完成' },
         warning: null,
@@ -337,6 +457,7 @@ describe('投标方资料库', () => {
       </App>,
     );
     await screen.findByRole('heading', { name: '进度库' });
+    expect(screen.queryByText(/存在读取限制/)).not.toBeInTheDocument();
     expect(screen.getByText('1 / 2')).toBeInTheDocument();
     expect(screen.getByText('第二份未完成')).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledTimes(1);

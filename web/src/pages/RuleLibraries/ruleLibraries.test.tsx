@@ -131,6 +131,7 @@ describe('规则库工作台', () => {
       </>,
     );
     await screen.findByRole('heading', { name: '布局测试库' });
+    expect(document.querySelectorAll('.library-metric')).toHaveLength(2);
     expect(screen.getByRole('link', { name: '返回工作台' })).toHaveAttribute(
       'href',
       '/home',

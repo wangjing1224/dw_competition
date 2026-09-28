@@ -326,12 +326,22 @@ body {
 }
 .library-numbers {
   display: flex;
-  gap: 22px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px 22px;
   margin: 22px 0;
   color: #53647d;
 }
+.library-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
 .library-numbers strong {
   font-size: 23px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
   color: #2563eb;
 }
 .category-chips {

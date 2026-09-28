@@ -16,8 +16,8 @@ import {
   ArrowRightOutlined,
   PlusOutlined,
   ReadOutlined,
-  FileTextOutlined,
 } from '@ant-design/icons';
+import LibraryCounts from '@/components/LibraryCounts';
 import {
   categories,
   dateText,
@@ -226,14 +226,11 @@ export default function Libraries() {
               </div>
               <h2>{item.display_name}</h2>
               <div className="muted">{item.project_id}</div>
-              <div className="library-numbers">
-                <span>
-                  <FileTextOutlined /> {item.file_count} 份来源文件
-                </span>
-                <span>
-                  <strong>{item.rule_count ?? '—'}</strong> 条规则
-                </span>
-              </div>
+              <LibraryCounts
+                fileCount={item.file_count}
+                resultCount={item.rule_count}
+                resultLabel="条规则"
+              />
               <div className="category-chips">
                 {item.category_counts &&
                   Object.entries(item.category_counts)

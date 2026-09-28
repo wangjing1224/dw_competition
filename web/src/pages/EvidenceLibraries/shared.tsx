@@ -36,7 +36,7 @@ export function Status({ status }: { status: string }) {
 export function Provenance({ value }: { value: string | null }) {
   return value ? (
     <Tag color={value === 'human_modified' ? 'orange' : 'blue'}>
-      {value === 'human_modified' ? '人工修订' : 'AI 整理'}
+      {value === 'human_modified' ? '人工修正' : 'AI 整理'}
     </Tag>
   ) : null;
 }

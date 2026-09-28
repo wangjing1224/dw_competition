@@ -32,6 +32,10 @@ from app.services.source_preview import SourcePreviewService
 from app.storage.bidder_management import management, update_management
 from app.storage.database import open_db
 from app.storage.file_store import FileOwner, FileStore, normalize_relative_path
+from app.storage.library_names import (
+    ensure_library_name_available,
+    lock_library_names,
+)
 from app.storage.repositories import BidderRepository, FileRepository
 
 logger = logging.getLogger(__name__)
@@ -51,6 +55,10 @@ class EvidenceLibraryService:
         self.sources = SourcePreviewService(self.settings, self.store)
 
     def receive(self, uploads, name, request_id):
+        with lock_library_names("bidder"):
+            return self._receive(uploads, name, request_id)
+
+    def _receive(self, uploads, name, request_id):
         # 请求内读完并复位流；后台只接收 ID，不持有 UploadFile。
         seen, fingerprint = set(), hashlib.sha256(name.encode())
         for filename, path, stream in uploads:
@@ -112,6 +120,7 @@ class EvidenceLibraryService:
                 return self.creation_response(
                     prior["bidder_id"], request_id, True
                 ), False
+            ensure_library_name_available(db, "bidder", name)
             db.execute(
                 "INSERT INTO bidder_uploads VALUES (?,?,NULL,'receiving',NULL)",
                 (request_id, fingerprint.hexdigest()),
@@ -632,7 +641,12 @@ class EvidenceLibraryService:
                 changed = name != request.data.display_name
                 if changed:
                     name = request.data.display_name
-                    meta = update_management(bidder_id, display_name=name)
+                    with lock_library_names("bidder"):
+                        with open_db() as db:
+                            ensure_library_name_available(
+                                db, "bidder", name, exclude_id=bidder_id
+                            )
+                        meta = update_management(bidder_id, display_name=name)
             else:
                 file_id = request.data.file_id
                 old = next((m for m in library.materials if m.file_id == file_id), None)

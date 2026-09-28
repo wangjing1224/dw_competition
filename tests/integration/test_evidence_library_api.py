@@ -83,8 +83,8 @@ def upload(
     return result, request_id
 
 
-def ready(env):
-    response, _ = upload(env)
+def ready(env, *, name="资料测试"):
+    response, _ = upload(env, name=name)
     bid = response.json()["bidder_id"]
     file = FileRepository().list_by_scope(bidder_id=bid, data_role="evidence_material")[
         0
@@ -171,6 +171,70 @@ def test_async_upload_idempotency_and_global_overview(env):
     assert env.client.get(f"/api/bidders/{bid}/export").status_code == 409
 
 
+@pytest.mark.parametrize(
+    "status", ["processing_evidence", "evidence_ready", "evidence_failed"]
+)
+def test_duplicate_evidence_name_creates_nothing(env, status):
+    response, request_id = upload(env, name="Test01")
+    bid = response.json()["bidder_id"]
+    BidderRepository().update_status(bid, status)
+    duplicate, _ = upload(env, name="  test01  ")
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "duplicate_library_name"
+    assert env.client.get("/api/bidders").json()["total"] == 1
+    assert len(env.queued) == 1
+    repeated, _ = upload(env, request_id=request_id, name="Test01")
+    assert repeated.status_code == 200
+    assert repeated.json()["bidder_id"] == bid
+
+
+def test_same_name_can_be_used_in_different_library_kinds(env):
+    from app.storage.project_management import update_management as update_project
+    from app.storage.repositories import ProjectRepository
+
+    project = ProjectRepository().create()
+    update_project(project.project_id, display_name="资料测试")
+    assert upload(env)[0].status_code == 202
+
+
+def test_concurrent_same_name_evidence_upload_only_creates_one(env):
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: upload(env)[0], range(2)))
+    assert sorted(r.status_code for r in results) == [202, 409]
+    assert env.client.get("/api/bidders").json()["total"] == 1
+    assert len(env.queued) == 1
+
+
+def test_rename_rejects_duplicate_without_changing_library(env):
+    bid, _, detail = ready(env, name="合同资料")
+    other, _, _ = ready(env, name="证书资料")
+    before = library_path(bid, env.settings).read_bytes()
+    response = env.client.post(
+        f"/api/bidders/{bid}/edit",
+        headers={"If-Match": f'"{detail["revision"]}"'},
+        json={"action": "rename", "data": {"display_name": " 证书资料 "}},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "duplicate_library_name"
+    assert library_path(bid, env.settings).read_bytes() == before
+    assert (
+        env.client.get(f"/api/bidders/{bid}").json()["revision"] == detail["revision"]
+    )
+
+    # 历史重名仍可读取、无变化保存；不自动重命名或改写资料 JSON。
+    update_management(other, display_name="合同资料")
+    response = env.client.post(
+        f"/api/bidders/{bid}/edit",
+        headers={"If-Match": f'"{detail["revision"]}"'},
+        json={"action": "rename", "data": {"display_name": "合同资料"}},
+    )
+    assert response.status_code == 200 and not response.json()["changed"]
+    assert (
+        env.client.get(f"/api/bidders/{other}").json()["bidder"]["display_name"]
+        == "合同资料"
+    )
+
+
 @pytest.mark.parametrize("path,content,code", [("../x", b"x", 400), ("x.md", b"", 422)])
 def test_invalid_upload_creates_nothing(env, path, content, code):
     assert upload(env, path=path, content=content)[0].status_code == code
@@ -245,7 +309,7 @@ def test_provenance_not_model_visible_and_not_client_editable(env):
 
 def test_rename_and_invalid_relations(env):
     bid, file, detail = ready(env)
-    _other, foreign, _ = ready(env)
+    _other, foreign, _ = ready(env, name="其他资料库")
     revision = detail["revision"]
     assert (
         edit(env, bid, revision, relations=[["支持", file.file_id]]).status_code == 422
@@ -331,7 +395,7 @@ def test_corrupt_snapshot_is_not_empty_library(env):
 
 def test_preview_and_images_are_scoped_versioned_and_paired(env):
     bid, file, _ = ready(env)
-    other, _, _ = ready(env)
+    other, _, _ = ready(env, name="其他资料库")
     buffer = BytesIO()
     Image.new("RGB", (12, 12), "blue").save(buffer, format="PNG")
     image = AssetStore(
@@ -393,7 +457,7 @@ def test_preview_and_images_are_scoped_versioned_and_paired(env):
 
 def test_trace_cursor_scope_sanitization_and_restart(env):
     bid = upload(env)[0].json()["bidder_id"]
-    other = upload(env)[0].json()["bidder_id"]
+    other = upload(env, name="其他资料库")[0].json()["bidder_id"]
     trace = EvidenceTrace(bid)
     span = trace.start(
         "tool",

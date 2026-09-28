@@ -16,6 +16,7 @@ import {
   Tag,
 } from 'antd';
 import { useEffect, useState } from 'react';
+import LibraryCounts from '@/components/LibraryCounts';
 import {
   dateText,
   type ListResult,
@@ -168,13 +169,12 @@ export default function Libraries() {
               </div>
               <h2>{item.display_name}</h2>
               <p className="muted">{item.bidder_id}</p>
-              <div className="library-numbers">
-                <span>{item.file_count} 份来源文件</span>
-                <strong>{item.material_count ?? '—'}</strong>
-                <span>份已整理摘要</span>
-              </div>
+              <LibraryCounts
+                fileCount={item.file_count}
+                resultCount={item.material_count}
+                resultLabel="份已整理摘要"
+              />
               <Space wrap>
-                {item.has_reading_limit && <Tag color="orange">含读取限制</Tag>}
                 {item.available_for_audit && (
                   <Tag color="green">可供审核选择</Tag>
                 )}

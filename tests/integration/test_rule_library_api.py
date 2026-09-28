@@ -65,13 +65,14 @@ def upload(
     content=b"Technical requirements",
     name="sample.md",
     path="folder/sample.md",
+    display_name="测试规则库",
 ):
     request_id = request_id or str(uuid4())
     response = env.client.post(
         "/api/projects",
         data={
             "client_request_id": request_id,
-            "display_name": "测试规则库",
+            "display_name": display_name,
             "relative_paths": path,
         },
         files={"files": (name, content)},
@@ -79,8 +80,8 @@ def upload(
     return response, request_id
 
 
-def ready(env, empty=False):
-    response, _ = upload(env)
+def ready(env, empty=False, *, display_name="测试规则库"):
+    response, _ = upload(env, display_name=display_name)
     assert response.status_code == 202, response.text
     pid = response.json()["project_id"]
     file = FileRepository().list_by_scope(project_id=pid, data_role="rule_source")[0]
@@ -147,6 +148,39 @@ def test_upload_is_async_idempotent_and_recoverable(env):
         "/api/projects", params={"client_request_id": request_id}
     ).json()
     assert found["total"] == 1 and found["items"][0]["project_id"] == pid
+
+
+@pytest.mark.parametrize("status", ["processing_rules", "rule_ready", "rule_failed"])
+def test_duplicate_rule_library_name_creates_nothing(env, status):
+    response, request_id = upload(env, display_name="Test01")
+    pid = response.json()["project_id"]
+    ProjectRepository().update_status(pid, status)
+    duplicate, _ = upload(env, display_name="  test01  ")
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "duplicate_library_name"
+    assert env.client.get("/api/projects").json()["total"] == 1
+    assert len(env.queued) == 1
+    repeated, _ = upload(env, request_id=request_id, display_name="Test01")
+    assert repeated.status_code == 200
+    assert repeated.json()["project_id"] == pid
+
+
+def test_concurrent_same_name_rule_upload_only_creates_one(env):
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: upload(env)[0], range(2)))
+    assert sorted(r.status_code for r in results) == [202, 409]
+    assert env.client.get("/api/projects").json()["total"] == 1
+    assert len(env.queued) == 1
+
+
+def test_default_name_does_not_collide_with_user_named_id(env):
+    assert upload(env, display_name="project-2")[0].status_code == 202
+    response, request_id = upload(env, display_name=None)
+    assert response.status_code == 202
+    assert response.json()["project_id"] == "project-2"
+    assert response.json()["display_name"] == "project-2（2）"
+    repeated, _ = upload(env, request_id=request_id, display_name=None)
+    assert repeated.status_code == 200 and repeated.json() == response.json()
 
 
 @pytest.mark.parametrize(
@@ -222,7 +256,7 @@ def test_edit_revision_provenance_noop_and_policy(env):
 
 def test_add_to_empty_library_and_strict_sources(env):
     pid, file, detail = ready(env, empty=True)
-    other_pid, other_file, _ = ready(env)
+    other_pid, other_file, _ = ready(env, display_name="其他规则库")
     headers = {"If-Match": f'"{detail["revision"]}"'}
     body = {"action": "add_rule", "data": draft(file)}
     body["data"]["source_file_ids"] = [other_file.file_id]

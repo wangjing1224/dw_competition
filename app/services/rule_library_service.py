@@ -20,6 +20,11 @@ from app.services.source_preview import SourcePreviewService
 from app.storage.database import open_db
 from app.storage.file_store import FileOwner, FileStore, normalize_relative_path
 from app.storage.ids import next_id
+from app.storage.library_names import (
+    default_library_name,
+    ensure_library_name_available,
+    lock_library_names,
+)
 from app.storage.project_management import management, update_management
 from app.storage.repositories import FileRepository, ProjectRepository, utc_now
 
@@ -52,6 +57,10 @@ class RuleLibraryService:
         self.files = FileRepository()
 
     def receive(self, uploads, display_name, request_id):
+        with lock_library_names("project"):
+            return self._receive(uploads, display_name, request_id)
+
+    def _receive(self, uploads, display_name, request_id):
         """接收阶段有界读取并取内容指纹；只有唯一提交可分配项目、保存文件。"""
         paths, fingerprint = set(), hashlib.sha256()
         fingerprint.update(json.dumps(display_name, ensure_ascii=False).encode())
@@ -118,6 +127,8 @@ class RuleLibraryService:
                         http_status=409,
                     )
                 return self.creation_response(prior["project_id"], request_id), False
+            # 先处理同一提交的幂等返回，再查名称，避免重试被自己的名称挡住。
+            ensure_library_name_available(db, "project", display_name)
             db.execute(
                 "INSERT INTO project_uploads(request_id,fingerprint,project_id,state) VALUES (?,?,NULL,'receiving')",
                 (request_id, digest),
@@ -130,6 +141,10 @@ class RuleLibraryService:
                     "UPDATE project_uploads SET project_id=? WHERE request_id=?",
                     (project.project_id, request_id),
                 )
+                if display_name is None:
+                    display_name = default_library_name(
+                        db, "project", project.project_id
+                    )
             update_management(
                 project.project_id,
                 display_name=display_name or project.project_id,
