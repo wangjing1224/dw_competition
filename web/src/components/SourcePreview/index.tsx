@@ -35,13 +35,13 @@ export function validImageUrl(
     return false;
   const parsed = new URL(url, window.location.origin);
   if (
-    !/^\/api\/(?:projects|bidders)\/[^/]+\/files\/[^/]+\/preview$/.test(
+    !/^\/api\/(?:(?:projects|bidders)\/[^/]+\/files|audit-tasks\/[^/]+\/files\/[^/]+\/sources)\/[^/]+\/preview$/.test(
       parsed.pathname,
     )
   )
     return false;
   if (
-    parsed.pathname.split('/')[5] !== match[1] ||
+    parsed.pathname.split('/').at(-2) !== match[1] ||
     parsed.searchParams.get('image_name') !== match[2]
   )
     return false;
@@ -119,12 +119,14 @@ export default function SourcePreview({
   api,
   download,
   close,
+  sourcePrefix = '/files',
 }: {
   baseUrl: string;
   fileId?: string;
   api: <T>(path: string, init?: RequestInit) => Promise<T>;
   download: (path: string, filename: string) => Promise<void>;
   close: () => void;
+  sourcePrefix?: '/files' | '/sources';
 }) {
   const { message } = App.useApp();
   const [data, setData] = useState<Preview>();
@@ -138,24 +140,26 @@ export default function SourcePreview({
     setData(undefined);
     setError('');
     setQuery('');
-    api<Preview>(`/files/${fileId}/preview`, {
+    api<Preview>(`${sourcePrefix}/${fileId}/preview`, {
       signal: controller.signal,
     })
-      .then(setData)
+      .then((value) => {
+        if (!controller.signal.aborted) setData(value);
+      })
       .catch((e) => {
-        if (e.name !== 'AbortError') setError(e.message);
+        if (!controller.signal.aborted) setError(e.message);
       });
     return () => controller.abort();
-  }, [api, fileId, reload]);
+  }, [api, fileId, reload, sourcePrefix]);
   const html = useMemo(
     () =>
       data
         ? safeMarkdown(data.markdown, data.images, query, {
-            baseUrl: `${baseUrl}/files/${fileId}/preview`,
+            baseUrl: `${baseUrl}${sourcePrefix}/${fileId}/preview`,
             version: data.parse_version,
           })
         : '',
-    [data, query, baseUrl, fileId],
+    [data, query, baseUrl, fileId, sourcePrefix],
   );
   return (
     <Drawer
@@ -168,7 +172,7 @@ export default function SourcePreview({
         <Button
           onClick={() =>
             download(
-              `/files/${fileId}/download`,
+              `${sourcePrefix}/${fileId}/download`,
               data?.file_name || `${fileId}`,
             ).catch((e) => message.error(e.message))
           }

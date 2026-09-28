@@ -28,7 +28,7 @@ export const layout: RunTimeLayoutConfig = () => ({
       ? []
       : [
           <span key="label" className="header-note">
-            招投标智能审核 · 规则与资料管理
+            招投标智能审核 · 规则 · 资料 · 审核
           </span>,
         ],
   avatarProps: undefined,

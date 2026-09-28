@@ -44,7 +44,9 @@ class LangGraphAuditExecutor:
 
     async def run(self, context):
         context = context.model_copy(deep=True)
-        indexes = verify_indexes(context.parsed_documents, self.settings)
+        indexes = verify_indexes(
+            context.parsed_documents, self.settings, context.index_scope_overrides
+        )
         retrieval = RetrievalService(
             self.models.embedding, self.models.rerank, self.settings, indexes=indexes
         )
@@ -145,7 +147,8 @@ class LangGraphAuditExecutor:
             settings=self.settings,
             retrieval=retrieval,
             file_filters={
-                key: scope_for(value.document) for key, value in main_parsed.items()
+                key: scope_for(value.document, context.index_scope_overrides)
+                for key, value in main_parsed.items()
             },
             default_file_ids=[document.file_id],
             current_file_id=document.file_id,

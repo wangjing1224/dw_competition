@@ -16,7 +16,7 @@
 
 LangGraph 承载规则抽取 Agent、资料入库 Agent、主审核 Agent 和资料核验子 Agent。文件上传、解析和索引构建在图外完成；JSON 校验和 Word 渲染也在图外完成。
 
-资料库按 bidder_id 独立入库，不绑定招标项目。审核选择一个已就绪规则库和一个资料库，可上传多份投标文件；每份文件独立路由和审核，一份文件输出一份报告。不匹配或不确定文件也输出理由，但不进入主 Agent；执行错误单独记录，不伪造成“人工复核”结论。
+资料库按 bidder_id 独立入库，不绑定招标项目。一次审核任务可上传多份投标文件，每份文件分别选择唯一的已就绪规则库和资料库；每份文件独立路由和审核，一份文件输出一份报告。不匹配或不确定文件也输出理由，但不进入主 Agent；执行错误单独记录，不伪造成“人工复核”结论。
 
 ## 目录职责
 
@@ -64,7 +64,8 @@ npm run dev
 打开 `http://localhost:3000`。首页进入规则库，支持文件/文件夹导入、后台进度、
 本地 Agent 执行轨迹、六类规则审阅、人工修订、来源原文/图片预览及 JSON/Markdown 导出。
 投标方资料库支持独立批次导入、后台轨迹、逐文件双摘要和直接关系、人工修订及导出。
-审核任务的新页面暂不开放；没有登录系统，也不会请求模板的演示服务。
+审核任务支持逐文件库配置、任务处理矩阵、主/子 Agent 执行轨迹、报告草稿、正式结果分析和逐文件导出。
+没有登录系统，也不会请求模板的演示服务。
 开发代理默认把 `/api/` 转到 `http://127.0.0.1:8000`，可通过启动环境变量
 `API_PROXY_TARGET` 修改。生产部署使用 `npm run build` 的 `web/dist`，Web 服务器需配置
 SPA 回退到 `index.html`，并将 `/api/` 反向代理到后端；开发代理不适用于生产静态文件。
@@ -74,15 +75,8 @@ SPA 回退到 `index.html`，并将 `/api/` 反向代理到后端；开发代理
 部署时不要增加 Uvicorn workers；本地展示轨迹不依赖 LangSmith 开启。
 人工编辑使用版本校验防止覆盖新修改。系统尚无鉴权，仅用于可信环境。
 
-保留的旧演示前端（仍可用于资料上传和审核）：
-
-```text
-http://127.0.0.1:8000/web/
-```
-
-- 系统总览：展示处理边界和审核链路。
-- 操作页：创建 Project 和独立 Bidder，选择两库后提交审核测试集。
-- 任务观测：自动轮询后台阶段，展示文件级结论、原始 JSON，并下载输出。
+`app/web/` 是保留的早期静态演示，不适配当前审核接口；请使用上面的 `web/` 管理工作台。
+更新后需重启后端加载新路由。数据库会迁移上一版审核绑定结构，保留已有规则库、资料库和原件，不需要删除 data。
 
 服务启动只检查本地目录和 SQLite，不会主动请求模型。调用项目上传、
 投标方资料上传或审核接口前，需要在 `.env` 中填写对应模型 URL 和 Key。
@@ -173,7 +167,7 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 进度文件同时记录批次、下一结构位置、批次/文件调用数及压缩诊断。全部批次成功后才完成文件；
 单结构过大、固定输入过大或压缩失败会明确停止并保留成果，不静默裁剪，也不自动重跑失败批次。
 开启 LangSmith 时记录独立文件会话和脱敏的模型/工具调用，保留文字与位置，不上传图片 Base64。
-人工规则维护接口留给后续开发；审核侧现已复用输入控制器。
+规则库工作台支持人工新增、修订和版本校验；审核侧已复用输入控制器。
 
 ### 投标方资料入库
 
@@ -198,17 +192,18 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 
 ### 投标审核与报告
 
-一次任务选择一组已就绪的规则库和独立投标方资料库，可上传多份投标文件。创建时校验库归属、
-解析快照与索引版本；旧库不自动迁移，缺少索引或索引过期不能直接放行。
+一次任务可上传多份投标文件，每份文件独立绑定规则库和投标方资料库，也可批量应用同一组库。
+创建时校验库状态、revision、解析快照与索引版本；缺少索引或索引过期不能直接放行。
+提交后冻结所选规则、资料、解析版本和报告模板，后续编辑库不会改变正在执行任务的依据。
 
 - 路由逐文件独立、有界并发，仅输出匹配状态与理由，不生成投标摘要。能放下时读全文，超长时只读连续完整结构前缀，并明确未读范围。
 - `not_matched`、`uncertain` 不进入审核或投标索引，但仍进入 JSON 并生成“未进入审核”的 Word；模型报错不是 `uncertain`。
-- 匹配文件统一建一次任务索引，然后逐文件独立运行主 Agent。System 放完整规则和报告模板，Human 放当前文件原文/结构批次、简洁资料目录及已保存报告。
+- 匹配文件独立建立 `bid-{task_id}-{file_id}` 原文索引并运行主 Agent，不等待其他文件。System 放完整规则和报告模板，Human 放当前文件原文/结构批次、简洁资料目录及已保存报告。
 - 主 Agent 使用公共检索、看图、资料委派和报告工具。资料核验子 Agent 只看到核验要求、所选文件及一层关联文件的详细摘要，使用公共检索/看图，直接返回核验正文。
 - 每份文件一份 Markdown 报告，通过 `report_document` 的 `read/write/edit` 维护；路径由代码绑定，模板单独放在 `configs/prompts/templates/audit_report_template.md`，不是工具参数。
 - 原文分批串行完成；同批压缩不推进阅读游标、不重置轮数。倒数第二轮提醒保存，最后一轮全部解绑工具。报告完整且原文读完才导出，不再机械补“步数上限，需人工复核”。
 
-`configs/model.yaml` 的 `audit.file_concurrency` 默认 2，控制一个任务内的路由/审核文件并发；
+`configs/model.yaml` 的 `audit.file_concurrency` 默认 2，控制同进程各任务共用的文件流水线并发；
 `audit.model_concurrency` 默认 3，限制同一进程、相同配置下审核链路实际模型请求。
 父 Agent 等待工具或子 Agent 时不占模型名额。轮次仍由 `.env` 的 `BID_AGENT_MAX_STEPS`、
 `EVIDENCE_AGENT_MAX_STEPS` 控制。路由、主 Agent、子 Agent 分别使用自己的模型连接配置，
@@ -216,23 +211,18 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 
 任务产物位于 `data/outputs/{task_id}/`：
 
-- `audit_context.json`：本次规则、资料库、解析结果及模板快照，不含 Key。
+- `batch_context.json`：本批次选中库、解析版本和模板快照，不含 Key。
+- `contexts/{file_id}.json`、`parsed/{file_id}.json`：单文件执行上下文和实际解析快照。
 - `drafts/{file_id}.md`：唯一报告草稿；同目录 `.state.json` 记录阅读位置、实际读取来源和子核验记录。
-- `{file_id}_result.json`：成功审核文件的结构化结果。
-- `{task_id}_审核结果.json` 和逐文件 Word：由保存的报告确定性生成，不增加报告 LLM 或图节点。
+- `reports/{file_id}.json`：正式单文件结果与依据快照，schema_version=2.0。
+- `audit_batch.json`：批次汇总，schema_version=3.0，逐文件保存绑定、结果和执行/导出错误。
+- 逐文件 Word：由正式 JSON 确定性生成，不增加报告 LLM 或图节点；下载以接口登记 URL 为准。
 
-来源只接受实际展示过的片段或实际打开的图片；没有来源不伪造引用。JSON 使用新 `schema_version=2.0`，
-包含资料库/规则快照和来源；Word 只展示本文件结论及对应依据，不堆整库摘要。
-一个文件执行失败不覆盖其他文件成果，任务记为失败并在 `file_errors` 列出原因，已有输出仍可下载。
-
-文件已读完、仅报告内容需要人工修正时，可修改上述 Markdown 后重导出：
-
-```bash
-uv run python -m app.reports audit-1
-```
-
-该命令不调用模型、不重建索引；读取未完成、来源无效或格式仍有问题的文件继续保留失败状态，
-不会仅因为报告文字填齐就视为审核完成。运行中的任务不允许重导出。
+来源只接受实际展示过的片段或实际打开的图片；没有来源不伪造引用。Word 只展示本文件结论及对应依据，不堆整库摘要。
+单文件 JSON/Markdown 校验通过即发布；Word 失败保留正式结果。部分文件失败时批次为 partially_failed，
+所有文件均有结果但 Word 失败为 completed_with_report_error，审核“不符合”不等于执行异常。
+来源预览使用本次冻结解析版本，不承诺精确句子定位。所有 GET 只读，不触发模型、解析、建索引或报告重建。
+新工作台暂不提供重跑、取消、人工编辑报告或重导出；`python -m app.reports` 只面向早期 audit_context.json 格式，不适用于新批次。
 
 ### 模型输入预算
 
@@ -368,11 +358,14 @@ curl http://127.0.0.1:8000/api/bidders/{bidder_id}/progress
 两类库各自使用一个 `files/{file_id}/preview` 接口：默认返回 Markdown 和登记图片清单，
 图片使用清单内带 `image_name` / `version` 的 URL 按需读取，无须拼接磁盘路径。
 
-创建审核任务（选择已就绪的新规则库与独立资料库）：
+创建审核任务（revision 先从所选库详情读取；每份文件一个 assignments 条目）：
 
 ```bash
 curl -X POST \
-  http://127.0.0.1:8000/api/projects/{project_id}/bidders/{bidder_id}/audit-tasks \
+  http://127.0.0.1:8000/api/audit-tasks \
+  -F 'display_name=设备采购审核' \
+  -F 'client_request_id=00000000-0000-4000-8000-000000000001' \
+  -F 'assignments=[{"upload_index":0,"project_id":"project-1","bidder_id":"bidder-1","project_revision":"替换为规则库revision","bidder_revision":"替换为资料库revision"}]' \
   -F 'files=@/path/to/投标文件.docx' \
   -F 'relative_paths=投标文件测试集/投标文件.docx'
 ```
@@ -384,8 +377,11 @@ curl http://127.0.0.1:8000/api/audit-tasks/{task_id}
 ```
 
 同一接口上传多个文件时，重复传递 `files` 和 `relative_paths`，两者顺序及数量
-必须一致。项目和投标方预处理接口当前同步返回；审核任务接口保存原始文件后
-立即返回 `task_id`，解析、索引、LangGraph 和报告输出在进程内后台执行。
+必须一致，assignments 的 upload_index 从 0 连续覆盖每个文件。每次新提交使用新的 UUID；
+同次重试保持请求ID和内容不变，响应不明时先查询 `GET /api/audit-tasks?client_request_id=...`。
+规则库、资料库与审核上传均在接收后返回，耗时处理在进程内后台执行。
+审核详情返回 task/files；进度、轨迹、逐文件报告及导出分别使用 `/progress`、`/trace/{span_id}`、
+`/files/{file_id}`、`/outputs?format=json|md|word&file_id=...`。省略 file_id 只能下载批次 JSON。
 
 测试与 Schema 导出：
 

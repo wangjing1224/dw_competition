@@ -22,11 +22,20 @@ def test_business_routes_are_registered():
     assert "/api/projects" in paths
     assert "/api/bidders" in paths
     assert "/api/bidders/{bidder_id}" in paths
-    assert "/api/projects/{project_id}/bidders/{bidder_id}/audit-tasks" in paths
+    assert "/api/audit-tasks" in paths
     assert "/api/audit-tasks/{task_id}" in paths
-    assert "/api/audit-tasks/{task_id}/stream" in paths
-    assert "/api/audit-tasks/{task_id}/outputs/json" in paths
-    assert "/api/audit-tasks/{task_id}/outputs/word/{output_index}" in paths
+    assert "/api/audit-tasks/{task_id}/progress" in paths
+    assert "/api/audit-tasks/{task_id}/outputs" in paths
+    assert "/api/audit-tasks/{task_id}/files/{file_id}" in paths
+    assert "/api/projects/{project_id}/bidders/{bidder_id}/audit-tasks" not in paths
+    assert (
+        sum(
+            len(methods)
+            for path, methods in paths.items()
+            if path.startswith("/api/audit-tasks")
+        )
+        == 9
+    )
 
 
 def test_demo_web_pages_are_served():

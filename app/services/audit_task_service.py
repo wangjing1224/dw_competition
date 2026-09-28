@@ -60,6 +60,7 @@ class AuditTaskContext(StrictModel):
     file_order: list[str] = Field(default_factory=list)
     file_errors: dict[str, str] = Field(default_factory=dict)
     report_template: str
+    index_scope_overrides: dict[str, str] = Field(default_factory=dict)
 
 
 class AuditExecutor(Protocol):

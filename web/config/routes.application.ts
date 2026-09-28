@@ -55,6 +55,29 @@ export default [
     hideInMenu: true,
     component: './EvidenceLibraries/Detail',
   },
-  { name: '审核任务 · 后续开放', icon: 'AuditOutlined', disabled: true },
+  {
+    path: '/audit-tasks',
+    name: '审核任务',
+    icon: 'AuditOutlined',
+    component: './AuditTasks/List',
+  },
+  {
+    path: '/audit-tasks/new',
+    name: '新建审核任务',
+    hideInMenu: true,
+    component: './AuditTasks/Create',
+  },
+  {
+    path: '/audit-tasks/:taskId/progress',
+    name: '审核执行',
+    hideInMenu: true,
+    component: './AuditTasks/Progress',
+  },
+  {
+    path: '/audit-tasks/:taskId/report',
+    name: '审核报告',
+    hideInMenu: true,
+    component: './AuditTasks/Report',
+  },
   { path: '*', component: './exception/404', layout: false },
 ];

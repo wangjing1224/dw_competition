@@ -96,6 +96,8 @@ def build_evidence_review_tool(
                         "rule_id": check.rule_id,
                         "check_index": number,
                         "child_session": uuid4().hex,
+                        "verification_request": check.verification_request,
+                        "target_file_ids": selected,
                     },
                 }
                 stats = {}

@@ -71,12 +71,12 @@ describe('规则库工作台', () => {
     );
     const { rerender } = render(sidebar(false));
     expect(
-      screen.getByText('招投标智能审核 · 规则与资料管理'),
+      screen.getByText('招投标智能审核 · 规则 · 资料 · 审核'),
     ).toBeInTheDocument();
     expect(screen.getByText(/智能整理 · 依据可查/)).toBeInTheDocument();
     rerender(sidebar(true));
     expect(
-      screen.queryByText('招投标智能审核 · 规则与资料管理'),
+      screen.queryByText('招投标智能审核 · 规则 · 资料 · 审核'),
     ).not.toBeInTheDocument();
     expect(screen.queryByText(/智能整理 · 依据可查/)).not.toBeInTheDocument();
     expect(screen.getByText('审')).toBeInTheDocument();
@@ -321,7 +321,11 @@ describe('规则库工作台', () => {
       screen.getByRole('heading', { name: '招投标智能审核工作台' }),
     ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '规则库' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '创建审核任务' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '创建审核任务' })).toBeEnabled();
+    expect(screen.getByRole('link', { name: '创建审核任务' })).toHaveAttribute(
+      'href',
+      '/audit-tasks/new',
+    );
     expect(screen.queryByText('结果如何使用')).not.toBeInTheDocument();
     expect(
       screen.queryByRole('link', { name: /返回/ }),

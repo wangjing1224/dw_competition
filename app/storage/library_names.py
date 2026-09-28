@@ -8,10 +8,11 @@ from typing import Literal
 from app.core.errors import BusinessError
 from app.storage.database import database_path
 
-LibraryKind = Literal["project", "bidder"]
+LibraryKind = Literal["project", "bidder", "audit"]
 _SCOPES = {
     "project": ("projects", "project_management", "project_id", "规则库"),
     "bidder": ("bidders", "bidder_management", "bidder_id", "资料库"),
+    "audit": ("audit_tasks", "audit_management", "task_id", "审核任务"),
 }
 
 

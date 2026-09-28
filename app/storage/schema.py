@@ -31,8 +31,8 @@ TABLE_DDLS = (
     """
     CREATE TABLE IF NOT EXISTS audit_tasks (
         task_id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        bidder_id TEXT NOT NULL,
+        project_id TEXT,
+        bidder_id TEXT,
         status TEXT NOT NULL,
         progress_json TEXT NOT NULL DEFAULT '{}',
         error_code TEXT,
@@ -68,8 +68,7 @@ TABLE_DDLS = (
         updated_at TEXT NOT NULL,
         FOREIGN KEY (project_id) REFERENCES projects(project_id),
         FOREIGN KEY (bidder_id) REFERENCES bidders(bidder_id),
-        FOREIGN KEY (project_id, bidder_id, task_id)
-            REFERENCES audit_tasks(project_id, bidder_id, task_id),
+        FOREIGN KEY (task_id) REFERENCES audit_tasks(task_id),
         CHECK (
             (data_role = 'rule_source' AND project_id IS NOT NULL
                 AND bidder_id IS NULL AND task_id IS NULL)
@@ -139,4 +138,50 @@ TABLE_DDLS += (
         span_id TEXT NOT NULL, node TEXT NOT NULL, detail TEXT NOT NULL,
         PRIMARY KEY(bidder_id, seq)
     )""",
+    """CREATE TABLE IF NOT EXISTS audit_management (
+        task_id TEXT PRIMARY KEY REFERENCES audit_tasks(task_id), payload TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS audit_task_files (
+        task_id TEXT NOT NULL REFERENCES audit_tasks(task_id),
+        file_id TEXT NOT NULL REFERENCES files(file_id),
+        upload_index INTEGER NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(project_id),
+        bidder_id TEXT NOT NULL REFERENCES bidders(bidder_id),
+        payload TEXT NOT NULL,
+        PRIMARY KEY(task_id,file_id), UNIQUE(task_id,upload_index)
+    )""",
+    """CREATE TABLE IF NOT EXISTS audit_uploads (
+        request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+        task_id TEXT REFERENCES audit_tasks(task_id), state TEXT NOT NULL, error_json TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS audit_trace (
+        task_id TEXT NOT NULL REFERENCES audit_tasks(task_id), seq INTEGER NOT NULL,
+        span_id TEXT NOT NULL, node TEXT NOT NULL, detail TEXT NOT NULL,
+        PRIMARY KEY(task_id,seq)
+    )""",
+)
+
+INDEX_DDLS += (
+    "CREATE INDEX IF NOT EXISTS idx_audit_trace_span ON audit_trace(task_id,span_id,seq)",
+    """CREATE TRIGGER IF NOT EXISTS audit_file_binding_insert
+    BEFORE INSERT ON audit_task_files BEGIN
+      SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM files WHERE file_id=NEW.file_id AND task_id=NEW.task_id
+        AND project_id=NEW.project_id AND bidder_id=NEW.bidder_id AND data_role='bid_document'
+      ) THEN RAISE(ABORT, 'audit file binding mismatch') END;
+    END""",
+    """CREATE TRIGGER IF NOT EXISTS audit_file_binding_immutable
+    BEFORE UPDATE OF task_id,file_id,project_id,bidder_id ON audit_task_files BEGIN
+      SELECT RAISE(ABORT, 'audit binding is immutable');
+    END""",
+    """CREATE TRIGGER IF NOT EXISTS audit_file_owner_immutable
+    BEFORE UPDATE OF task_id,project_id,bidder_id,data_role ON files
+    WHEN EXISTS (SELECT 1 FROM audit_task_files WHERE file_id=OLD.file_id) BEGIN
+      SELECT RAISE(ABORT, 'audit file owner is immutable');
+    END""",
+    """CREATE TRIGGER IF NOT EXISTS legacy_audit_owner_guard BEFORE INSERT ON files
+    WHEN NEW.task_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM audit_tasks WHERE task_id=NEW.task_id AND project_id IS NOT NULL
+      AND (project_id!=NEW.project_id OR bidder_id!=NEW.bidder_id)
+    ) BEGIN SELECT RAISE(ABORT, 'audit owner mismatch'); END""",
 )

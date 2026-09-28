@@ -8,6 +8,7 @@ from langgraph.graph import END, StateGraph
 from langsmith import tracing_context
 from pydantic import ValidationError
 
+from app.audit.local_trace import finish_turn, observed_session, observed_turn, turn
 from app.llm.agent_tracing import invoke_agent_model, invoke_agent_tool
 from app.llm.context_compaction import (
     InputBudgetError,
@@ -65,6 +66,7 @@ def prepare_request(state, *, tools, max_steps, settings, role, missing=""):
     return InputContext(tuple(messages), bindings, ChatProtocol.from_settings(settings))
 
 
+@observed_turn
 async def audit_agent_node(
     state,
     *,
@@ -150,7 +152,7 @@ def build_session_graph(
     graph = StateGraph(SessionState)
     by_name = {tool.name: tool for tool in tools}
 
-    async def execute(state):
+    async def execute_impl(state):
         messages = list(state["messages"])
         if state["model_calls"] >= max_steps:
             raise RuntimeError("模型在无工具末轮仍发出 tool_calls")
@@ -183,6 +185,12 @@ def build_session_graph(
             messages.append(result)
         return {"messages": messages}
 
+    async def execute(state):
+        with turn(state["model_calls"]):
+            result = await execute_impl(state)
+            finish_turn()
+            return result
+
     graph.add_node(
         "agent",
         partial(
@@ -211,6 +219,7 @@ def build_session_graph(
     return graph.compile()
 
 
+@observed_session
 async def run_session(
     *,
     model,

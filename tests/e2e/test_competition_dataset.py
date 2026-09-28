@@ -1,5 +1,6 @@
 """显式开启的真实材料全链路烟测；通过不等于审核质量达标。"""
 
+import json
 import os
 import time
 from uuid import uuid4
@@ -71,9 +72,26 @@ def test_competition_dataset_audit(competition_dataset):
         )
 
         files, data = multipart_folder(competition_dataset["bids"])
+        project_detail = client.get(f"/api/projects/{project['project_id']}")
+        project_detail.raise_for_status()
+        data.update(
+            display_name=f"比赛审核-{uuid4().hex[:8]}",
+            client_request_id=str(uuid4()),
+            assignments=json.dumps(
+                [
+                    {
+                        "upload_index": index,
+                        "project_id": project["project_id"],
+                        "bidder_id": bidder["bidder_id"],
+                        "project_revision": project_detail.json()["revision"],
+                        "bidder_revision": detail.json()["revision"],
+                    }
+                    for index in range(len(files))
+                ]
+            ),
+        )
         task_response = client.post(
-            f"/api/projects/{project['project_id']}/bidders/"
-            f"{bidder['bidder_id']}/audit-tasks",
+            "/api/audit-tasks",
             files=files,
             data=data,
         )
@@ -83,19 +101,24 @@ def test_competition_dataset_audit(competition_dataset):
         while True:
             response = client.get(f"/api/audit-tasks/{task_id}")
             response.raise_for_status()
-            task = response.json()
+            task = response.json()["task"]
             if task["status"] != "running":
                 break
             assert time.monotonic() < deadline, f"审核超时：{task_id}"
             time.sleep(1)
         assert task["status"] == "completed", task.get("error")
-        result = task["result"]
-        assert result["schema_version"] == "2.0"
-        assert not result["file_errors"]
-        file_results = result["file_results"]
+        output = client.get(task["outputs"]["batch_json_url"])
+        output.raise_for_status()
+        result = output.json()
+        assert result["schema_version"] == "3.0"
+        assert all(item["error"] is None for item in result["files"])
+        file_results = [item["result"] for item in result["files"]]
         assert len(file_results) == len(files)
-        assert len(task["outputs"]["word"]) == len(files)
-        rules = {rule["rule_id"] for rule in result["rules"]}
+        assert all(f["outputs"]["word_url"] for f in response.json()["files"])
+        rules = {
+            rule["rule_id"]
+            for rule in result["rule_libraries"][project["project_id"]]["rules"]
+        }
         for item in file_results:
             if item["is_applicable"]:
                 assert {finding["rule_id"] for finding in item["findings"]} == rules

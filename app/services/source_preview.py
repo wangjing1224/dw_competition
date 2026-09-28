@@ -53,9 +53,9 @@ class SourcePreviewService:
                 "preview_unavailable", "解析预览不可读取", http_status=500
             ) from exc
 
-    def preview(self, file, base_url):
+    def preview(self, file, base_url, version=None):
         file_id = file.file_id
-        file, parsed = self.parsed(file)
+        file, parsed = self.parsed(file, version)
         version = parsed.markdown_path.split("/")[-2]
         try:
             markdown = self.store.resolve_relative(

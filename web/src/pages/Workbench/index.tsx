@@ -75,7 +75,7 @@ export default function Workbench() {
           <div className="module-icon">
             <AuditOutlined />
           </div>
-          <Tag>后续开放</Tag>
+          <Tag color="blue">可用</Tag>
           <h2>审核任务</h2>
           <p>为每份投标文件选择规则库和投标方资料，逐份生成审核报告。</p>
           <div className="audit-capabilities">
@@ -83,7 +83,14 @@ export default function Workbench() {
             <span>资料核验</span>
             <span>疑点与来源</span>
           </div>
-          <Button disabled>创建审核任务</Button>
+          <div className="module-actions">
+            <Link to="/audit-tasks/new">
+              <Button type="primary">创建审核任务</Button>
+            </Link>
+            <Link to="/audit-tasks">
+              管理审核任务 <ArrowRightOutlined />
+            </Link>
+          </div>
         </section>
       </div>
     </main>

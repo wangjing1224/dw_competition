@@ -1,129 +1,151 @@
-"""审核任务创建、后台启动、状态查询和 SSE 实时观测接口。"""
+"""逐文件绑定的批量审核管理接口；GET 不触发模型、解析或导出。"""
 
 import asyncio
-import json
+from typing import Annotated, Literal
+from uuid import UUID
 
-from fastapi import APIRouter, File, Form, UploadFile
-from fastapi import Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import TypeAdapter, ValidationError
 
 from app.core.errors import BusinessError
-from app.services.container import build_audit_task_service
-from app.services.audit_task_service import query_audit_task
-from app.storage.file_store import FileStore
-from app.storage.repositories import AuditTaskRepository
+from app.services.audit_batch_runner import fail_file, finish_batch, run_audit_batch
+from app.services.audit_management_service import Assignment, AuditManagementService
+from app.services.background_runner import background_runner
+from app.storage.audit_management import file_rows
 
-router = APIRouter(prefix="/api", tags=["audit-tasks"])
+router = APIRouter(prefix="/api/audit-tasks", tags=["audit-tasks"])
+HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
 
 
-@router.post("/projects/{project_id}/bidders/{bidder_id}/audit-tasks")
+@router.post("")
 async def create_audit_task(
-    project_id: str,
-    bidder_id: str,
-    files: list[UploadFile] = File(...),
-    relative_paths: list[str] | None = Form(default=None),
-) -> dict[str, str]:
-    if not files:
-        raise BusinessError("empty_audit_files", "审核测试集不能为空")
-    paths = relative_paths or [file.filename or "unnamed" for file in files]
-    if len(paths) != len(files):
-        raise BusinessError("invalid_relative_paths", "文件和相对路径数量不一致")
-    task = await build_audit_task_service().create_task(
-        project_id,
-        bidder_id,
+    display_name: Annotated[str, Form(min_length=1, max_length=100)],
+    client_request_id: Annotated[UUID, Form()],
+    assignments: Annotated[str, Form()],
+    files: Annotated[list[UploadFile], File()],
+    relative_paths: Annotated[list[str], Form()],
+):
+    try:
+        bindings = TypeAdapter(list[Assignment]).validate_json(assignments)
+    except ValidationError as exc:
+        raise BusinessError(
+            "invalid_assignments", "文件与审核库绑定格式错误", http_status=422
+        ) from exc
+    if len(files) != len(relative_paths):
+        raise BusinessError(
+            "invalid_relative_paths", "文件与路径数量不一致", http_status=422
+        )
+    service = AuditManagementService()
+    result, created = await asyncio.to_thread(
+        service.receive,
         [
-            (file.filename or "unnamed", path, file.file)
-            for file, path in zip(files, paths, strict=True)
+            (f.filename or "unnamed", p, f.file)
+            for f, p in zip(files, relative_paths, strict=True)
         ],
+        display_name,
+        str(client_request_id),
+        bindings,
     )
-    return {"task_id": task.task_id, "status": task.status}
+    if created:
+        try:
+            background_runner.submit(run_audit_batch, result["task_id"])
+        except Exception as exc:
+            for row in file_rows(result["task_id"]):
+                fail_file(result["task_id"], row["file_id"], exc)
+            finish_batch(service, result["task_id"])
+            raise BusinessError(
+                "queue_unavailable", "文件已接收，但后台任务未能启动", http_status=500
+            ) from exc
+    return JSONResponse(result, status_code=202 if created else 200, headers=HEADERS)
 
 
-@router.get("/audit-tasks/{task_id}")
-async def get_audit_task(task_id: str) -> dict[str, object]:
-    return query_audit_task(task_id)
-
-
-@router.get("/audit-tasks/{task_id}/stream")
-async def stream_audit_task(task_id: str, request: Request) -> StreamingResponse:
-    """任务发生事件或状态变化时推送完整快照，替代浏览器定时轮询。"""
-
-    # 建立连接前先校验任务，避免流式响应开始后才返回 404。
-    AuditTaskRepository().require(task_id)
-
-    async def event_stream():
-        last_signature: tuple[object, ...] | None = None
-        terminal_seen = 0
-        while not await request.is_disconnected():
-            payload = query_audit_task(task_id)
-            events = payload.get("events", [])
-            latest_event_id = events[-1]["event_id"] if events else 0
-            signature = (
-                latest_event_id,
-                payload["status"],
-                payload.get("progress", {}).get("stage"),
-            )
-            if signature != last_signature:
-                yield (
-                    "event: task-update\n"
-                    f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                )
-                last_signature = signature
-
-            if payload["status"] in {
-                "completed",
-                "completed_with_report_error",
-                "failed",
-            }:
-                # 终态后再观察一个周期，确保最后一条完成/失败事件已写入。
-                terminal_seen += 1
-                if terminal_seen >= 2:
-                    break
-            else:
-                terminal_seen = 0
-
-            await asyncio.sleep(0.35)
-
-        yield "event: stream-end\ndata: {}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@router.get("/audit-tasks/{task_id}/outputs/json")
-async def download_json_output(task_id: str) -> FileResponse:
-    """只允许下载当前任务记录中已登记的 JSON，不接收任意文件路径。"""
-
-    task = AuditTaskRepository().require(task_id)
-    if not task.json_path:
-        raise BusinessError("json_output_not_ready", "JSON 结果尚未生成", http_status=404)
-    path = FileStore().resolve_relative(task.json_path)
-    return FileResponse(
-        path,
-        media_type="application/json",
-        filename=path.name,
-    )
-
-
-@router.get("/audit-tasks/{task_id}/outputs/word/{output_index}")
-async def download_word_output(task_id: str, output_index: int) -> FileResponse:
-    """按任务中的 Word 输出序号下载，防止路径穿越和跨任务读取。"""
-
-    task = AuditTaskRepository().require(task_id)
-    paths = task.word_paths or []
-    if output_index < 0 or output_index >= len(paths):
-        raise BusinessError("word_output_not_found", "Word 报告不存在", http_status=404)
-    path = FileStore().resolve_relative(paths[output_index])
-    return FileResponse(
-        path,
-        media_type=(
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+@router.get("")
+def list_audit_tasks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(12, ge=1, le=100),
+    q: str | None = Query(None, max_length=100),
+    group: Literal["all", "running", "completed", "attention"] = "all",
+    client_request_id: UUID | None = None,
+):
+    return JSONResponse(
+        AuditManagementService().list(
+            page,
+            page_size,
+            q,
+            group,
+            str(client_request_id) if client_request_id else None,
         ),
-        filename=path.name,
+        headers=HEADERS,
     )
+
+
+@router.get("/{task_id}")
+def get_audit_task(task_id: str):
+    return JSONResponse(AuditManagementService().detail(task_id), headers=HEADERS)
+
+
+@router.get("/{task_id}/files/{file_id}")
+def get_file_report(task_id: str, file_id: str):
+    return JSONResponse(
+        AuditManagementService().report(task_id, file_id), headers=HEADERS
+    )
+
+
+@router.get("/{task_id}/progress")
+def get_progress(
+    task_id: str,
+    include_trace: bool = False,
+    file_id: str | None = None,
+    after_seq: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=200),
+):
+    return JSONResponse(
+        AuditManagementService().progress(
+            task_id, include_trace, file_id, after_seq, limit
+        ),
+        headers=HEADERS,
+    )
+
+
+@router.get("/{task_id}/trace/{span_id}")
+def get_trace(task_id: str, span_id: str):
+    return JSONResponse(
+        AuditManagementService().trace_detail(task_id, span_id), headers=HEADERS
+    )
+
+
+@router.get("/{task_id}/files/{file_id}/sources/{source_file_id}/preview")
+def preview_source(
+    task_id: str,
+    file_id: str,
+    source_file_id: str,
+    image_name: str | None = Query(None, min_length=1),
+    version: str | None = None,
+    source_key: str | None = None,
+):
+    result = AuditManagementService().preview(
+        task_id, file_id, source_file_id, image_name, version, source_key
+    )
+    if isinstance(result, tuple):
+        data, media_type = result
+        return Response(data, media_type=media_type, headers=HEADERS)
+    return JSONResponse(result, headers=HEADERS)
+
+
+@router.get("/{task_id}/files/{file_id}/sources/{source_file_id}/download")
+def download_source(task_id: str, file_id: str, source_file_id: str):
+    service = AuditManagementService()
+    record = service.source_record(task_id, file_id, source_file_id)
+    path = service.store.resolve_relative(record.storage_path)
+    if not path.is_file():
+        raise BusinessError("source_unavailable", "已登记原件不可读取", http_status=500)
+    return FileResponse(path, filename=record.file_name, headers=HEADERS)
+
+
+@router.get("/{task_id}/outputs")
+def download_output(
+    task_id: str, format: Literal["json", "md", "word"], file_id: str | None = None
+):
+    path = AuditManagementService().output(task_id, format, file_id)
+    return FileResponse(path, filename=path.name, headers=HEADERS)

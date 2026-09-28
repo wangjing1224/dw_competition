@@ -4,8 +4,15 @@ import asyncio
 from weakref import WeakKeyDictionary
 
 _limiters = WeakKeyDictionary()
+_file_limiters = WeakKeyDictionary()
 
 
 def model_limiter(limit):
     loop = asyncio.get_running_loop()
     return _limiters.setdefault(loop, {}).setdefault(limit, asyncio.Semaphore(limit))
+
+
+def file_limiter(limit):
+    return _file_limiters.setdefault(asyncio.get_running_loop(), {}).setdefault(
+        limit, asyncio.Semaphore(limit)
+    )

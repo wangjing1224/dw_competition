@@ -50,13 +50,14 @@ def evidence_view(library, starting_ids):
     )
 
 
-def scope_for(document):
+def scope_for(document, overrides=None):
     role = str(document.data_role)
     scope_id = {
         "rule_source": f"rules-{document.project_id}",
         "evidence_material": f"evidence-{document.bidder_id}",
         "bid_document": f"bid-{document.task_id}",
     }[role]
+    scope_id = (overrides or {}).get(document.file_id, scope_id)
     return IndexFilter(
         scope_id=scope_id,
         data_role=role,
@@ -94,10 +95,10 @@ def fixed_parsed(source_files, repository, *, role, project_id=None, bidder_id=N
     return parsed
 
 
-def verify_indexes(documents, settings):
+def verify_indexes(documents, settings, overrides=None):
     groups = {}
     for parsed in documents.values():
-        scope = scope_for(parsed.document)
+        scope = scope_for(parsed.document, overrides)
         groups.setdefault(scope.scope_id, {})[parsed.document.file_id] = parsed
     indexes = {}
     for scope_id, files in groups.items():

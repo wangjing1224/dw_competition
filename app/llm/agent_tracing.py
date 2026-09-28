@@ -37,8 +37,17 @@ async def _model_call(runnable, messages, tool_schemas, call_options):
 async def invoke_agent_model(
     runnable, messages, tools, context, *, trace_name="agent_model", **call_options
 ):
-    with tracing_context(**context):
-        return await _model_call(
+    from app.audit.local_trace import scope
+
+    with (
+        scope(
+            "model",
+            "模型调用" if "compaction" not in trace_name else "上下文压缩模型",
+            input={"role": trace_name},
+        ) as observation,
+        tracing_context(**context),
+    ):
+        response = await _model_call(
             runnable,
             messages,
             [
@@ -52,6 +61,12 @@ async def invoke_agent_model(
             call_options,
             langsmith_extra={"name": trace_name},
         )
+        # 仅可见正文和工具调用；不返回请求 messages/System/Human。
+        observation["output"] = {
+            "content": response.content,
+            "tool_calls": getattr(response, "tool_calls", []),
+        }
+        return response
 
 
 @traceable(
@@ -66,5 +81,30 @@ async def _tool_call(tool, call):
 
 
 async def invoke_agent_tool(tool, call, context):
-    with tracing_context(**context):
-        return await _tool_call(tool, call, langsmith_extra={"name": call["name"]})
+    from app.audit.local_trace import scope
+
+    with (
+        scope(
+            "tool", call["name"], input=call.get("args"), tool_name=call["name"]
+        ) as observation,
+        tracing_context(**context),
+    ):
+        result = await _tool_call(tool, call, langsmith_extra={"name": call["name"]})
+        observation["output"] = (
+            result.content
+            if call["name"] != "view_image"
+            else {
+                "path": call.get("args", {}).get("path"),
+                "message": "图片已提供给模型，二进制不记录",
+            }
+        )
+        if getattr(result, "status", None) == "error":
+            observation["status"] = "failed"
+        elif call["name"] == "report_document" and call.get("args", {}).get(
+            "action"
+        ) in {"write", "edit"}:
+            with scope(
+                "report", "报告已保存", input={"action": call["args"]["action"]}
+            ):
+                pass
+        return result

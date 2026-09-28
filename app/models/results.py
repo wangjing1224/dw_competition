@@ -12,7 +12,7 @@ from app.models.common import (
 from app.models.documents import DocumentRef
 from app.models.evidence import EvidenceLibrary
 from app.models.findings import Finding
-from app.models.rules import RuleReportItem
+from app.models.rules import RuleReportItem, RuleSet, present_rule_for_model
 
 
 class ReadSource(StrictModel):
@@ -68,6 +68,61 @@ class FileAuditResult(StrictModel):
                 raise ValueError("文件总体结论与路由状态不一致")
             if self.findings:
                 raise ValueError("不适用文件不能包含普通审核 Finding")
+        return self
+
+
+class AuditBatchFile(StrictModel):
+    file_id: str
+    project_id: str
+    bidder_id: str
+    status: Literal["completed", "failed"]
+    result: FileAuditResult | None = None
+    error: dict[str, str] | None = None
+    export_error: dict[str, str] | None = None
+
+
+class AuditBatchResult(StrictModel):
+    """管理批次不再假设一个项目；库快照去重，业务校验逐文件复用。"""
+
+    schema_version: Literal["3.0"] = "3.0"
+    task_id: str
+    rule_libraries: dict[str, RuleSet]
+    evidence_libraries: dict[str, EvidenceLibrary]
+    files: list[AuditBatchFile]
+
+    @model_validator(mode="after")
+    def validate_files(self):
+        if len({f.file_id for f in self.files}) != len(self.files):
+            raise ValueError("批次存在重复文件")
+        for item in self.files:
+            if (
+                item.project_id not in self.rule_libraries
+                or item.bidder_id not in self.evidence_libraries
+            ):
+                raise ValueError("文件绑定缺少对应的库快照")
+            if (item.status == "completed") != (item.result is not None):
+                raise ValueError("终态与正式结果不一致")
+            if item.result:
+                rules = self.rule_libraries[item.project_id]
+                if (
+                    rules.project_id != item.project_id
+                    or item.result.file.file_id != item.file_id
+                ):
+                    raise ValueError("文件或规则库身份不一致")
+                AuditResult(
+                    task_id=self.task_id,
+                    project_id=item.project_id,
+                    bidder_id=item.bidder_id,
+                    rules=[
+                        RuleReportItem.model_validate(
+                            present_rule_for_model(r).model_dump()
+                        )
+                        for r in rules.rules
+                    ],
+                    evidence_library=self.evidence_libraries[item.bidder_id],
+                    rule_source_files=[f.model_dump() for f in rules.source_files],
+                    file_results=[item.result],
+                )
         return self
 
 
