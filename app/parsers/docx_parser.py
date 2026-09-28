@@ -3,20 +3,49 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
+from collections.abc import Iterator
 from html import escape
 from pathlib import Path
-from typing import Iterator
 
 from docx import Document
 from docx.document import Document as DocxDocument
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
+from PIL import UnidentifiedImageError
 
 from app.models.documents import DocumentRef, ParsedBlock, ParsedDocument, ParsedSection
 from app.parsers.assets import AssetStore
 from app.parsers.common import assets_for, finish_document
+
+logger = logging.getLogger(__name__)
+
+
+def _embedded_image(item, part, assets: AssetStore):
+    """先核对图片引用，再读取字节；空节点、外链、失效引用不能伪造资产路径。"""
+    relationship = (
+        item.get(qn("r:embed"))
+        or item.get(qn("r:id"))
+        or item.get("{urn:schemas-microsoft-com:office:office}relid")
+    )
+    if not relationship:
+        if item.get(qn("r:link")) or item.get("src"):
+            raise ValueError("图片仅提供外部引用，未自动读取外部资源")
+        raise ValueError("空图片节点：未关联图片资源，不代表存在可读取的图片")
+    relation = part.rels.get(relationship)
+    if relation is None:
+        raise ValueError("图片引用关系缺失，无法定位嵌入资源")
+    if relation.is_external:
+        raise ValueError("图片引用指向外部资源，未自动读取外部资源")
+    if relation.reltype != RT.IMAGE:
+        raise ValueError("图片引用指向非图片资源，未按图片读取")
+    data = relation.target_part.blob
+    if not data:
+        raise ValueError("已关联的图片资源内容为空")
+    return assets.save_image(data)
 
 
 def stable_section_id(file_id: str, block_index: int, title: str) -> str:
@@ -43,7 +72,7 @@ def _iter_blocks(document: DocxDocument) -> Iterator[Paragraph | Table]:
 
 def _heading_level(paragraph: Paragraph) -> int | None:
     style_name = getattr(paragraph.style, "name", "") or ""
-    matched = re.search(r"(?:Heading|标题)\s*(\d+)", style_name, re.I)
+    matched = re.search(r"(?:Heading|标题)\s*(\d+)", style_name, re.IGNORECASE)
     return int(matched.group(1)) if matched else None
 
 
@@ -143,16 +172,27 @@ def paragraph_parts(element, part, assets: AssetStore, warnings: list[str]):
             if text:
                 parts.append(("text", "".join(text)))
                 text = []
-            relationship = item.get(qn("r:embed")) or item.get(qn("r:id"))
             try:
-                # 外部链接不自动下载；未支持的 WMF 等格式明确留痕，不改后缀冒充。
-                if not relationship:
-                    raise ValueError("图片不是已嵌入的资源")
-                image = assets.save_image(part.related_parts[relationship].blob)
+                image = _embedded_image(item, part, assets)
                 parts.append(("image", image))
             except Exception as exc:
-                warnings.append(f"嵌入图片未提取：{type(exc).__name__}，需回查原文件")
-                parts.append(("text", "[图片未能提取，需回查原文件]"))
+                if isinstance(exc, UnidentifiedImageError):
+                    reason = "已关联图片资源，但格式无法识别或数据已损坏"
+                elif isinstance(exc, ValueError):
+                    reason = str(exc)
+                elif isinstance(exc, OSError):
+                    # OSError.filename 可能是服务器绝对路径，不进入模型可见的正文。
+                    detail = exc.strerror or (
+                        str(exc) if not exc.filename else "资源读写异常"
+                    )
+                    reason = f"已关联图片资源，但解码或保存失败：{detail}"
+                else:
+                    logger.warning("DOCX 图片节点处理异常", exc_info=True)
+                    reason = f"图片资源处理异常（{type(exc).__name__}），具体原因请查看解析日志"
+                message = f"{reason}；此节点没有可查看的图片路径，请回查原文件，勿推测图片路径"
+                # 原位置和文末都留痕：后续读取正文/检索片段同样能看到原因。
+                warnings.append(message)
+                parts.append(("text", f"[{message}]"))
         elif local == "anchor":
             warnings.append("存在浮动对象：按 XML 锚点排序，视觉阅读顺序需回查原文件")
     if text:
