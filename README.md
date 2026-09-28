@@ -201,6 +201,7 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 - 匹配文件独立建立 `bid-{task_id}-{file_id}` 原文索引并运行主 Agent，不等待其他文件。System 放完整规则和报告模板，Human 放当前文件原文/结构批次、简洁资料目录及已保存报告。
 - 主 Agent 使用公共检索、看图、资料委派和报告工具。资料核验子 Agent 只看到核验要求、所选文件及一层关联文件的详细摘要，使用公共检索/看图，直接返回核验正文。
 - 每份文件一份 Markdown 报告，通过 `report_document` 的 `read/write/edit` 维护；路径由代码绑定，模板单独放在 `configs/prompts/templates/audit_report_template.md`，不是工具参数。
+- 报告一级标题由主 Agent 根据当前文件撰写，保存为 JSON 的 `report_title`，Word 直接使用，不额外调用模型。未进入主 Agent 的文件使用“文件名＋项目适用性说明”；旧结果没有标题时按文件名生成展示标题。
 - 原文分批串行完成；同批压缩不推进阅读游标、不重置轮数。倒数第二轮提醒保存，最后一轮全部解绑工具。报告完整且原文读完才导出，不再机械补“步数上限，需人工复核”。
 
 `configs/model.yaml` 的 `audit.file_concurrency` 默认 2，控制同进程各任务共用的文件流水线并发；

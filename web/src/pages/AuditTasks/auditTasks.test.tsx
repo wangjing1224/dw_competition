@@ -255,6 +255,9 @@ describe('审核工作区', () => {
     expect(
       await screen.findByText('标书一.md', { selector: 'strong' }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '导出任务结果' }),
+    ).toBeInTheDocument();
   });
   it('文件未配置两库时禁止提交；不为每行提前请求所有库', async () => {
     const fetch = mockApi();
@@ -304,6 +307,12 @@ describe('审核工作区', () => {
       }),
     ).toBeInTheDocument();
     expect(screen.queryByText('证据对照')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '导出任务结果' }),
+    ).not.toBeInTheDocument();
+    for (const name of ['下载 Word', '导出 Markdown', '导出 JSON']) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument();
+    }
     expect(
       screen.getByRole('button', { name: '查看解析原文' }),
     ).toBeInTheDocument();

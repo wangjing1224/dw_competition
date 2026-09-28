@@ -35,6 +35,7 @@ class CategoryAuditDecision(StrictModel):
 
 
 class AgentAuditDecision(StrictModel):
+    report_title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
     categories: list[CategoryAuditDecision] = Field(default_factory=list)
 

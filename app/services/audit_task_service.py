@@ -418,7 +418,7 @@ def _routed_file_result(
     summary: BidDocumentSummary,
 ) -> FileAuditResult:
     not_matched = summary.match_status == "not_matched"
-    return FileAuditResult(
+    result = FileAuditResult(
         file=document,
         is_applicable=False,
         project_match=ProjectMatch(
@@ -433,3 +433,5 @@ def _routed_file_result(
             else ["请人工确认该文件是否属于当前招标项目后再决定是否审核"]
         ),
     )
+    result.report_title = result.display_title
+    return result

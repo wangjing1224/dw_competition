@@ -242,7 +242,7 @@ async def process_file(service, settings, models, executor, frozen, row):
         )
         atomic_write(
             directory / "drafts" / f"{file_id}.md",
-            f"# 项目适用性说明\n\n{route.match_reason}\n".encode(),
+            f"# {result.file_results[0].report_title}\n\n{route.match_reason}\n".encode(),
         )
 
     json_path = directory / "reports" / f"{file_id}.json"

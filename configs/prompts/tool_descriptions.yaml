@@ -65,5 +65,5 @@ request_evidence_review: |-
 # 主审核报告读写：app/tools/report_tools.py；报告模板单独在templates/audit_report_template.md。
 report_document: |-
   作用：读取、完整写入或精确编辑当前投标文件的唯一报告。路径由系统绑定，不能访问其他文件。
-  输入：action=read 时 content、edits 均为 null；write 时 content 为完整 Markdown，edits=null；edit 时 content=null，edits 为非空 old_text/new_text 列表。old_text 须在当前稿中恰好出现一次，可包含标题定位；new_text 可为空表示删除，但不能破坏报告骨架。以 System 中的独立报告模板为准，不需最后输出报告 JSON。
+  输入：action=read 时 content、edits 均为 null；write 时 content 为完整 Markdown，edits=null；edit 时 content=null，edits 为非空 old_text/new_text 列表。old_text 须在当前稿中恰好出现一次，可包含标题定位；new_text 可为空表示删除，但不能破坏报告骨架。一级报告标题需结合当前文件拟定，可以修改；其余章节标题及规则 ID 保持骨架约定。以 System 中的独立报告模板为准，不需最后输出报告 JSON。
   返回：read 返回当前全文及缺项；write/edit 成功返回简短保存确认和缺项。不匹配、歧义、非法引用或格式错误时整批未保存，先读取当前稿再修正，不模糊匹配。write 是整稿覆盖，日常增量优先一次 edit 修改多处。

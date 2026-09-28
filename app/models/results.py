@@ -1,5 +1,6 @@
 """单文件审核结果和任务级 AuditResult 根模型。"""
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -37,6 +38,8 @@ class ProjectMatch(StrictModel):
 
 class FileAuditResult(StrictModel):
     file: DocumentRef
+    # 从模型成功保存的 Markdown 一级标题提取；旧结果可没有此字段。
+    report_title: str | None = Field(default=None, min_length=1)
     is_applicable: bool
     project_match: ProjectMatch
     exclusion_reason: str | None = None
@@ -46,6 +49,17 @@ class FileAuditResult(StrictModel):
     findings: list[Finding] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
     sources: dict[str, ReadSource] = Field(default_factory=dict)
+
+    @property
+    def display_title(self) -> str:
+        if self.report_title and self.report_title.strip():
+            return self.report_title.strip()
+        # 路由排除不调用审核 Agent；旧 JSON 同样不能额外请求模型补标题。
+        name = (
+            Path(self.file.file_name).stem.replace("\r", " ").replace("\n", " ").strip()
+        )
+        suffix = "审核报告" if self.is_applicable else "项目适用性说明"
+        return f"{name or self.file.file_id}{suffix}"
 
     @model_validator(mode="after")
     def validate_applicability(self) -> "FileAuditResult":

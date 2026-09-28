@@ -65,7 +65,8 @@ def test_audit_report_template_is_a_standalone_static_fragment():
     # 报告模板独立维护，由主 Agent System 引用。
     rendered = render_prompt("audit_report_template")
     assert "${" not in rendered
-    assert "# 当前投标文件审核报告" in rendered
+    assert "# 〈请填写报告标题〉" in rendered
+    assert "一级标题由你" in rendered
     assert "## 总体总结" in rendered
     assert "### 分类总结" in rendered
     assert "### 〈rule_id〉" in rendered

@@ -73,7 +73,9 @@ class AuditModel:
         if any(m.type == "tool" for m in messages):
             return AIMessage(content="处理完毕")
         text = messages[1].content
-        report = text[text.index("# 当前投标文件审核报告") :]
+        from app.reports.markdown_report import TITLE_PLACEHOLDER
+
+        report = text[text.index(f"# {TITLE_PLACEHOLDER}") :]
         report = report.split("\n## 续读")[0] if "\n## 续读" in report else report
         # 使用实际初始化的骨架，不绕过 report_document 或报告校验。
         headings = re.findall(r"^#{1,3} .+$", report, re.MULTILINE)
@@ -85,9 +87,9 @@ class AuditModel:
                 )
             elif heading == "## 总体总结" or heading == "### 分类总结":
                 parts.extend([heading, "存在待完善项，需要复核。"])
-            elif heading == "# 当前投标文件审核报告" or re.search(
-                r"（[a-z_]+）", heading
-            ):
+            elif heading == f"# {TITLE_PLACEHOLDER}":
+                parts.append("# 设备采购投标文件审核报告")
+            elif re.search(r"（[a-z_]+）", heading):
                 parts.append(heading)
         return AIMessage(
             content="",

@@ -25,6 +25,7 @@ def file_result_from_report(document, route, decision, ledger):
     )
     return FileAuditResult(
         file=document,
+        report_title=decision.report_title,
         is_applicable=True,
         project_match=ProjectMatch(
             status=route.match_status, reason=route.match_reason

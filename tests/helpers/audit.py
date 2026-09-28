@@ -15,7 +15,7 @@ from app.models.documents import (
 from app.models.evidence import EvidenceLibrary, EvidenceMaterial, EvidenceSourceFile
 from app.models.rules import RuleItem, RuleSet, RuleSourceFile
 from app.prompts.loader import render_prompt
-from app.reports.markdown_report import skeleton
+from app.reports.markdown_report import TITLE_PLACEHOLDER, skeleton
 from app.services.audit_task_service import AuditTaskContext
 
 
@@ -116,8 +116,13 @@ def audit_context(count=1):
     )
 
 
-def filled_report(rule_set, reason="分辨率满足要求", conclusion="符合"):
-    text = skeleton(rule_set)
+def filled_report(
+    rule_set,
+    reason="分辨率满足要求",
+    conclusion="符合",
+    title="设备采购投标文件审核报告",
+):
+    text = skeleton(rule_set).replace(f"# {TITLE_PLACEHOLDER}", f"# {title}", 1)
     text = text.replace(
         "## 总体总结\n\n待填写。", "## 总体总结\n\n文件审核完成，详见分类结论。"
     )

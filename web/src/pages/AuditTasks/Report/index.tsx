@@ -472,13 +472,6 @@ export default function AuditReport() {
             label: `${f.file_name} · ${f.file_id}`,
           }))}
         />
-        {data && (
-          <Download
-            url={data.task.outputs.batch_json_url}
-            label="导出任务结果"
-            name={`${taskId}.json`}
-          />
-        )}
       </div>
       {file ? (
         <ReportFile

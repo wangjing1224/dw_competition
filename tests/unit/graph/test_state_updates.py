@@ -12,7 +12,9 @@ def test_result_uses_current_file_and_no_fabricated_sources():
     context = audit_context()
     ledger = SourceLedger(context.parsed_documents)
     decision, missing = parse_report(
-        filled_report(context.rule_set, conclusion="不符合"),
+        filled_report(
+            context.rule_set, conclusion="不符合", title="采购项目技术投标审核报告"
+        ),
         context.rule_set,
         ledger,
         final=True,
@@ -22,6 +24,7 @@ def test_result_uses_current_file_and_no_fabricated_sources():
     )
     assert not missing
     assert result.file.file_id == "bid-1"
+    assert result.report_title == "采购项目技术投标审核报告"
     assert result.overall_conclusion == "non_compliant"
     assert not result.sources
     assert result.findings[0].rule_id == "rule-1"

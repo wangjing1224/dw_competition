@@ -107,7 +107,7 @@ def _add_title_block(
     _set_run(run, chinese="黑体", size=10, bold=True, color=ACCENT)
 
     title = document.add_paragraph(style="Title")
-    title.add_run("电力智能招标审核报告")
+    title.add_run(file_result.display_title)
     subtitle = document.add_paragraph()
     subtitle.paragraph_format.space_after = Pt(14)
     run = subtitle.add_run(file_result.file.file_name)

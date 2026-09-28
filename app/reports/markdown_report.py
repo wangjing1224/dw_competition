@@ -25,6 +25,7 @@ SOURCE_FIELDS = {
     "图片来源": ("image_paths", None),
 }
 PENDING = "待填写。"
+TITLE_PLACEHOLDER = "〈请填写报告标题〉"
 
 
 def report_groups(rule_set):
@@ -35,7 +36,7 @@ def report_groups(rule_set):
 
 
 def skeleton(rule_set):
-    parts = ["# 当前投标文件审核报告", "## 总体总结", PENDING]
+    parts = [f"# {TITLE_PLACEHOLDER}", "## 总体总结", PENDING]
     for category, ids in report_groups(rule_set).items():
         parts.extend(
             [f"## {category_label(category)}（{category}）", "### 分类总结", PENDING]
@@ -50,8 +51,16 @@ def parse_report(text, rule_set, ledger, *, final=False):
     expected = skeleton(rule_set)
     heading = re.compile(r"^#{1,6} .+$", re.MULTILINE)
     actual_headers = heading.findall(text)
-    if actual_headers != heading.findall(expected):
-        raise ValueError("报告标题、类别或规则集合/顺序与当前骨架不一致，请读取当前稿")
+    # 一级标题是模型撰写的报告内容，只有后续业务章节/规则标识必须匹配骨架。
+    if (
+        not actual_headers
+        or not actual_headers[0].startswith("# ")
+        or actual_headers[1:] != heading.findall(expected)[1:]
+    ):
+        raise ValueError(
+            "报告须有一个一级标题，类别或规则集合/顺序须与当前骨架一致，请读取当前稿"
+        )
+    report_title = actual_headers[0][2:].strip()
     if text[: heading.search(text).start()].strip():
         raise ValueError("报告标题前不能有其他内容或代码围栏")
     matches = list(heading.finditer(text))
@@ -64,6 +73,15 @@ def parse_report(text, rule_set, ledger, *, final=False):
     if bodies[0]:
         raise ValueError("报告标题下请直接保留总体总结标题")
     missing = []
+    if report_title in {TITLE_PLACEHOLDER, PENDING}:
+        missing.append("报告标题")
+    elif (
+        not report_title
+        or len(report_title) > 120
+        or "〈" in report_title
+        or "```" in report_title
+    ):
+        raise ValueError("报告标题须为1至120字的非空单行文本，不得保留模板占位")
 
     def content(body, label):
         if not body or body == PENDING:
@@ -144,7 +162,9 @@ def parse_report(text, rule_set, ledger, *, final=False):
     if final and missing:
         raise ValueError("报告未完成：" + "、".join(missing))
     result = (
-        AgentAuditDecision(summary=summary, categories=categories)
+        AgentAuditDecision(
+            report_title=report_title, summary=summary, categories=categories
+        )
         if not missing
         else None
     )

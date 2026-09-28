@@ -316,6 +316,7 @@ async def test_real_pipeline_per_file_results_traces_and_word_error(env, monkeyp
             "total": 1,
         }
         assert report["document"]["kind"] == "final"
+        assert report["result"]["report_title"] == "设备采购投标文件审核报告"
         assert report["rules"][0]["requirement"] == "精度至少100"
         assert env.service.output(task, "md", f["file_id"]).is_file()
     batch = json.loads(env.service.output(task, "json").read_bytes())
@@ -423,6 +424,13 @@ async def test_routed_files_have_reason_without_findings_or_audit_calls(
         assert report["counts"] is None
         assert report["result"]["findings"] == []
         assert report["result"]["exclusion_reason"]
+        title = report["result"]["report_title"]
+        assert title.endswith("项目适用性说明")
+        assert (
+            env.service.output(task, "md", file["file_id"])
+            .read_text()
+            .startswith(f"# {title}\n")
+        )
         assert (
             env.service.progress(task, True, file["file_id"])["activity"]["model_calls"]
             == 1
