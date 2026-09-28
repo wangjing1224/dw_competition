@@ -12,6 +12,7 @@ from langsmith.utils import tracing_is_enabled
 
 from app.agents.evidence_ingestion_agent import prepare_evidence_request
 from app.evidence.context import render_history, render_material
+from app.evidence.local_trace import close_scope, current_trace, trace_scope
 from app.evidence.storage import (
     library_path,
     load_library,
@@ -40,6 +41,7 @@ from app.parsers.assets import atomic_write
 from app.parsers.reading import build_document_units, render_document_range
 from app.prompts.loader import render_prompt
 from app.retrieval.models import IndexFilter
+from app.storage.bidder_management import note_saved
 from app.tools.common_tools import CommonTool
 from app.tools.evidence_ingestion_tools import (
     EvidenceSession,
@@ -173,6 +175,7 @@ async def _run_file(session, *, model, retrieval, progress, checkpoint):
         raise ValueError("恢复游标超出当前解析结构")
     while cursor < len(units):
         progress.batch_index += 1
+        session.batch_index = progress.batch_index
         session.model_calls = 0
         session.cached_submissions.clear()
         controller.reset_history()
@@ -221,13 +224,18 @@ async def _run_file(session, *, model, retrieval, progress, checkpoint):
                 progress.compaction_calls += 1
 
                 async def invoke_summary(summary_context, allowance):
-                    return await invoke_agent_model(
-                        model,
-                        list(summary_context.messages),
-                        [],
-                        trace_context,
-                        **budgeted_generation_options(model_settings, allowance),
-                    )
+                    with trace_scope(
+                        session, "compaction", "上下文压缩"
+                    ) as observation:
+                        result = await invoke_agent_model(
+                            model,
+                            list(summary_context.messages),
+                            [],
+                            trace_context,
+                            **budgeted_generation_options(model_settings, allowance),
+                        )
+                        observation["summary"] = "已生成当前阅读范围的工作交接"
+                        return result
 
                 compacted = await compact_context(
                     context=signal.context,
@@ -283,6 +291,7 @@ async def _run_file(session, *, model, retrieval, progress, checkpoint):
             progress.next_unit_index = previous
             raise
         cursor = batch.end
+        close_scope(session, "batch")
     if not any(item.file_id == session.file_id for item in session.library.materials):
         raise RuntimeError("当前文件没有已保存结果，不能只凭处理完毕发布空资料")
 
@@ -400,7 +409,7 @@ async def _ingest_locked(
             unresolved_write_error=progress.unresolved_write_error,
         )
 
-        def checkpoint():
+        def checkpoint(session=session):
             progress.model_calls = session.model_calls
             progress.file_model_calls = session.file_model_calls
             progress.unresolved_write_error = session.unresolved_write_error
@@ -409,6 +418,8 @@ async def _ingest_locked(
         try:
             progress.error = None
             checkpoint()
+            if current_trace.get():
+                current_trace.get().hierarchy(session)
             readable = any(
                 block.content.strip() or block.images
                 for section in parsed.sections
@@ -434,6 +445,7 @@ async def _ingest_locked(
                     + [record],
                 )
                 write_library(session.library, settings)
+                note_saved(bidder_id, file_id)
             else:
                 if parsed.parse_status not in {"parsed", "partial", "ocr_required"}:
                     raise ValueError(f"{file_id} 解析未完成：{parsed.parse_status}")
@@ -446,6 +458,7 @@ async def _ingest_locked(
                 )
             progress.completed_file_ids = [*history, file_id]
             checkpoint()
+            close_scope(session, "file")
         except Exception as exc:
             progress.error = f"{type(exc).__name__}: {exc}"
             try:

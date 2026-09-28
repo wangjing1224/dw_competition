@@ -34,7 +34,7 @@ app/tools        规则/审核工具及 CommonTool 通用工具
 app/agents       规则抽取、主审核和资料核验 Agent
 app/graph        LangGraph State、路由和更新
 app/reports      JSON 和 Word 输出
-web              Ant Design Pro 规则库工作台
+web              Ant Design Pro 规则库与投标方资料库工作台
 configs          模型、检索和存储配置
 data             运行时上传、解析、索引和输出
 schemas          导出的 JSON Schema
@@ -53,7 +53,7 @@ uv run uvicorn app.main:app --reload
 
 健康检查地址：`http://127.0.0.1:8000/health`
 
-规则库工作台（Node.js 22 或以上；后端保持在 8000 端口）：
+管理工作台（Node.js 22 或以上；后端保持在 8000 端口）：
 
 ```bash
 cd web
@@ -63,12 +63,13 @@ npm run dev
 
 打开 `http://localhost:3000`。首页进入规则库，支持文件/文件夹导入、后台进度、
 本地 Agent 执行轨迹、六类规则审阅、人工修订、来源原文/图片预览及 JSON/Markdown 导出。
-资料库和审核任务的新页面暂不开放；没有登录系统，也不会请求模板的演示服务。
+投标方资料库支持独立批次导入、后台轨迹、逐文件双摘要和直接关系、人工修订及导出。
+审核任务的新页面暂不开放；没有登录系统，也不会请求模板的演示服务。
 开发代理默认把 `/api/` 转到 `http://127.0.0.1:8000`，可通过启动环境变量
 `API_PROXY_TARGET` 修改。生产部署使用 `npm run build` 的 `web/dist`，Web 服务器需配置
 SPA 回退到 `index.html`，并将 `/api/` 反向代理到后端；开发代理不适用于生产静态文件。
 
-规则库上传保存文件后即返回 202，随后在单进程后台解析和整理。重启会将未完成任务
+规则库、资料库上传保存文件后即返回 202，随后在单进程后台解析和整理。重启会将未完成任务
 标记为中断并保留已保存成果，不自动重复调用模型。当前不支持多进程任务调度，
 部署时不要增加 Uvicorn workers；本地展示轨迹不依赖 LangSmith 开启。
 人工编辑使用版本校验防止覆盖新修改。系统尚无鉴权，仅用于可信环境。
@@ -344,19 +345,28 @@ curl -X POST http://127.0.0.1:8000/api/projects \
 同一次提交重试必须复用原 `request_id`、名称和文件；不要重新运行 `uuidgen`。
 需要确认是否已受理时，先查询 `GET /api/projects?client_request_id={request_id}`。
 
-上传一家投标方的支撑资料：
+上传一家投标方的支撑资料，接收后返回 202 并后台整理：
 
 ```bash
+request_id="$(uuidgen)"
 curl -X POST http://127.0.0.1:8000/api/bidders \
+  -F "client_request_id=$request_id" \
+  -F 'display_name=示例投标方证明资料' \
   -F 'files=@/path/to/合同.docx' \
   -F 'relative_paths=1.业绩文件/合同.docx'
 ```
 
-查询独立资料库及入库进度：
+保存返回的 `bidder_id`，分别查询独立资料库详情及入库进度：
 
 ```bash
 curl http://127.0.0.1:8000/api/bidders/{bidder_id}
+curl http://127.0.0.1:8000/api/bidders/{bidder_id}/progress
 ```
+
+同一次上传重试复用原 `request_id`、名称和文件，已接收返回 200 且不重复排队。
+响应丢失时先查询 `GET /api/bidders?client_request_id={request_id}`；失败批次不自动重跑。
+两类库各自使用一个 `files/{file_id}/preview` 接口：默认返回 Markdown 和登记图片清单，
+图片使用清单内带 `image_name` / `version` 的 URL 按需读取，无须拼接磁盘路径。
 
 创建审核任务（选择已就绪的新规则库与独立资料库）：
 

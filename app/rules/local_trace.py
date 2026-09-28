@@ -35,11 +35,12 @@ def display_value(value):
             return {
                 k: visit(v)
                 for k, v in item.items()
-                if k
+                if k.lower()
                 not in {
                     "state",
                     "messages",
                     "reasoning_content",
+                    "reasoning",
                     "api_key",
                     "authorization",
                 }
@@ -252,7 +253,7 @@ def observe_tool_result(
                         "file_id": fid,
                         "path": path,
                         "parse_version": version,
-                        "url": f"/api/projects/{session.rule_set.project_id}/files/{fid}/images/{path.split('/')[-1]}?version={version}",
+                        "url": f"/api/projects/{session.rule_set.project_id}/files/{fid}/preview?image_name={path.split('/')[-1]}&version={version}",
                     }
                 ]
             }

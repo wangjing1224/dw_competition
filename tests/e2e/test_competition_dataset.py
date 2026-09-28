@@ -2,6 +2,7 @@
 
 import os
 import time
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -9,15 +10,34 @@ from app.main import app
 from tests.e2e.conftest import multipart_folder
 
 
+def await_library(client, base, data, processing):
+    deadline = time.monotonic() + int(os.getenv("MODEL_E2E_TIMEOUT", "1800"))
+    while data["status"] in processing:
+        assert time.monotonic() < deadline, "资料/规则库处理超时"
+        time.sleep(1)
+        response = client.get(base + "/progress")
+        response.raise_for_status()
+        data = response.json()
+    return data
+
+
 def test_competition_dataset_audit(competition_dataset):
     with TestClient(app) as client:
         files, data = multipart_folder(competition_dataset["tender"])
+        data.update(client_request_id=str(uuid4()), display_name="比赛规则测试")
         project_response = client.post("/api/projects", files=files, data=data)
         project_response.raise_for_status()
         project = project_response.json()
+        project = await_library(
+            client,
+            f"/api/projects/{project['project_id']}",
+            project,
+            {"processing_rules"},
+        )
         assert project["status"] == "rule_ready"
 
         files, data = multipart_folder(competition_dataset["evidence"])
+        data.update(client_request_id=str(uuid4()), display_name="比赛资料测试")
         bidder_response = client.post(
             "/api/bidders",
             files=files,
@@ -25,13 +45,19 @@ def test_competition_dataset_audit(competition_dataset):
         )
         bidder_response.raise_for_status()
         bidder = bidder_response.json()
+        bidder = await_library(
+            client,
+            f"/api/bidders/{bidder['bidder_id']}",
+            bidder,
+            {"uploading_evidence", "processing_evidence"},
+        )
         assert bidder["status"] == "evidence_ready"
         detail = client.get(f"/api/bidders/{bidder['bidder_id']}")
         detail.raise_for_status()
         library = detail.json()["library"]
         source_ids = {item["file_id"] for item in library["source_files"]}
         assert source_ids == {item["file_id"] for item in library["materials"]}
-        assert source_ids == set(detail.json()["progress"]["completed_file_ids"])
+        assert source_ids == set(bidder["completed_file_ids"])
         assert len(source_ids) == len(
             [
                 item

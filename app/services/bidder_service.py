@@ -6,6 +6,7 @@ from typing import BinaryIO
 
 from app.core.config import AppSettings
 from app.evidence.ingestion import ingest_evidence_documents
+from app.evidence.local_trace import EvidenceTrace, current_trace
 from app.evidence.storage import library_path, progress_path
 from app.llm.factory import EvidenceIngestionModels
 from app.models.documents import document_ref_from_record
@@ -13,8 +14,14 @@ from app.parsers.service import load_parsed_document, prepare_document
 from app.retrieval.index import build_document_index
 from app.retrieval.models import IndexScope
 from app.retrieval.service import RetrievalService
+from app.storage.bidder_management import management, update_management
 from app.storage.file_store import FileOwner, FileStore
-from app.storage.repositories import BidderRecord, BidderRepository, FileRepository
+from app.storage.repositories import (
+    BidderRecord,
+    BidderRepository,
+    FileRepository,
+    utc_now,
+)
 
 
 class BidderService:
@@ -104,6 +111,46 @@ class BidderService:
         except Exception as exc:
             self._failed(bidder_id, exc)
             raise
+
+    async def process_bidder(self, bidder_id: str) -> BidderRecord:
+        """新管理接口已固定上传清单；从登记 ID 重开文件执行，不再读取请求流。"""
+        trace = EvidenceTrace(bidder_id)
+        token = current_trace.set(trace)
+        try:
+            bidder = self.bidder_repository.require(bidder_id)
+            if bidder.status != "processing_evidence":
+                raise ValueError("仅能处理已受理的新资料库")
+            update_management(bidder_id, phase="parsing", started_at=utc_now())
+            documents = [
+                document_ref_from_record(record)
+                for record in self.file_repository.list_by_scope(
+                    bidder_id=bidder_id, data_role="evidence_material"
+                )
+            ]
+            if not documents:
+                raise ValueError("资料文件清单为空")
+            parsed = []
+            for document in documents:
+                update_management(bidder_id, current_file_id=document.file_id)
+                parsed.append(await prepare_document(document))
+            update_management(bidder_id, phase="indexing", current_file_id=None)
+            await self._build_index(bidder_id, documents)
+            update_management(bidder_id, phase="ingesting")
+            result = await self._ingest(bidder_id, parsed)
+            update_management(bidder_id, phase="completed", current_file_id=None)
+            trace.close()
+            return result
+        except BaseException as exc:
+            self._failed(bidder_id, exc)
+            update_management(
+                bidder_id,
+                phase="failed",
+                failed_phase=management(bidder_id).get("phase", "received"),
+            )
+            trace.close(exc)
+            raise
+        finally:
+            current_trace.reset(token)
 
     async def _build_index(self, bidder_id, documents):
         await build_document_index(

@@ -3,12 +3,14 @@
 import sqlite3
 from io import BytesIO
 from types import SimpleNamespace
+from uuid import uuid4
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
+from app.core.errors import BusinessError
 from app.evidence.storage import load_library
 from app.main import app
 from app.parsers.service import load_parsed_document
@@ -28,7 +30,7 @@ def environment(monkeypatch, temp_settings):
     )
     for module in (
         "app.main",
-        "app.api.bidders",
+        "app.services.evidence_library_service",
         "app.storage.file_store",
         "app.parsers.service",
         "app.parsers.common",
@@ -103,6 +105,11 @@ def test_upload_and_query_without_project(environment, monkeypatch):
     with TestClient(app) as client:
         response = client.post(
             "/api/bidders",
+            data={
+                "display_name": "测试资料",
+                "client_request_id": str(uuid4()),
+                "relative_paths": ["合同.md", "说明.md"],
+            },
             files=[
                 ("files", ("合同.md", "合同：设备20台。".encode(), "text/markdown")),
                 (
@@ -111,11 +118,30 @@ def test_upload_and_query_without_project(environment, monkeypatch):
                 ),
             ],
         )
-        assert response.status_code == 200, response.text
-        assert response.json() == {"bidder_id": "bidder-1", "status": "evidence_ready"}
+        assert response.status_code == 202, response.text
+        from app.services.background_runner import background_runner
+
+        client.portal.call(background_runner.wait)
+        assert response.json()["bidder_id"] == "bidder-1"
         result = client.get("/api/bidders/bidder-1").json()
+        assert result["bidder"]["status"] == "evidence_ready", result
         assert len(result["library"]["materials"]) == 2
-        assert result["progress"]["completed_file_ids"] == ["file-1", "file-2"]
+        progress = client.get(
+            "/api/bidders/bidder-1/progress?include_trace=true"
+        ).json()
+        assert progress["completed_file_ids"] == ["file-1", "file-2"]
+        assert progress["trace"]["trace_status"] == "completed"
+        assert progress["saved_material_count"] == 2
+        nodes = {
+            change["node"]["span_id"]: change["node"]
+            for change in progress["trace"]["changes"]
+        }
+        saves = [n for n in nodes.values() if n["name"] == "save_evidence_material"]
+        assert len(saves) == 2
+        trace = client.get(f"/api/bidders/bidder-1/trace/{saves[0]['span_id']}").json()
+        assert trace["material_change"]["after"]["provenance"] == "ai_generated"
+        assert "provenance" not in trace["input"]["material"]
+        assert result["available_for_audit"]
         assert client.post("/api/bidders/bidder-1/files").status_code == 404
         assert client.get("/api/bidders/bidder-404").status_code == 404
     with open_db() as db:
@@ -130,7 +156,7 @@ def test_upload_and_query_without_project(environment, monkeypatch):
 @pytest.mark.asyncio
 async def test_incomplete_upload_cannot_be_resumed_as_smaller_batch(environment):
     service = BidderService(environment, models_for(environment))
-    with pytest.raises(Exception):
+    with pytest.raises(BusinessError):
         await service.create_bidder(
             [
                 ("ok.md", "ok.md", BytesIO(b"ok")),

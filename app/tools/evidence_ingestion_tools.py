@@ -17,6 +17,7 @@ from app.models.evidence import (
     SaveEvidenceMaterialInput,
 )
 from app.prompts.loader import load_tool_description
+from app.storage.bidder_management import note_saved
 
 
 class SaveMaterialToolInput(SaveEvidenceMaterialInput):
@@ -32,6 +33,7 @@ class EvidenceSession:
     counter: object
     detail_budget_tokens: int
     model_calls: int = 0
+    batch_index: int = 0
     file_model_calls: int = 0
     unresolved_write_error: str | None = None
     cached_submissions: dict = field(default_factory=dict)
@@ -116,6 +118,7 @@ class EvidenceSession:
             )
             # 库文件是权威结果；写失败不发布候选 State，其他文件记录不变。
             write_library(candidate, self.settings)
+            note_saved(candidate.bidder_id, self.file_id)
             self.library = candidate
             self.unresolved_write_error = None
             view = render_material(candidate, self.file_id)

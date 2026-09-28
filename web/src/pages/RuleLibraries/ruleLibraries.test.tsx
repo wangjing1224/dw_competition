@@ -1,30 +1,30 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
 import {
+  cleanup,
+  fireEvent,
   render,
   screen,
-  cleanup,
   waitFor,
-  fireEvent,
   within,
 } from '@testing-library/react';
 import { App } from 'antd';
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { layout } from '@/app';
-import Workbench from '../Workbench';
-import Libraries from './List';
-import LibraryDetail from './Detail';
-import { validateFiles } from './Create';
-import { safeMarkdown } from './Detail/SourcePreview';
-import { PageHeading } from './shared';
-import ProgressPage, { mergeChanges } from './Progress';
 import {
-  api,
   ApiError,
+  api,
   download,
   type TraceNode,
 } from '@/services/ruleLibraries';
+import Workbench from '../Workbench';
+import { validateFiles } from './Create';
+import LibraryDetail from './Detail';
+import { safeMarkdown } from './Detail/SourcePreview';
+import Libraries from './List';
+import ProgressPage, { mergeChanges } from './Progress';
+import { PageHeading } from './shared';
 
 vi.mock('@umijs/max', () => ({
   Link: ({ to, children, ...props }: { to: string; children: ReactNode }) => (
@@ -70,11 +70,13 @@ describe('规则库工作台', () => {
       </>
     );
     const { rerender } = render(sidebar(false));
-    expect(screen.getByText('招投标智能审核 · 规则管理')).toBeInTheDocument();
+    expect(
+      screen.getByText('招投标智能审核 · 规则与资料管理'),
+    ).toBeInTheDocument();
     expect(screen.getByText(/智能整理 · 依据可查/)).toBeInTheDocument();
     rerender(sidebar(true));
     expect(
-      screen.queryByText('招投标智能审核 · 规则管理'),
+      screen.queryByText('招投标智能审核 · 规则与资料管理'),
     ).not.toBeInTheDocument();
     expect(screen.queryByText(/智能整理 · 依据可查/)).not.toBeInTheDocument();
     expect(screen.getByText('审')).toBeInTheDocument();
@@ -466,7 +468,7 @@ describe('规则库工作台', () => {
       [
         {
           path: 'file-1/images/1.png',
-          url: '/api/projects/project-1/files/file-1/images/1.png?version=abc',
+          url: `/api/projects/project-1/files/file-1/preview?image_name=1.png&version=${'a'.repeat(64)}`,
           description: '',
           purpose: 'content',
           read_status: 'readable',

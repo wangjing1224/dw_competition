@@ -29,6 +29,8 @@ class EvidenceMaterialInput(StrictModel):
 
 class EvidenceMaterial(EvidenceMaterialInput):
     file_id: str
+    # 系统维护的编辑来源，不进入模型工具参数或业务文本视图。
+    provenance: Literal["ai_generated", "human_modified"] = "ai_generated"
 
 
 class EvidenceSourceFile(StrictModel):

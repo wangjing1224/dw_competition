@@ -1,78 +1,31 @@
-import { useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import { NodeIndexOutlined } from '@ant-design/icons';
 import { Link, useParams } from '@umijs/max';
+import { Alert, Button, Card, Drawer, Empty, Space, Steps, Tag } from 'antd';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Alert,
-  Button,
-  Card,
-  Drawer,
-  Empty,
-  Space,
-  Steps,
-  Tag,
-  Tree,
-} from 'antd';
-import type { DataNode } from 'antd/es/tree';
-import {
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  LoadingOutlined,
-  NodeIndexOutlined,
-  ExclamationCircleOutlined,
-} from '@ant-design/icons';
+  mergeChanges,
+  type SeenNode,
+  TracePanel,
+  TraceTree,
+} from '@/components/LibraryTrace';
 import {
   api,
-  phases,
-  type ProgressData,
-  type NodeDetail,
-  type TraceNode,
   type Detail,
+  type NodeDetail,
+  type ProgressData,
+  phases,
 } from '@/services/ruleLibraries';
 import { Failure, PageHeading, RuleCard, Status } from '../shared';
 
-export type SeenNode = { seq: number; node: TraceNode };
-export function mergeChanges(
-  previous: Record<string, SeenNode>,
-  changes: SeenNode[],
-) {
-  const next = { ...previous };
-  changes.forEach((change) => {
-    if (
-      !next[change.node.span_id] ||
-      next[change.node.span_id].seq < change.seq
-    )
-      next[change.node.span_id] = change;
-  });
-  return next;
-}
+export { mergeChanges } from '@/components/LibraryTrace';
+
 const statusLabels: Record<string, string> = {
   running: '执行中',
   succeeded: '已完成',
-  partial: '部分完成',
   failed: '失败',
+  partial: '部分完成',
   interrupted: '中断',
 };
-
-function TracePanel({
-  title,
-  label,
-  extra,
-  children,
-}: {
-  title: ReactNode;
-  label: string;
-  extra?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <Card className="trace-panel" title={title} extra={extra}>
-      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: 独立滚动区域需要支持键盘聚焦与方向键滚动。 */}
-      <section className="trace-panel-scroll" aria-label={label} tabIndex={0}>
-        {children}
-      </section>
-    </Card>
-  );
-}
 
 export default function ProgressPage() {
   const { projectId = '' } = useParams();
@@ -145,49 +98,6 @@ export default function ProgressPage() {
       });
     return () => controller.abort();
   }, [projectId, selected, selectedSeq]);
-  const children = (parent: string | null): DataNode[] =>
-    Object.values(nodes)
-      .filter((n) => n.node.parent_span_id === parent)
-      .sort(
-        (a, b) =>
-          a.node.started_at.localeCompare(b.node.started_at) || a.seq - b.seq,
-      )
-      .map(({ node }) => ({
-        key: node.span_id,
-        selectable: node.has_detail,
-        title: (
-          <span className="trace-title">
-            <span>{node.title}</span>
-            <Tag
-              color={
-                node.status === 'failed'
-                  ? 'red'
-                  : node.status === 'running'
-                    ? 'blue'
-                    : ['partial', 'interrupted'].includes(node.status)
-                      ? 'orange'
-                      : 'default'
-              }
-            >
-              {statusLabels[node.status]}
-            </Tag>
-            {node.duration_ms !== null && (
-              <small>{(node.duration_ms / 1000).toFixed(2)}s</small>
-            )}
-          </span>
-        ),
-        icon:
-          node.status === 'running' ? (
-            <LoadingOutlined />
-          ) : node.status === 'failed' ? (
-            <CloseCircleOutlined />
-          ) : ['partial', 'interrupted'].includes(node.status) ? (
-            <ExclamationCircleOutlined />
-          ) : (
-            <CheckCircleOutlined />
-          ),
-        children: children(node.span_id),
-      }));
   const phaseOrder = [
     'received',
     'parsing',
@@ -341,24 +251,11 @@ export default function ProgressPage() {
             <Alert type="warning" title={data.trace.warning} />
           )}
           {Object.keys(nodes).length ? (
-            <Tree
-              showIcon
-              blockNode
-              expandAction="click"
-              autoExpandParent={false}
-              expandedKeys={
-                expandedKeys ??
-                Object.values(nodes)
-                  .filter(({ node }) =>
-                    ['file', 'batch', 'turn'].includes(node.kind),
-                  )
-                  .map(({ node }) => node.span_id)
-              }
-              onExpand={(keys) => setExpandedKeys(keys.map(String))}
-              treeData={children(null)}
-              onSelect={(keys) =>
-                setSelected(keys[0] ? String(keys[0]) : undefined)
-              }
+            <TraceTree
+              nodes={nodes}
+              expandedKeys={expandedKeys}
+              onExpand={setExpandedKeys}
+              onSelect={setSelected}
             />
           ) : (
             <Empty description="尚无 Agent 调用记录；解析和建索引完成后显示。" />

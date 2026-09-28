@@ -7,6 +7,7 @@ from langchain_core.messages import BaseMessage, ToolMessage
 from langgraph.graph import END, StateGraph
 
 from app.agents.evidence_ingestion_agent import evidence_ingestion_node
+from app.evidence.local_trace import close_scope, observe_tool_result, trace_scope
 from app.llm.agent_tracing import invoke_agent_tool
 
 
@@ -31,15 +32,41 @@ def build_evidence_ingestion_graph(
             if not call_id:
                 raise ValueError("工具调用缺少 tool_call_id")
             try:
-                if name not in by_name:
-                    raise ValueError(f"未知工具 {name}")
-                result = await invoke_agent_tool(by_name[name], call, trace_context)
-                if (
-                    not isinstance(result, ToolMessage)
-                    or result.tool_call_id != call_id
-                ):
-                    raise ValueError("工具未返回匹配的 ToolMessage")
-            except Exception as exc:
+                before = next(
+                    (
+                        m.model_dump(mode="json")
+                        for m in session.library.materials
+                        if m.file_id == session.file_id
+                    ),
+                    None,
+                )
+                title = (
+                    (
+                        "查看历史摘要"
+                        if call.get("args", {}).get("material") is None
+                        else "保存当前资料"
+                    )
+                    if name == "save_evidence_material"
+                    else name
+                )
+                with trace_scope(
+                    session,
+                    "tool",
+                    title,
+                    input=call.get("args"),
+                    name=name,
+                    tool_call_id=call_id,
+                ) as observation:
+                    if name not in by_name:
+                        raise ValueError(f"未知工具 {name}")
+                    result = await invoke_agent_tool(by_name[name], call, trace_context)
+                    if (
+                        not isinstance(result, ToolMessage)
+                        or result.tool_call_id != call_id
+                    ):
+                        raise ValueError("工具未返回匹配的 ToolMessage")
+                    observe_tool_result(observation, session, call, result, before)
+            except Exception as exc:  # noqa: BLE001 - 每个失败调用也必须补齐对应的 ToolMessage。
                 detail = f"{type(exc).__name__}: {exc}"
                 if name == "save_evidence_material":
                     args = call.get("args")
@@ -64,6 +91,7 @@ def build_evidence_ingestion_graph(
                     content=detail, name=name, tool_call_id=call_id, status="error"
                 )
             messages.append(result)
+        close_scope(session, "turn")
         return {"messages": messages}
 
     graph = StateGraph(EvidenceIngestionState)

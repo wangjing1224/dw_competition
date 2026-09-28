@@ -9,6 +9,7 @@ from fastapi import APIRouter, File, Form, Header, Query, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.api.project_models import ProjectEdit
+from app.api.source_preview import preview_response
 from app.core.errors import BusinessError
 from app.services.background_runner import background_runner
 from app.services.container import build_project_service
@@ -113,9 +114,15 @@ def edit_project(
 
 
 @router.get("/{project_id}/files/{file_id}/preview")
-def file_preview(project_id: str, file_id: str, response: Response):
-    response.headers["Cache-Control"] = "no-store"
-    return RuleLibraryService().preview(project_id, file_id)
+def file_preview(
+    project_id: str,
+    file_id: str,
+    image_name: str | None = None,
+    version: str | None = None,
+):
+    return preview_response(
+        RuleLibraryService(), project_id, file_id, image_name, version
+    )
 
 
 @router.get("/{project_id}/files/{file_id}/download")
@@ -128,20 +135,6 @@ def download_file(project_id: str, file_id: str):
             "source_file_unavailable", "来源原件丢失或不可读取", http_status=500
         )
     return FileResponse(path, filename=file.file_name)
-
-
-@router.get("/{project_id}/files/{file_id}/images/{image_name}")
-def image(project_id: str, file_id: str, image_name: str, version: str = Query(...)):
-    data, mime = RuleLibraryService().image(project_id, file_id, image_name, version)
-    return Response(
-        data,
-        media_type=mime,
-        headers={
-            "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "private, max-age=86400",
-            "Content-Disposition": f'inline; filename="{image_name}"',
-        },
-    )
 
 
 @router.get("/{project_id}/export")

@@ -308,13 +308,13 @@ def test_preview_images_are_version_locked_and_scoped(env):
     )
     assert (
         env.client.get(
-            f"/api/projects/{pid}/files/{file.file_id}/images/not-registered.png?version={preview['parse_version']}"
+            f"/api/projects/{pid}/files/{file.file_id}/preview?image_name=not-registered.png&version={preview['parse_version']}"
         ).status_code
         == 404
     )
     assert (
         env.client.get(
-            f"/api/projects/{pid}/files/{file.file_id}/images/1.png?version=../oops"
+            f"/api/projects/{pid}/files/{file.file_id}/preview?image_name=1.png&version=../oops"
         ).status_code
         == 422
     )

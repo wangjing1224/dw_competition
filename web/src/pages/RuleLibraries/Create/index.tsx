@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import {
+  DeleteOutlined,
+  FileAddOutlined,
+  FolderOpenOutlined,
+  InboxOutlined,
+} from '@ant-design/icons';
 import { history } from '@umijs/max';
 import {
   Alert,
@@ -11,53 +16,23 @@ import {
   Table,
   Tag,
 } from 'antd';
+import { useEffect, useRef, useState } from 'react';
 import {
-  DeleteOutlined,
-  FileAddOutlined,
-  FolderOpenOutlined,
-  InboxOutlined,
-} from '@ant-design/icons';
+  type PendingFile,
+  validateFiles,
+} from '@/components/LibraryUpload/files';
 import {
-  api,
   ApiError,
+  api,
+  type Creation,
   fileSize,
   listLibraries,
-  type Creation,
 } from '@/services/ruleLibraries';
 import { PageHeading } from '../shared';
 
-const extensions = new Set([
-  'doc',
-  'docx',
-  'pdf',
-  'xlsx',
-  'txt',
-  'md',
-  'png',
-  'jpg',
-  'jpeg',
-]);
+export { validateFiles } from '@/components/LibraryUpload/files';
+
 const storageKey = 'rule-library-pending-submission';
-export type PendingFile = { path: string; file: File };
-export function validateFiles(files: File[], existing: PendingFile[]) {
-  const known = new Set(existing.map((f) => f.path));
-  const accepted: PendingFile[] = [];
-  const errors: string[] = [];
-  files.forEach((file) => {
-    const path = file.webkitRelativePath || file.name;
-    if (!extensions.has(file.name.split('.').pop()?.toLowerCase() || ''))
-      errors.push(`${path}：不支持此格式`);
-    else if (!file.size) errors.push(`${path}：空文件`);
-    else if (file.size > 100 * 1024 * 1024)
-      errors.push(`${path}：超过 100 MiB`);
-    else if (known.has(path)) errors.push(`${path}：重复路径`);
-    else {
-      accepted.push({ path, file });
-      known.add(path);
-    }
-  });
-  return { accepted, errors };
-}
 export default function CreateLibrary() {
   const { message, modal } = App.useApp();
   const fileInput = useRef<HTMLInputElement>(null);

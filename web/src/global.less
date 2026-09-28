@@ -622,6 +622,31 @@ body {
   gap: 24px;
   align-items: start;
 }
+
+// 资料库：宽正文、紧凑目录，目录滚动而不压缩长摘要列。
+.evidence-create { width: 100%; min-width: 0; }
+.evidence-detail-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 20px; align-items: start; }
+.material-directory { position: sticky; top: 16px; }
+.material-directory-scroll { max-height: 60dvh; overflow: auto; scrollbar-gutter: stable; }
+.material-file { display: block; width: 100%; padding: 14px 10px; text-align: left; background: transparent; border: 0; border-bottom: 1px solid #edf0f5; cursor: pointer; color: inherit; }
+.material-file.active { background: #edf4ff; border-radius: 8px; }
+.material-file strong, .material-file small { display: block; overflow-wrap: anywhere; margin-bottom: 8px; }
+.material-file small { color: #66758c; }
+.material-reading { min-width: 0; }
+.material-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.material-brief { background: #f3f7ff; padding: 18px; border-radius: 10px; }
+.material-section-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:20px; }
+.material-relation { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 10px 0; border-bottom: 1px solid #edf0f5; }
+.material-relation .ant-btn { height: auto; white-space: normal; overflow-wrap: anywhere; }
+.material-relation-edit { display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; margin-bottom: 12px; }
+.material-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.material-compare pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 55vh; overflow: auto; padding: 12px; background: #f5f7fb; }
+@media (max-width: 1000px) {
+  .evidence-detail-grid { grid-template-columns: 1fr; }
+  .material-directory { position: static; }
+  .material-directory-scroll { max-height: 260px; }
+  .material-compare { grid-template-columns: 1fr; }
+}
 .category-nav {
   background: white;
   border: 1px solid #e4eaf3;

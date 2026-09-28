@@ -2,11 +2,11 @@ import {
   ArrowRightOutlined,
   AuditOutlined,
   FolderOpenOutlined,
-  ReadOutlined,
   PlusOutlined,
+  ReadOutlined,
 } from '@ant-design/icons';
-import { Button, Tag } from 'antd';
 import { Link } from '@umijs/max';
+import { Button, Tag } from 'antd';
 import { PageHeading } from '../RuleLibraries/shared';
 
 export default function Workbench() {
@@ -48,15 +48,22 @@ export default function Workbench() {
               <SpaceLinks />
             </div>
           </section>
-          <section className="module-card muted-module">
+          <section className="module-card">
             <div className="module-icon">
               <FolderOpenOutlined />
             </div>
             <div>
-              <Tag>后续开放</Tag>
+              <Tag color="blue">可用</Tag>
               <h2>投标方资料库</h2>
               <p>独立维护资质、合同与证明材料，为核验提供可追溯依据。</p>
-              <Button disabled>管理资料库</Button>
+              <div className="module-actions">
+                <Link to="/evidence-libraries/new">
+                  <Button type="primary">新建资料库</Button>
+                </Link>
+                <Link to="/evidence-libraries">
+                  管理资料库 <ArrowRightOutlined />
+                </Link>
+              </div>
             </div>
           </section>
         </div>

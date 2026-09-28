@@ -132,6 +132,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const target = typeof url === "function" ? url(ReviewUI.getIdentity()) : url;
       const form = ReviewUI.buildFolderForm(files);
       if (prefix === "project") form.append("client_request_id", crypto.randomUUID());
+      if (prefix === "bidder") {
+        form.append("client_request_id", crypto.randomUUID());
+        form.append("display_name", "投标方资料 · " + new Date().toLocaleString("zh-CN"));
+      }
       let data = await ReviewUI.request(target, {
         method: "POST",
         body: form,
@@ -144,6 +148,14 @@ document.addEventListener("DOMContentLoaded", () => {
           data = await ReviewUI.request(`/api/projects/${encodeURIComponent(data.project_id)}/progress`);
         }
         if (data.status === "rule_failed") throw new Error(data.error?.message || "规则库处理失败");
+      }
+      if (prefix === "bidder") {
+        while (["processing_evidence", "uploading_evidence"].includes(data.status)) {
+          setStatus(prefix, "后台处理中", "running");
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          data = await ReviewUI.request(`/api/bidders/${encodeURIComponent(data.bidder_id)}/progress`);
+        }
+        if (data.status === "evidence_failed") throw new Error(data.error?.message || "资料入库失败");
       }
       const seconds = ((performance.now() - started) / 1000).toFixed(1);
       setStatus(prefix, data.status || "成功", "success");

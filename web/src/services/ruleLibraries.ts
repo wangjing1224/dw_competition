@@ -1,31 +1,6 @@
-/** 同源业务接口。错误保留状态码，409 编辑冲突由页面处理而非自动重试。 */
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const timeout = AbortSignal.timeout(
-    init.body instanceof FormData ? 300000 : 30000,
-  );
-  const response = await fetch(`/api/projects${path}`, {
-    ...init,
-    signal: init.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new ApiError(
-      response.status,
-      body.error?.code || 'request_failed',
-      body.error?.message || `请求失败 (${response.status})`,
-    );
-  }
-  return response.json();
-}
+import { requestJSON, downloadFile } from './libraryClient';
+export { ApiError } from './libraryClient';
+export const api = <T,>(path: string, init: RequestInit = {}) => requestJSON<T>(`/api/projects${path}`, init);
 export const categories: Record<string, string> = {
   format: '格式与文件组成',
   qualification: '主体资格与准入',
@@ -223,23 +198,7 @@ export function editLibrary(
     },
   );
 }
-export async function download(path: string, filename: string) {
-  const response = await fetch(`/api/projects${path}`);
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new ApiError(
-      response.status,
-      body.error?.code || 'download_failed',
-      body.error?.message || '下载失败',
-    );
-  }
-  const url = URL.createObjectURL(await response.blob());
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
+export const download = (path: string, filename: string) => downloadFile(`/api/projects${path}`, filename);
 export const fileSize = (bytes: number) =>
   bytes < 1024 * 1024
     ? `${(bytes / 1024).toFixed(1)} KiB`

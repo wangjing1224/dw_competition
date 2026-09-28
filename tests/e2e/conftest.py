@@ -26,7 +26,7 @@ def competition_dataset():
 
 def multipart_folder(path: Path):
     files = []
-    data = []
+    data = {"relative_paths": []}
     for file_path in sorted(item for item in path.rglob("*") if item.is_file()):
         files.append(
             (
@@ -38,5 +38,5 @@ def multipart_folder(path: Path):
                 ),
             )
         )
-        data.append(("relative_paths", file_path.relative_to(path).as_posix()))
+        data["relative_paths"].append(file_path.relative_to(path).as_posix())
     return files, data

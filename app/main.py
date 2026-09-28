@@ -15,9 +15,10 @@ from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
 from app.llm.bailian_retrieval import close_retrieval_clients
+from app.storage.bidder_management import mark_interrupted_bidders
 from app.storage.database import initialize_database
 from app.storage.project_management import mark_interrupted_projects
-from app.storage.repositories import AuditTaskRepository, BidderRepository
+from app.storage.repositories import AuditTaskRepository
 
 
 def _app_version() -> str:
@@ -34,7 +35,7 @@ async def lifespan(_: FastAPI):
     settings.ensure_runtime_directories()
     initialize_database(settings.storage.database_path)
     AuditTaskRepository().mark_interrupted_tasks_failed()
-    BidderRepository().mark_interrupted_ingestions_failed()
+    mark_interrupted_bidders()
     mark_interrupted_projects()
     try:
         yield

@@ -3,6 +3,7 @@
 from langchain_core.messages import HumanMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
+from app.evidence.local_trace import close_scope, trace_scope
 from app.llm.agent_tracing import invoke_agent_model
 from app.llm.context_compaction import InputBudgetError, NeedsCompaction
 from app.llm.factory import budgeted_generation_options
@@ -72,13 +73,26 @@ async def evidence_ingestion_node(
     runnable = model if step == max_steps else model.bind_tools(tools)
     session.model_calls = step
     session.file_model_calls += 1
-    response = await invoke_agent_model(
-        runnable,
-        list(context.messages),
-        [] if step == max_steps else tools,
-        trace_context,
-        **budgeted_generation_options(controller.settings, tokens),
-    )
+    with trace_scope(
+        session,
+        "model",
+        "模型调用",
+        input={
+            "model": controller.settings.model,
+            "tools": [tool.name for tool in tools] if step < max_steps else [],
+        },
+    ) as observation:
+        response = await invoke_agent_model(
+            runnable,
+            list(context.messages),
+            [] if step == max_steps else tools,
+            trace_context,
+            **budgeted_generation_options(controller.settings, tokens),
+        )
+        observation.update(
+            output={"content": response.content, "tool_calls": response.tool_calls},
+            summary="本轮返回工具调用" if response.tool_calls else "本轮返回正文",
+        )
     controller.observe(context, response)
     # 只读详情按剩余预算整份返回；不裁剪单份摘要或伪装成已返回全量。
     session.detail_budget_tokens = max(
@@ -94,6 +108,8 @@ async def evidence_ingestion_node(
         raise RuntimeError("模型返回无法解析的工具调用，当前文件未完成")
     if response.response_metadata.get("finish_reason") == "length":
         raise RuntimeError("模型输出被截断，当前文件未完成")
+    if not response.tool_calls:
+        close_scope(session, "turn")
     return {
         "messages": [*context.messages, response],
         "model_calls": step,

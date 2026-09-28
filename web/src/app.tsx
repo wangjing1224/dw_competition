@@ -4,6 +4,7 @@ import { Link } from '@umijs/max';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import defaultSettings from '../config/defaultSettings';
+
 dayjs.extend(relativeTime);
 
 // 保留模板页面的类型兼容，但本工作台不请求用户接口、不执行登录跳转。
@@ -27,7 +28,7 @@ export const layout: RunTimeLayoutConfig = () => ({
       ? []
       : [
           <span key="label" className="header-note">
-            招投标智能审核 · 规则管理
+            招投标智能审核 · 规则与资料管理
           </span>,
         ],
   avatarProps: undefined,

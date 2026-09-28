@@ -113,6 +113,7 @@ TABLE_DDLS += (
 )
 
 INDEX_DDLS = (
+    "CREATE INDEX IF NOT EXISTS idx_bidder_trace_span ON bidder_trace(bidder_id,span_id,seq)",
     "CREATE INDEX IF NOT EXISTS idx_project_trace_span ON project_trace(project_id,span_id,seq)",
     "CREATE INDEX IF NOT EXISTS idx_tasks_owner ON audit_tasks(project_id, bidder_id)",
     """
@@ -123,4 +124,19 @@ INDEX_DDLS = (
     CREATE INDEX IF NOT EXISTS idx_audit_events_task
     ON audit_events(task_id, event_id)
     """,
+)
+
+TABLE_DDLS += (
+    """CREATE TABLE IF NOT EXISTS bidder_management (
+        bidder_id TEXT PRIMARY KEY REFERENCES bidders(bidder_id), payload TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS bidder_uploads (
+        request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+        bidder_id TEXT REFERENCES bidders(bidder_id), state TEXT NOT NULL, error_json TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS bidder_trace (
+        bidder_id TEXT NOT NULL REFERENCES bidders(bidder_id), seq INTEGER NOT NULL,
+        span_id TEXT NOT NULL, node TEXT NOT NULL, detail TEXT NOT NULL,
+        PRIMARY KEY(bidder_id, seq)
+    )""",
 )
