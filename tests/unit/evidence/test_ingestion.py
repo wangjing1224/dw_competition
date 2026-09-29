@@ -349,9 +349,64 @@ async def test_final_round_unbound_and_no_empty_success(settings):
 
 
 @pytest.mark.asyncio
-async def test_no_saved_file_cannot_complete(settings):
+@pytest.mark.parametrize("finish_reason", [None, "stop"])
+@pytest.mark.parametrize(
+    "content", ["摘要已保存，本批阅读完成。", "Saved successfully.\n处理完毕"]
+)
+async def test_completion_uses_saved_material_not_exact_phrase(
+    settings, content, finish_reason
+):
+    model = Model(
+        [
+            save(),
+            AIMessage(
+                content=content, response_metadata={"finish_reason": finish_reason}
+            ),
+        ]
+    )
+    result = await ingest(settings, model, [parsed(1)])
+    assert len(result.materials) == 1 and len(model.calls) == 2
+    progress = EvidenceIngestionProgress.model_validate_json(
+        progress_path("bidder-1", settings).read_text()
+    )
+    assert progress.completed_file_ids == ["file-1"] and progress.error is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        AIMessage(content="已保存", response_metadata={"finish_reason": "length"}),
+        AIMessage(
+            content="已保存", response_metadata={"finish_reason": "content_filter"}
+        ),
+        AIMessage(content="已保存", response_metadata={"finish_reason": "tool_calls"}),
+        AIMessage(content=""),
+        AIMessage(content=" \n\t"),
+        AIMessage(
+            content="已保存",
+            invalid_tool_calls=[
+                {"name": "save_evidence_material", "id": "bad", "args": "{"}
+            ],
+        ),
+    ],
+)
+async def test_saved_material_does_not_hide_abnormal_or_empty_reply(settings, response):
+    with pytest.raises(RuntimeError):
+        await ingest(settings, Model([save(), response]), [parsed(1)])
+    progress = EvidenceIngestionProgress.model_validate_json(
+        progress_path("bidder-1", settings).read_text()
+    )
+    assert progress.error and not progress.completed_file_ids
+    assert progress.next_unit_index == 0
+    assert len(load_library("bidder-1", settings).materials) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["处理完毕", "摘要已保存，本批阅读完成。"])
+async def test_no_saved_file_cannot_complete(settings, content):
     with pytest.raises(RuntimeError, match="没有已保存结果"):
-        await ingest(settings, Model([AIMessage(content="处理完毕")]), [parsed(1)])
+        await ingest(settings, Model([AIMessage(content=content)]), [parsed(1)])
 
 
 def test_prepared_round_reminder_is_not_duplicated(settings):
@@ -549,7 +604,11 @@ async def test_real_budget_splits_whole_blocks_and_allows_unchanged_last_batch(
         }
     )
     model = Model(
-        [save(), AIMessage(content="处理完毕"), AIMessage(content="处理完毕")]
+        [
+            save(),
+            AIMessage(content="本批摘要已保存。"),
+            AIMessage(content="后续表格未带来新事实，保留已保存摘要。"),
+        ]
     )
     await ingest(small, model, [doc])
     assert len(model.calls) == 3

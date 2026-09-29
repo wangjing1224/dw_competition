@@ -608,13 +608,65 @@ async def test_current_file_search_is_scoped_versioned_and_does_not_advance(env)
 
 
 @pytest.mark.asyncio
-async def test_truncation_or_unprocessed_reply_cannot_finish(env):
-    for response in [
+@pytest.mark.parametrize("finish_reason", [None, "stop"])
+@pytest.mark.parametrize(
+    "content",
+    [
+        "本批规则和项目简介已保存。",
+        "All rules were saved successfully.\n\n处理完毕",
+        "  已完成本批阅读，无新增要求。\n",
+    ],
+)
+async def test_completion_uses_saved_state_not_exact_phrase(
+    env, content, finish_reason
+):
+    model = ScriptModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    tool_call(
+                        "submit_rule_delta",
+                        "save",
+                        submit_args([add_operation()], view="changed"),
+                    )
+                ],
+            ),
+            AIMessage(
+                content=content, response_metadata={"finish_reason": finish_reason}
+            ),
+            AIMessage(content="后续文件没有新要求，沿用已保存规则。"),
+        ]
+    )
+    result = await extract(env, model, [parsed_file(1), parsed_file(2)])
+    assert len(result.rules) == 1
+    assert len(model.calls) == 3  # 不为收尾增加模型调用，也不要求无变化文件提交。
+    path = env.storage.data_root / "parsed/rules/project-1.progress.json"
+    progress = RuleExtractionProgress.model_validate_json(path.read_text())
+    assert progress.completed_file_ids == ["file-1", "file-2"]
+    assert progress.error is None and len(progress.commits) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
         AIMessage(content="处理完毕", response_metadata={"finish_reason": "length"}),
-        AIMessage(content="仍有未处理的附表"),
-    ]:
-        with pytest.raises(RuntimeError):
-            await extract(env, ScriptModel([response]), [parsed_file(1)])
+        AIMessage(
+            content="已保存", response_metadata={"finish_reason": "content_filter"}
+        ),
+        AIMessage(content="已保存", response_metadata={"finish_reason": "tool_calls"}),
+        AIMessage(content=""),
+        AIMessage(content=" \n\t"),
+    ],
+)
+async def test_abnormal_or_empty_reply_cannot_finish(env, response):
+    with pytest.raises(RuntimeError):
+        await extract(env, ScriptModel([response]), [parsed_file(1)])
+    path = env.storage.data_root / "parsed/rules/project-1.progress.json"
+    progress = RuleExtractionProgress.model_validate_json(path.read_text())
+    assert progress.error and not progress.completed_file_ids
+    assert progress.next_unit_index == 0
 
 
 @pytest.mark.asyncio

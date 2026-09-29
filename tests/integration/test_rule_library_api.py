@@ -416,7 +416,10 @@ async def test_real_pipeline_records_serial_tools_and_successful_commits(env):
 
         async def ainvoke(self, messages, **kwargs):
             if messages[-1].type == "tool":
-                return AIMessage(content="处理完毕")
+                return AIMessage(
+                    content="All rules were saved successfully.\n\n处理完毕",
+                    response_metadata={"finish_reason": "stop"},
+                )
             valid = {
                 "operations": [
                     {

@@ -227,7 +227,7 @@ class LangGraphAuditExecutor:
                     raise InputBudgetError(batch.blocked_reason)
                 trace["metadata"]["batch_index"] = batch_number
                 trace["metadata"]["reading_range"] = [batch.start, batch.end]
-                content = await run_session(
+                await run_session(
                     model=self.models.bid_chat,
                     tools=tools,
                     settings=self.settings.bid_chat_model,
@@ -250,8 +250,9 @@ class LangGraphAuditExecutor:
                     stats=stats,
                     events=event("main_agent"),
                 )
-                if report.write_error or content.rstrip("。.!！") != "处理完毕":
-                    raise RuntimeError(report.write_error or f"当前批未完成：{content}")
+                # 会话已校验正常收尾；不用固定结束语判成功，写入和完整性仍检查真实报告。
+                if report.write_error:
+                    raise RuntimeError(report.write_error)
                 cursor = batch.end
                 checkpoint()
             decision = report.finish()

@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage
 
 from app.graph.audit_task_graph import LangGraphAuditExecutor
 from tests.helpers.audit import (
+    SequenceModel,
     audit_context,
     filled_report,
     model_bundle,
@@ -16,8 +17,9 @@ from tests.helpers.audit import (
 
 
 class ReportModel:
-    def __init__(self, rules, fail_file=None):
+    def __init__(self, rules, fail_file=None, completion="处理完毕"):
         self.rules, self.fail_file = rules, fail_file
+        self.completion = completion
         self.calls = []
         self.active = self.peak = 0
 
@@ -34,7 +36,9 @@ class ReportModel:
         if self.fail_file and self.fail_file in human:
             raise RuntimeError("模型服务不可用")
         if any(m.type == "tool" for m in messages):
-            return AIMessage(content="处理完毕")
+            return AIMessage(
+                content=self.completion, response_metadata={"finish_reason": "stop"}
+            )
         return tool_response(
             "report_document",
             {"action": "write", "content": filled_report(self.rules), "edits": None},
@@ -42,12 +46,16 @@ class ReportModel:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "completion",
+    ["处理完毕", "本文件审核完成，报告已保存。", "Report saved.\n处理完毕"],
+)
 async def test_each_file_uses_independent_messages_and_report(
-    monkeypatch, temp_settings
+    monkeypatch, temp_settings, completion
 ):
     monkeypatch.setattr("app.graph.audit_task_graph.verify_indexes", lambda *args: {})
     context = audit_context(2)
-    model = ReportModel(context.rule_set)
+    model = ReportModel(context.rule_set, completion=completion)
     result = await LangGraphAuditExecutor(temp_settings, model_bundle(model)).run(
         context
     )
@@ -85,12 +93,48 @@ async def test_failed_file_preserves_draft_and_other_file(monkeypatch, temp_sett
 
 
 @pytest.mark.asyncio
-async def test_completion_without_saved_report_is_failure(monkeypatch, temp_settings):
-    from tests.helpers.audit import SequenceModel
-
+@pytest.mark.parametrize("completion", ["处理完毕", "本文件审核完成，报告已保存。"])
+async def test_completion_without_saved_report_is_failure(
+    monkeypatch, temp_settings, completion
+):
     monkeypatch.setattr("app.graph.audit_task_graph.verify_indexes", lambda *args: {})
     result = await LangGraphAuditExecutor(
-        temp_settings, model_bundle(SequenceModel(["处理完毕"]))
+        temp_settings, model_bundle(SequenceModel([completion]))
     ).run(audit_context())
     assert not result.file_results
     assert "报告未完成" in result.file_errors["bid-1"]
+
+
+@pytest.mark.asyncio
+async def test_completion_does_not_hide_failed_report_write(monkeypatch, temp_settings):
+    monkeypatch.setattr("app.graph.audit_task_graph.verify_indexes", lambda *args: {})
+    context = audit_context()
+    model = SequenceModel(
+        [
+            tool_response(
+                "report_document",
+                {
+                    "action": "write",
+                    "content": filled_report(context.rule_set),
+                    "edits": None,
+                },
+                "saved",
+            ),
+            tool_response(
+                "report_document",
+                {"action": "write", "content": "缺失规定章节的报告", "edits": None},
+                "invalid",
+            ),
+            "本批审核结束，报告已保存。",
+        ]
+    )
+    result = await LangGraphAuditExecutor(temp_settings, model_bundle(model)).run(
+        context
+    )
+    assert not result.file_results
+    assert "类别或规则集合/顺序须与当前骨架一致" in result.file_errors["bid-1"]
+    root = temp_settings.storage.data_root / "outputs/audit-1"
+    assert not (root / "bid-1_result.json").exists()
+    state = json.loads((root / "drafts/bid-1.state.json").read_text())
+    assert state["next_unit_index"] == 0
+    assert (root / "drafts/bid-1.md").read_text() == filled_report(context.rule_set)

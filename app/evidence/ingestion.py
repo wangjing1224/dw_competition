@@ -125,13 +125,15 @@ def _check_completion(final, session):
     if session.unresolved_write_error:
         raise RuntimeError("资料保存尚未成功：" + session.unresolved_write_error)
     response = final["messages"][-1]
+    if getattr(response, "invalid_tool_calls", None):
+        raise RuntimeError("模型返回无法解析的工具调用，当前阅读范围未完成")
+    if getattr(response, "tool_calls", None):
+        raise RuntimeError("模型仍有待执行的工具调用，当前阅读范围未完成")
     if response.response_metadata.get("finish_reason") not in (None, "stop"):
         raise RuntimeError("模型未正常完成当前阅读范围")
-    if (
-        not isinstance(response.content, str)
-        or response.content.strip().rstrip("。.!！") != "处理完毕"
-    ):
-        raise RuntimeError(f"当前阅读范围未完成：{response.content}")
+    # 收尾措辞不作为成功信号；保存错误在此阻断，文件结束时还须校验实际保存的摘要。
+    if not isinstance(response.content, str) or not response.content.strip():
+        raise RuntimeError("模型未返回非空处理结果")
 
 
 async def _run_file(session, *, model, retrieval, progress, checkpoint):
@@ -300,7 +302,7 @@ async def _run_file(session, *, model, retrieval, progress, checkpoint):
         cursor = batch.end
         close_scope(session, "batch")
     if not any(item.file_id == session.file_id for item in session.library.materials):
-        raise RuntimeError("当前文件没有已保存结果，不能只凭处理完毕发布空资料")
+        raise RuntimeError("当前文件没有已保存结果，不能发布空资料")
 
 
 async def ingest_evidence_documents(

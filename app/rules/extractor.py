@@ -296,14 +296,15 @@ def _check_batch_completion(final, session):
         raise RuntimeError("规则提交尚未成功：" + session.unresolved_write_error)
     if getattr(response, "invalid_tool_calls", None):
         raise RuntimeError("模型返回无法解析的工具调用，当前文件未完成")
+    if getattr(response, "tool_calls", None):
+        raise RuntimeError("模型仍有待执行的工具调用，当前文件未完成")
     if response.response_metadata.get("finish_reason") == "length":
         raise RuntimeError("模型输出被截断，当前文件未完成")
-    # 不新造收尾 JSON；仅接受约定的普通文本完成信号，不把任意无工具回复当成功。
-    if (
-        not isinstance(response.content, str)
-        or response.content.strip().rstrip("。.!！") != "处理完毕"
-    ):
-        raise RuntimeError(f"当前文件未完成：{response.content}")
+    if response.response_metadata.get("finish_reason") not in (None, "stop"):
+        raise RuntimeError("模型未正常完成当前阅读范围")
+    # 普通文本仅作处理说明；是否允许推进由正常结束和提交状态决定，不匹配固定结束语。
+    if not isinstance(response.content, str) or not response.content.strip():
+        raise RuntimeError("模型未返回非空处理结果")
 
 
 async def extract_rule_set(
