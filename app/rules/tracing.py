@@ -11,8 +11,10 @@ from app.llm.agent_tracing import (
 __all__ = ["invoke_rule_model", "invoke_rule_tool", "trace_payload"]
 
 
-async def invoke_rule_model(runnable, messages, tools, context, **call_options):
+async def invoke_rule_model(
+    runnable, messages, tools, context, *, trace_name="rule_model", **call_options
+):
     """保持规则 Agent 原有的 Trace 名称，实际消息处理共用。"""
     return await invoke_agent_model(
-        runnable, messages, tools, context, trace_name="rule_model", **call_options
+        runnable, messages, tools, context, trace_name=trace_name, **call_options
     )

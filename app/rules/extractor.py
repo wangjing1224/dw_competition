@@ -22,6 +22,7 @@ from app.llm.context_compaction import (
 from app.llm.factory import budgeted_generation_options
 from app.llm.input_budget import plan_document_input
 from app.llm.model_capabilities import get_model_capabilities
+from app.llm.model_diagnostics import budget_diagnostics
 from app.llm.token_counter import get_token_counter
 from app.models.documents import ParsedDocument
 from app.models.rules import RuleExtractionProgress, RuleSet, RuleSourceFile
@@ -212,12 +213,17 @@ async def _run_file(*, model, session, settings):
                     + build_rule_view(session.rule_set)
                 )
 
-                async def invoke_summary(context, allowance):
+                async def invoke_summary(context, allowance, *, step=step):
                     return await invoke_rule_model(
                         model,
                         list(context.messages),
                         [],
                         trace_context,
+                        trace_name="rule_compaction",
+                        diagnostic_context={
+                            **budget_diagnostics(controller),
+                            "turn_index": step,
+                        },
                         **budgeted_generation_options(model_settings, allowance),
                     )
 
@@ -242,7 +248,9 @@ async def _run_file(*, model, session, settings):
                     decision = controller.check(rebuilt)
                     observation["output"] = {
                         "before_tokens": signal.decision.estimate.total,
-                        "after_tokens": decision.estimate.total if decision.estimate else None,
+                        "after_tokens": decision.estimate.total
+                        if decision.estimate
+                        else None,
                         "counter_method": signal.decision.estimate.method,
                     }
                 session.compaction_records.append(

@@ -30,6 +30,7 @@ from app.llm.context_compaction import (
 from app.llm.factory import budgeted_generation_options
 from app.llm.input_budget import check_input, plan_document_input
 from app.llm.model_capabilities import get_model_capabilities
+from app.llm.model_diagnostics import budget_diagnostics
 from app.llm.token_counter import get_token_counter
 from app.models.evidence import (
     EvidenceIngestionProgress,
@@ -223,7 +224,7 @@ async def _run_file(session, *, model, retrieval, progress, checkpoint):
                 compacted_step = step
                 progress.compaction_calls += 1
 
-                async def invoke_summary(summary_context, allowance):
+                async def invoke_summary(summary_context, allowance, *, step=step):
                     with trace_scope(
                         session, "compaction", "上下文压缩"
                     ) as observation:
@@ -232,6 +233,12 @@ async def _run_file(session, *, model, retrieval, progress, checkpoint):
                             list(summary_context.messages),
                             [],
                             trace_context,
+                            trace_name="evidence_ingestion_compaction",
+                            diagnostic_context={
+                                **budget_diagnostics(controller),
+                                "batch_index": progress.batch_index,
+                                "turn_index": step,
+                            },
                             **budgeted_generation_options(model_settings, allowance),
                         )
                         observation["summary"] = "已生成当前阅读范围的工作交接"

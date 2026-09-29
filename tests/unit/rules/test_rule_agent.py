@@ -1,5 +1,6 @@
 """真实图/工具闭环配合脚本模型，不连接外部模型。"""
 
+import json
 from io import BytesIO
 from math import ceil
 from types import SimpleNamespace
@@ -30,6 +31,7 @@ from app.models.rules import (
 from app.parsers.assets import AssetStore, file_asset_root
 from app.retrieval.models import SearchResult
 from app.rules.extractor import extract_rule_set
+from app.rules.local_trace import LocalTrace, current_trace
 from app.storage.database import initialize_database
 from app.tools.common_tools import CommonTool
 from app.tools.rule_tools import RuleSession, build_rule_tools
@@ -613,6 +615,125 @@ async def test_truncation_or_unprocessed_reply_cannot_finish(env):
     ]:
         with pytest.raises(RuntimeError):
             await extract(env, ScriptModel([response]), [parsed_file(1)])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason", ["length", "tool_calls"])
+async def test_diagnostics_log_invalid_arguments_without_retry_or_partial_write(
+    env, caplog, monkeypatch, finish_reason
+):
+    caplog.set_level("INFO", logger="app.llm.agent_tracing")
+    raw = '{"operations":[{"requirement":"' + "不应泄漏的材料内容" * 3000
+    response = AIMessage(
+        content="",
+        invalid_tool_calls=[
+            {
+                "name": "submit_rule_delta",
+                "id": "bad",
+                "args": raw,
+                "error": "invalid JSON",
+            }
+        ],
+        response_metadata={"finish_reason": finish_reason},
+        usage_metadata={
+            "input_tokens": 60000,
+            "output_tokens": 8192,
+            "total_tokens": 68192,
+        },
+    )
+    model = ScriptModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    tool_call(
+                        "submit_rule_delta",
+                        "saved",
+                        submit_args([add_operation()], view="changed"),
+                    )
+                ],
+            ),
+            response,
+        ]
+    )
+    trace = LocalTrace("project-1")
+    monkeypatch.setattr(trace, "write", lambda node, detail: None)
+    token = current_trace.set(trace)
+    try:
+        with pytest.raises(RuntimeError, match="无法解析的工具调用"):
+            await extract(env, model, [parsed_file(1)])
+    finally:
+        current_trace.reset(token)
+    assert len(model.calls) == 2  # 只加诊断，不产生任何自动重试。
+    logs = [r for r in caplog.records if r.name == "app.llm.agent_tracing"]
+    requests = [
+        json.loads(r.getMessage().split(" ", 1)[1])
+        for r in logs
+        if r.getMessage().startswith("agent_model_request ")
+    ]
+    responses = [r for r in logs if r.getMessage().startswith("agent_model_response ")]
+    request = requests[-1]
+    result = json.loads(responses[-1].getMessage().split(" ", 1)[1])
+    assert request["generation_limits"] == {
+        k: v
+        for k, v in model.options[-1].items()
+        if k in {"max_tokens", "max_completion_tokens"}
+    }
+    assert request["estimated_input_tokens"] > 0
+    assert result["project_id"] == "project-1" and result["file_id"] == "file-1"
+    assert result["batch_index"] == 1 and result["turn_index"] == 2
+    assert result["finish_reason"] == finish_reason and result["output_tokens"] == 8192
+    assert result["invalid_tool_calls"][0]["arguments_chars"] == len(raw)
+    assert responses[-1].levelname == "WARNING"
+    assert all("不应泄漏" not in r.getMessage() for r in logs)
+    model_span = next(
+        sid
+        for sid, node in trace.nodes.items()
+        if node["kind"] == "model" and node["turn_index"] == 2
+    )
+    assert trace.details[model_span]["output"]["diagnostics"] == result
+    assert trace.details[model_span]["input"]["turn_index"] == request["turn_index"]
+    path = env.storage.data_root / "parsed/rules/project-1.progress.json"
+    progress = RuleExtractionProgress.model_validate_json(path.read_text())
+    assert len(progress.rule_set.rules) == 1 and len(progress.commits) == 1
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_failures_do_not_break_successful_response(
+    env, monkeypatch, caplog
+):
+    caplog.set_level("INFO", logger="app.llm.agent_tracing")
+
+    def fail(response):
+        raise ValueError("unexpected diagnostics input")
+
+    monkeypatch.setattr("app.llm.agent_tracing.response_diagnostics", fail)
+    model = ScriptModel([AIMessage(content="处理完毕")])
+    await extract(env, model, [parsed_file(1)])
+    assert len(model.calls) == 1
+    assert '"diagnostics_error": "ValueError"' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_failed_model_call_is_logged_and_not_retried(env, caplog):
+    caplog.set_level("INFO", logger="app.llm.agent_tracing")
+
+    class FailedModel(ScriptModel):
+        async def invoke(self, messages, tools):
+            self.calls.append((messages, tools))
+            raise TimeoutError("sk-secret123456")
+
+    model = FailedModel([])
+    with pytest.raises(TimeoutError):
+        await extract(env, model, [parsed_file(1)])
+    assert len(model.calls) == 1
+    entries = [
+        r.getMessage() for r in caplog.records if r.name == "app.llm.agent_tracing"
+    ]
+    assert any(
+        "agent_model_call_failed" in msg and "TimeoutError" in msg for msg in entries
+    )
+    assert not any("sk-secret" in msg for msg in entries)
 
 
 @pytest.mark.asyncio

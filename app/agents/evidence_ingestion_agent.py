@@ -8,6 +8,7 @@ from app.llm.agent_tracing import invoke_agent_model
 from app.llm.context_compaction import InputBudgetError, NeedsCompaction
 from app.llm.factory import budgeted_generation_options
 from app.llm.input_budget import InputContext
+from app.llm.model_diagnostics import budget_diagnostics
 from app.llm.platforms import ChatProtocol
 from app.prompts.loader import render_prompt
 
@@ -73,11 +74,20 @@ async def evidence_ingestion_node(
     runnable = model if step == max_steps else model.bind_tools(tools)
     session.model_calls = step
     session.file_model_calls += 1
+    request_diagnostics = {
+        **budget_diagnostics(controller),
+        "bidder_id": session.library.bidder_id,
+        "file_id": session.file_id,
+        "batch_index": session.batch_index,
+        "turn_index": step,
+    }
+    diagnostics = {}
     with trace_scope(
         session,
         "model",
         "模型调用",
         input={
+            **request_diagnostics,
             "model": controller.settings.model,
             "tools": [tool.name for tool in tools] if step < max_steps else [],
         },
@@ -87,10 +97,17 @@ async def evidence_ingestion_node(
             list(context.messages),
             [] if step == max_steps else tools,
             trace_context,
+            trace_name="evidence_ingestion",
+            diagnostic_context=request_diagnostics,
+            diagnostics=diagnostics,
             **budgeted_generation_options(controller.settings, tokens),
         )
         observation.update(
-            output={"content": response.content, "tool_calls": response.tool_calls},
+            output={
+                "content": response.content,
+                "tool_calls": response.tool_calls,
+                "diagnostics": diagnostics,
+            },
             summary="本轮返回工具调用" if response.tool_calls else "本轮返回正文",
         )
     controller.observe(context, response)

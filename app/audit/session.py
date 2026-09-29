@@ -19,6 +19,7 @@ from app.llm.context_compaction import (
 from app.llm.factory import budgeted_generation_options
 from app.llm.input_budget import InputContext
 from app.llm.model_capabilities import get_model_capabilities
+from app.llm.model_diagnostics import budget_diagnostics
 from app.llm.platforms import ChatProtocol
 from app.llm.token_counter import get_token_counter
 from app.prompts.loader import render_prompt
@@ -112,6 +113,7 @@ async def audit_agent_node(
             active_tools,
             trace_context,
             trace_name=role,
+            diagnostic_context={**budget_diagnostics(controller), "turn_index": step},
             **budgeted_generation_options(
                 controller.settings, controller.output_tokens(context)
             ),
@@ -269,7 +271,7 @@ async def run_session(
                 ) from signal
             compacted_steps.add(step)
 
-            async def invoke(context, tokens):
+            async def invoke(context, tokens, *, step=step):
                 async with limiter:
                     return await invoke_agent_model(
                         model,
@@ -277,6 +279,10 @@ async def run_session(
                         [],
                         trace_context,
                         trace_name=role + "_compaction",
+                        diagnostic_context={
+                            **budget_diagnostics(controller),
+                            "turn_index": step,
+                        },
                         **budgeted_generation_options(settings, tokens),
                     )
 

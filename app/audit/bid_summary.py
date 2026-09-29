@@ -11,6 +11,7 @@ from app.llm.context_compaction import InputBudgetError
 from app.llm.errors import InvalidStructuredOutput
 from app.llm.factory import budgeted_generation_options
 from app.llm.input_budget import InputContext, plan_document_input
+from app.llm.model_diagnostics import budget_diagnostics
 from app.llm.platforms import ChatProtocol
 from app.llm.structured_output import extract_json_value
 from app.models.documents import BidDocumentSummary, BidRouteDecision
@@ -78,6 +79,12 @@ async def summarize_and_route_bid_document(
                 [],
                 trace_context or {},
                 trace_name="bid_route",
+                diagnostic_context={
+                    **budget_diagnostics(controller),
+                    "file_id": parsed.document.file_id,
+                    "project_id": rule_set.project_id,
+                    "attempt": attempt + 1,
+                },
                 **budgeted_generation_options(model_settings, tokens),
             )
         controller.observe(context, response)

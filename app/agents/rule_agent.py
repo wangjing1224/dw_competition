@@ -6,6 +6,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from app.llm.context_compaction import InputBudgetError, NeedsCompaction
 from app.llm.factory import budgeted_generation_options
 from app.llm.input_budget import InputContext
+from app.llm.model_diagnostics import budget_diagnostics
 from app.llm.platforms import ChatProtocol
 from app.prompts.loader import render_prompt
 from app.rules.local_trace import current_trace, trace_scope
@@ -73,22 +74,34 @@ async def rule_agent_node(
     runnable = model if step == max_steps else model.bind_tools(tools)
     session.model_calls = step
     session.file_model_calls += 1
+    call_options = budgeted_generation_options(controller.settings, tokens)
+    location = {
+        "project_id": session.rule_set.project_id,
+        "file_id": session.current.document.file_id,
+        "batch_index": session.batch_index,
+        "turn_index": step,
+    }
+    request_diagnostics = {
+        **budget_diagnostics(controller),
+        **location,
+        "tools_enabled": step < max_steps,
+        "tool_names": [tool.name for tool in tools] if step < max_steps else [],
+    }
+    diagnostics = {}
     with trace_scope(
         session,
         "model",
         "模型调用",
-        input={
-            "model_name": controller.settings.model,
-            "tools_enabled": step < max_steps,
-            "tool_names": [tool.name for tool in tools] if step < max_steps else [],
-        },
+        input=request_diagnostics,
     ) as observation:
         response = await invoke_rule_model(
             runnable,
             list(context.messages),
             [] if step == max_steps else tools,
             trace_context,
-            **budgeted_generation_options(controller.settings, tokens),
+            diagnostic_context=request_diagnostics,
+            diagnostics=diagnostics,
+            **call_options,
         )
         observation["output"] = {
             "content": response.content,
@@ -97,6 +110,7 @@ async def rule_agent_node(
                 for c in response.tool_calls
             ],
             "finish_reason": response.response_metadata.get("finish_reason"),
+            "diagnostics": diagnostics,
         }
     if not response.tool_calls and current_trace.get():
         current_trace.get().close_scope(session, "turn")

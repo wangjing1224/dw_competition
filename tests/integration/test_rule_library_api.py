@@ -510,6 +510,22 @@ async def test_real_pipeline_records_serial_tools_and_successful_commits(env):
             "model_name",
             "tools_enabled",
             "tool_names",
+            "platform",
+            "thinking_enabled",
+            "estimated_input_tokens",
+            "estimate_method",
+            "context_window_tokens",
+            "input_threshold_tokens",
+            "project_id",
+            "file_id",
+            "batch_index",
+            "turn_index",
         }
+        diagnostics = model_detail["output"]["diagnostics"]
+        assert diagnostics["project_id"] == pid
+        assert diagnostics["role"] == "rule_model"
+        assert diagnostics["generation_limits"]
+        assert diagnostics["estimated_input_tokens"] > 0
+        assert diagnostics["output_tokens"] is None  # Mock 未提供用量，不填 0。
         assert "不得展示的隐藏推理" not in str(model_detail)
     assert events["trace_status"] == "completed"
