@@ -1,3 +1,44 @@
+.audit-context-toolbar {
+  justify-content: flex-start;
+  .audit-file-selector {
+    flex: 0 1 500px;
+    width: 100%;
+    min-width: min(260px, 100%);
+  }
+  .audit-context-bindings {
+    flex: 1;
+    min-width: 180px;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .audit-context-count {
+    margin-left: auto;
+    white-space: nowrap;
+  }
+}
+.audit-record-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.audit-record-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+@media (max-width: 700px) {
+  .audit-context-toolbar {
+    .audit-file-selector {
+      flex-basis: 100%;
+      max-width: none;
+    }
+    .audit-context-bindings {
+      flex-basis: 100%;
+      min-width: 0;
+    }
+  }
+}
 .audit-overview {
   margin: 18px 0;
   padding: 18px 22px 12px;

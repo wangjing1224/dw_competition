@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import { App } from 'antd';
+import { App, Grid } from 'antd';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -48,6 +48,7 @@ vi.mock('@umijs/max', () => ({
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   sessionStorage.clear();
 });
 const file: AuditFile = {
@@ -465,6 +466,74 @@ describe('审核工作区', () => {
     expect(
       screen.getByRole('button', { name: '查看处理过程' }),
     ).toBeInTheDocument();
+  });
+  it('手动切换视图清空轨迹详情和高亮，标签跟随文件选择放在同一工具栏', async () => {
+    vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ lg: true });
+    const fetch = mockApi();
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    await screen.findByText('当前文件 · 已观测');
+    const toolbar = screen
+      .getByRole('combobox', { name: '当前投标文件' })
+      .closest('.audit-context-toolbar');
+    expect(toolbar?.textContent).toContain('规则库 · 规则库甲');
+    expect(toolbar?.textContent).toContain('资料库 · 资料甲');
+    expect(screen.getAllByText('规则库 · 规则库甲')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('radio', { name: '轨迹树' }));
+    fireEvent.click(screen.getByText('模型调用'));
+    expect(await screen.findByText('已调用工具')).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: '节点详情' }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: '流程图' }));
+    expect(
+      screen.queryByRole('region', { name: '节点详情' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Agent 图' }));
+    expect(
+      screen.queryByRole('region', { name: '节点详情' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: '轨迹树' }));
+    expect(
+      screen.queryByRole('region', { name: '节点详情' }),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector('.ant-tree-node-selected')).toBeNull();
+    expect(
+      fetch.mock.calls.filter(([url]) => url.includes('/progress')),
+    ).toHaveLength(1);
+  });
+  it('执行记录顶部显示短日期，跨天切换日期，表格只保留时分秒', async () => {
+    const days = [
+      { ...span('old'), title: '昨日调用', started_at: '2026-09-29T10:30:00' },
+      { ...span('new'), title: '今日调用', started_at: '2026-09-30T10:30:00' },
+    ];
+    mockApi((url) =>
+      url.includes('/progress') ? progressData(days) : undefined,
+    );
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    await screen.findByText('当前文件 · 已观测');
+    fireEvent.click(screen.getByRole('button', { name: '执行记录' }));
+    await screen.findByRole('combobox', { name: '记录日期' });
+    const table = screen.getByRole('table');
+    expect(table.textContent).toContain('今日调用');
+    expect(table.textContent).not.toContain('昨日调用');
+    expect(table.textContent).not.toContain('2026');
+    expect(table.querySelector('time')?.textContent).toBe('10:30:00');
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '记录日期' }));
+    fireEvent.click(
+      await screen.findByText('2026/09/29', {
+        selector: '.ant-select-item-option-content',
+      }),
+    );
+    await waitFor(() => expect(table.textContent).toContain('昨日调用'));
+    expect(table.textContent).not.toContain('今日调用');
   });
   it('无法确定说明保留原始原因，Word失败不会禁用其他格式', async () => {
     const data = excluded('uncertain');

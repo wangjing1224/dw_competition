@@ -27,6 +27,7 @@ export default function GraphCanvas({
   const host = useRef<HTMLElement>(null);
   const behavior = useRef<ZoomBehavior<HTMLElement, unknown>>(undefined);
   const bounds = useRef({ width: 1, height: 1 });
+  const viewport = useRef({ width: 0, height: 0 });
   const [transform, setTransform] = useState<ZoomTransform>(zoomIdentity);
   const marker = useId().replace(/:/g, '');
   bounds.current = {
@@ -36,18 +37,19 @@ export default function GraphCanvas({
   const fitCanvas = () => {
     const el = host.current,
       z = behavior.current;
-    if (!el || !z || !el.clientWidth) return;
+    if (!el || !z || !el.clientWidth || !el.clientHeight) return;
     const { width, height } = bounds.current;
     const k = Math.min(
       1.1,
       Math.max(
-        0.6,
+        0.1,
         Math.min(
           (el.clientWidth - 40) / width,
           (el.clientHeight - 40) / height,
         ),
       ),
     );
+    viewport.current = { width: el.clientWidth, height: el.clientHeight };
     select(el).call(
       z.transform,
       zoomIdentity
@@ -62,7 +64,7 @@ export default function GraphCanvas({
     const el = host.current;
     if (!el) return;
     const z = zoom<HTMLElement, unknown>()
-      .scaleExtent([0.35, 1.8])
+      .scaleExtent([0.1, 1.8])
       .extent((): [[number, number], [number, number]] => [
         [0, 0],
         [el.clientWidth, el.clientHeight],
@@ -76,16 +78,16 @@ export default function GraphCanvas({
       .on('zoom', (event) => setTransform(event.transform));
     behavior.current = z;
     select(el).call(z).on('dblclick.zoom', null);
-    let fitted = false;
     const resize = () => {
+      // 详情开关/窗口改变后按实际可用面积重新适配。隐藏页签的 0 尺寸不覆盖
+      // 上次尺寸，普通轮询和同尺寸切页签不抹掉手动平移、缩放。
       if (
-        !fitted &&
         el.clientWidth &&
         el.clientHeight &&
-        bounds.current.width > 1
+        (el.clientWidth !== viewport.current.width ||
+          el.clientHeight !== viewport.current.height)
       ) {
         fitCanvas();
-        fitted = true;
       }
     };
     const observer = new ResizeObserver(resize);
@@ -102,6 +104,8 @@ export default function GraphCanvas({
       z = behavior.current;
     if (!node || !el || !z || !el.clientWidth) return;
     // 双向定位只在显式导航时居中；轮询更新不重置用户的视口。
+    // 同步尺寸，避免随后同尺寸的 ResizeObserver 通知覆盖这次显式定位。
+    viewport.current = { width: el.clientWidth, height: el.clientHeight };
     const k = 1;
     select(el).call(
       z.transform,
@@ -235,8 +239,12 @@ export default function GraphCanvas({
                   />
                   {edge.label && (
                     <text
-                      x={mid + 8}
-                      y={y2 === y1 ? y1 - 12 : y2 - 12}
+                      x={mid}
+                      y={(y1 + y2) / 2 - 12}
+                      textAnchor="middle"
+                      paintOrder="stroke"
+                      stroke="#f8faff"
+                      strokeWidth={4}
                       fill={edge.active ? '#2460ed' : '#8291a9'}
                       fontSize="12"
                     >

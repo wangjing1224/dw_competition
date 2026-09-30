@@ -138,15 +138,19 @@ function FileWorkspace({
     onNavigate('tree', id);
   };
   const changeView = (next: View) => {
-    if (selection?.type !== 'span') setSelection(undefined);
-    onNavigate(next, selection?.type === 'span' ? selection.id : undefined);
+    // 手动切页签不携带其他视图的详情；显式“在图中定位”由 locate 单独处理。
+    setSelection(undefined);
+    setFocus(undefined);
+    onNavigate(next);
   };
   const close = () => {
     setSelection(undefined);
+    setFocus(undefined);
     onNavigate(view);
   };
   const selectFlow = (id: string) => {
     setSelection({ type: 'flow', id });
+    setFocus(undefined);
     onNavigate('flow');
   };
   const locate = (id: string) => {
@@ -219,10 +223,11 @@ function FileWorkspace({
       {!file && !error && <Spin />}
       {file && progress && (
         <>
-          <Binding file={file} />
-          <div className="section-gap">
-            <FileErrors file={file} />
-          </div>
+          {(file.error || file.export_error) && (
+            <div className="section-gap">
+              <FileErrors file={file} />
+            </div>
+          )}
           <ExecutionOverview
             task={taskId}
             file={file}
@@ -385,7 +390,7 @@ function Workspace({ taskId }: { taskId: string }) {
       {!data && !initial.error && <Spin />}
       {data && (
         <>
-          <div className="audit-toolbar">
+          <div className="audit-toolbar audit-context-toolbar">
             <Select
               aria-label="当前投标文件"
               className="audit-file-selector"
@@ -396,7 +401,12 @@ function Workspace({ taskId }: { taskId: string }) {
                 label: fileLabel(f.file_id, data.files),
               }))}
             />
-            <span className="audit-muted">
+            {file && (
+              <div className="audit-context-bindings">
+                <Binding file={file} />
+              </div>
+            )}
+            <span className="audit-muted audit-context-count">
               {data.task.finished_files} / {data.task.total_files} 份文件已结束
             </span>
           </div>
