@@ -1,6 +1,4 @@
 import { Link, useParams, useSearchParams } from '@umijs/max';
-import EntityLabel from '@/components/EntityLabel';
-import { fileLabel, ruleLabels } from '@/utils/displayLabels';
 import {
   Alert,
   Button,
@@ -14,30 +12,36 @@ import {
   Tag,
 } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
+import EntityLabel from '@/components/EntityLabel';
 import SourcePreview from '@/components/SourcePreview';
-import { PageHeading, Failure } from '@/pages/RuleLibraries/shared';
+import { Failure, PageHeading } from '@/pages/RuleLibraries/shared';
+import type { Finding, ReportData, TaskDetail } from '@/services/auditTasks';
+import {
+  api,
+  downloadFile,
+  fileUrl,
+  orderedFindings,
+  resultColors,
+  resultLabels,
+} from '@/services/auditTasks';
 import {
   categories,
   priorities,
   verifications,
 } from '@/services/ruleLibraries';
+import { fileLabel, ruleLabels } from '@/utils/displayLabels';
+import { reportBranch } from '../Progress/graphModel';
 import {
-  api,
-  fileUrl,
-  orderedFindings,
-  resultColors,
-  resultLabels,
-  downloadFile,
-} from '@/services/auditTasks';
-import type { Finding, ReportData, TaskDetail } from '@/services/auditTasks';
-import {
-  useRemote,
-  Status,
-  Download,
   Binding,
+  Download,
   FileErrors,
   Markdown,
+  Status,
+  useRemote,
 } from '../shared';
+import ApplicabilityReport, {
+  ExplanationDownloads,
+} from './ApplicabilityReport';
 
 function Charts({ data }: { data: ReportData }) {
   if (!data.counts || !data.result) return null;
@@ -123,7 +127,17 @@ function Charts({ data }: { data: ReportData }) {
     </section>
   );
 }
-function ReportFile({ taskId, fileId }: { taskId: string; fileId: string }) {
+function ReportFile({
+  taskId,
+  fileId,
+  files,
+  onFile,
+}: {
+  taskId: string;
+  fileId: string;
+  files: TaskDetail['files'];
+  onFile: (id: string) => void;
+}) {
   const [params, setParams] = useSearchParams();
   const view = params.get('view') === 'rules' ? 'rules' : 'overview';
   const category = params.get('category') || 'all';
@@ -178,32 +192,81 @@ function ReportFile({ taskId, fileId }: { taskId: string; fileId: string }) {
         ]),
       ]
     : [];
-  if (error && !data) return <Failure error={error} retry={reload} />;
-  if (!data) return <Spin />;
+  const fileSelector = (
+    <Select
+      aria-label="切换报告文件"
+      className="audit-file-selector"
+      value={fileId}
+      onChange={onFile}
+      options={files.map((f) => ({
+        value: f.file_id,
+        label: fileLabel(f.file_id, files),
+      }))}
+    />
+  );
+  const processLink = (
+    <Link to={`${fileUrl(taskId, fileId, 'progress')}&view=flow`}>
+      <Button>查看处理过程</Button>
+    </Link>
+  );
+  if (!data)
+    return (
+      <>
+        <div className="audit-toolbar">
+          {fileSelector}
+          {processLink}
+        </div>
+        {error ? <Failure error={error} retry={reload} /> : <Spin />}
+      </>
+    );
+  if (data.file.file_id !== fileId)
+    return (
+      <>
+        <div className="audit-toolbar">
+          {fileSelector}
+          {processLink}
+        </div>
+        <Alert type="error" title="报告归属不符，已阻止展示" />
+      </>
+    );
+  const branch = reportBranch(data);
+  const explanation = branch === 'not_matched' || branch === 'uncertain';
   return (
     <>
       {error && <Failure error={error} retry={reload} />}
       <div className="audit-toolbar">
-        <Binding file={data.file} />
+        {fileSelector}
         <Space wrap>
           <Button onClick={() => setSource(fileId)}>查看解析原文</Button>
-          <Download
-            url={data.file.outputs.word_url}
-            name={`${data.file.file_name}-审核报告.docx`}
-            label="下载 Word"
-          />
-          <Download
-            url={data.file.outputs.md_url}
-            name={`${fileId}-审核报告.md`}
-            label="导出 Markdown"
-          />
-          <Download
-            url={data.file.outputs.json_url}
-            name={`${fileId}-审核报告.json`}
-            label="导出 JSON"
-          />
+          {processLink}
+          {explanation ? (
+            <ExplanationDownloads data={data} />
+          ) : (
+            <>
+              <Download
+                url={data.file.outputs.word_url}
+                name={`${data.file.file_name}-审核报告.docx`}
+                label="下载 Word"
+              />
+              <Download
+                url={data.file.outputs.md_url}
+                name={`${fileId}-审核报告.md`}
+                label="导出 Markdown"
+              />
+              <Download
+                url={data.file.outputs.json_url}
+                name={`${fileId}-审核报告.json`}
+                label="导出 JSON"
+              />
+            </>
+          )}
         </Space>
       </div>
+      {!explanation && (
+        <div className="section-gap">
+          <Binding file={data.file} />
+        </div>
+      )}
       <FileErrors file={data.file} />
       {data.document.kind !== 'final' ? (
         <Card title="已保存内容">
@@ -221,20 +284,14 @@ function ReportFile({ taskId, fileId }: { taskId: string; fileId: string }) {
             <Empty description="请查看执行过程与错误详情" />
           )}
         </Card>
-      ) : !data.result?.is_applicable ? (
-        <Card title="项目适用性判断">
-          <Tag color="orange">
-            {resultLabels[data.result?.overall_conclusion || ''] ||
-              '未进入自动审核'}
-          </Tag>
-          <p>
-            {data.result?.exclusion_reason || data.result?.project_match.reason}
-          </p>
-          <Alert
-            type="info"
-            title="此文件未进入规则审核，不生成规则结论统计图。"
-          />
-        </Card>
+      ) : branch === 'invalid' || !data.result ? (
+        <Alert
+          type="error"
+          title="正式结果缺失或状态不一致，无法确认审核结论"
+          description="请查看处理过程；不会将数据读取异常判定为项目不匹配。"
+        />
+      ) : explanation ? (
+        <ApplicabilityReport data={data} uncertain={branch === 'uncertain'} />
       ) : (
         <>
           <div className="audit-toolbar">
@@ -457,7 +514,12 @@ export default function AuditReport() {
     <div className="business-page audit-page">
       <PageHeading
         title={
-          file ? (
+          file &&
+          ['not_matched', 'uncertain'].includes(
+            file.route?.match_status || '',
+          ) ? (
+            '项目适用性说明'
+          ) : file ? (
             <EntityLabel id={file.file_id}>{file.file_name}</EntityLabel>
           ) : (
             '审核报告'
@@ -470,35 +532,16 @@ export default function AuditReport() {
         }
         backTo="/audit-tasks"
         backLabel="返回审核任务"
-        actions={
-          <Space>
-            {file && <Status value={file.status} />}
-            {file && (
-              <Link to={fileUrl(taskId, file.file_id, 'progress')}>
-                <Button>查看处理过程</Button>
-              </Link>
-            )}
-          </Space>
-        }
+        actions={<Space>{file && <Status value={file.status} />}</Space>}
       />
       {error && <Failure error={error} retry={reload} />}
-      <div className="audit-toolbar">
-        <Select
-          aria-label="切换报告文件"
-          className="audit-file-selector"
-          value={file?.file_id}
-          onChange={(v) => setParams({ file: v })}
-          options={data?.files.map((f) => ({
-            value: f.file_id,
-            label: fileLabel(f.file_id, data.files),
-          }))}
-        />
-      </div>
       {file ? (
         <ReportFile
           key={`${taskId}/${file.file_id}`}
           taskId={taskId}
           fileId={file.file_id}
+          files={data?.files || []}
+          onFile={(id) => setParams({ file: id })}
         />
       ) : !data && !error ? (
         <Spin />

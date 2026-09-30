@@ -1,0 +1,141 @@
+.audit-applicability-result {
+  display: flex;
+  justify-content: space-between;
+  gap: 28px;
+  align-items: center;
+  padding: 28px 32px;
+  margin: 24px 0;
+  background: linear-gradient(110deg, #fffaf1, #fffefd);
+  border: 1px solid #ffe8be;
+  border-left: 4px solid #efb451;
+  border-radius: 12px;
+}
+.audit-applicability-message {
+  display: flex;
+  gap: 20px;
+  min-width: 0;
+  > .anticon {
+    font-size: 28px;
+    color: #efad3e;
+    margin-top: 5px;
+  }
+  h2 {
+    font-size: 25px;
+    line-height: 1.5;
+    margin: 10px 0;
+  }
+  p {
+    margin: 0;
+    color: #617ba4;
+  }
+}
+.audit-output-status {
+  border-left: 1px solid #f2e2c9;
+  padding-left: 30px;
+  min-width: 215px;
+  > strong {
+    font-size: 17px;
+  }
+  p {
+    color: #597496;
+    font-size: 13px;
+  }
+  .anticon {
+    color: #159b75;
+  }
+}
+.audit-applicability-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 22px;
+  align-items: stretch;
+  > .ant-card {
+    min-width: 0;
+  }
+  .ant-card-head {
+    border-bottom: 0;
+    padding-top: 10px;
+  }
+  .ant-card-body {
+    padding-top: 8px;
+  }
+}
+.audit-applicability-reason {
+  font-size: 16px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0 0 25px;
+}
+.audit-processing-scope {
+  border-top: 1px solid #edf1f7;
+  padding-top: 14px;
+  margin-bottom: 18px;
+  h3 {
+    font-size: 15px;
+  }
+  > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 1px solid #edf1f7;
+    padding: 14px 0;
+    font-size: 13px;
+  }
+  small {
+    display: block;
+    color: #8b9ab0;
+    margin-top: 5px;
+  }
+  .ant-tag {
+    margin: 0;
+    flex-shrink: 0;
+  }
+}
+.audit-basis {
+  display: grid;
+  grid-template-columns: 85px minmax(0, 1fr);
+  margin: 0 0 28px;
+  dt,
+  dd {
+    margin: 0;
+    padding: 19px 0;
+    border-bottom: 1px solid #edf1f7;
+    overflow-wrap: anywhere;
+  }
+  dt {
+    color: #7286a2;
+  }
+  dd {
+    font-weight: 500;
+  }
+}
+@media (max-width: 1000px) {
+  .audit-applicability-result {
+    padding: 22px;
+  }
+  .audit-applicability-grid {
+    grid-template-columns: 1fr;
+  }
+  .audit-output-status {
+    min-width: 170px;
+  }
+}
+@media (max-width: 700px) {
+  .audit-applicability-result {
+    display: block;
+  }
+  .audit-output-status {
+    border-left: 0;
+    border-top: 1px solid #f2e2c9;
+    padding: 18px 0 0;
+    margin-top: 20px;
+  }
+  .audit-applicability-message h2 {
+    font-size: 21px;
+  }
+  .audit-processing-scope > div {
+    flex-wrap: wrap;
+  }
+}

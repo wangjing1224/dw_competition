@@ -1,29 +1,32 @@
 // @vitest-environment jsdom
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import { App } from 'antd';
-import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mergeTrace, orderedFindings } from '@/services/auditTasks';
+import { safeMarkdown, validImageUrl } from '@/components/SourcePreview';
 import type {
   AuditFile,
   Batch,
   Finding,
+  ProgressData,
   ReportData,
   Span,
 } from '@/services/auditTasks';
+import { mergeTrace, orderedFindings } from '@/services/auditTasks';
 import type { Rule } from '@/services/ruleLibraries';
-import { safeMarkdown, validImageUrl } from '@/components/SourcePreview';
-import List from './List';
 import Create from './Create';
-import Report from './Report';
+import List from './List';
 import Progress from './Progress';
+import Report from './Report';
 
 vi.mock('@umijs/max', () => ({
   Link: ({ to, children, ...props }: { to: string; children: ReactNode }) => (
@@ -33,7 +36,14 @@ vi.mock('@umijs/max', () => ({
   ),
   history: { push: vi.fn() },
   useParams: () => ({ taskId: 'audit-1' }),
-  useSearchParams: () => useState(new URLSearchParams('file=file-1')),
+  useSearchParams: () => {
+    const [params, setParams] = useState(new URLSearchParams('file=file-1'));
+    return [
+      params,
+      (next: URLSearchParams | Record<string, string>) =>
+        setParams(new URLSearchParams(next)),
+    ];
+  },
 }));
 afterEach(() => {
   cleanup();
@@ -197,6 +207,53 @@ function mockApi(overrides?: (url: string) => unknown) {
   });
   vi.stubGlobal('fetch', fetch);
   return fetch;
+}
+function excluded(status = 'not_matched'): ReportData {
+  if (!report.result) throw new Error('测试结果缺失');
+  return {
+    ...report,
+    counts: null,
+    file: {
+      ...file,
+      route: { match_status: status, match_reason: '不是本次项目' },
+      stages: file.stages.map((s) =>
+        ['indexing', 'auditing'].includes(s.phase)
+          ? { ...s, status: 'skipped' }
+          : s,
+      ),
+    },
+    result: {
+      ...report.result,
+      is_applicable: false,
+      overall_conclusion:
+        status === 'uncertain' ? 'manual_review' : 'not_applicable',
+      project_match: { status, reason: '不是本次项目' },
+      exclusion_reason: '不是本次项目',
+      findings: [],
+    },
+  };
+}
+function progressData(
+  spans: Span[] = [span('span-1')],
+  currentFile = file,
+): ProgressData {
+  return {
+    task,
+    files: [currentFile],
+    activity: {
+      scope: 'file',
+      file_id: currentFile.file_id,
+      model_calls: 3,
+      tool_calls: 1,
+      evidence_checks: 0,
+      report_saves: 1,
+      observation: 'complete',
+    },
+    trace_updates: spans.map((s, i) => ({ seq: i + 1, span: s })),
+    next_seq: spans.length,
+    has_more: false,
+    trace_warning: null,
+  };
 }
 describe('审核工作区', () => {
   it('报告编号来自冻结规则快照，按结论筛选不会重编号，也不读取当前规则库', async () => {
@@ -368,21 +425,7 @@ describe('审核工作区', () => {
     ).toBeInTheDocument();
   });
   it('路由排除文件不显示正式结论图', async () => {
-    mockApi((url) =>
-      url.endsWith('/files/file-1')
-        ? {
-            ...report,
-            counts: null,
-            result: {
-              ...report.result,
-              is_applicable: false,
-              overall_conclusion: 'not_applicable',
-              exclusion_reason: '不是本次项目',
-              findings: [],
-            },
-          }
-        : undefined,
-    );
+    mockApi((url) => (url.endsWith('/files/file-1') ? excluded() : undefined));
     render(
       <App>
         <Report />
@@ -398,11 +441,324 @@ describe('审核工作区', () => {
         <Progress />
       </App>,
     );
-    expect(
-      await screen.findByText(/当前文件已观测调用次数/),
-    ).toBeInTheDocument();
-    const band = document.querySelector('.audit-band');
+    expect(await screen.findByText('当前文件 · 已观测')).toBeInTheDocument();
+    const band = document.querySelector('.audit-observed');
     expect(band?.textContent).toContain('模型调用3');
-    expect(screen.getByText('事件流水 · 1 个已观测节点')).toBeInTheDocument();
+    expect(screen.queryByText(/事件流水/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '执行记录' }));
+    expect(await screen.findByText(/已加载 1 个独立节点/)).toBeInTheDocument();
+  });
+  it('缺失正式结果不被误判成不匹配', async () => {
+    mockApi((url) =>
+      url.endsWith('/files/file-1') ? { ...report, result: null } : undefined,
+    );
+    render(
+      <App>
+        <Report />
+      </App>,
+    );
+    expect(
+      await screen.findByText('正式结果缺失或状态不一致，无法确认审核结论'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('项目不匹配')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '查看处理过程' }),
+    ).toBeInTheDocument();
+  });
+  it('无法确定说明保留原始原因，Word失败不会禁用其他格式', async () => {
+    const data = excluded('uncertain');
+    data.file.word_status = 'failed';
+    data.file.outputs = {
+      ...file.outputs,
+      md_url: '/api/audit-tasks/audit-1/outputs?format=md&file_id=file-1',
+    };
+    const fetch = mockApi((url) =>
+      url.endsWith('/files/file-1') ? data : undefined,
+    );
+    render(
+      <App>
+        <Report />
+      </App>,
+    );
+    expect(await screen.findByText('项目适用性需人工判断')).toBeInTheDocument();
+    expect(screen.getByText('不是本次项目')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Word 导出失败' }),
+    ).toBeDisabled();
+    expect(screen.queryByText('项目不匹配')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /更多导出/ }));
+    expect(
+      await screen.findByRole('menuitem', { name: '导出 JSON' }),
+    ).not.toHaveAttribute('aria-disabled', 'true');
+    expect(
+      screen.getByRole('menuitem', { name: '导出 Markdown' }),
+    ).not.toHaveAttribute('aria-disabled', 'true');
+    expect(fetch.mock.calls.every(([url]) => !url.includes('/projects'))).toBe(
+      true,
+    );
+  });
+  it('不匹配显示明确跳过，不生成假Agent或零值审核统计', async () => {
+    const data = progressData(
+      [{ ...span('route'), kind: 'routing', actor: 'router' }],
+      excluded().file,
+    );
+    data.activity = {
+      ...data.activity,
+      model_calls: 1,
+      tool_calls: 0,
+      report_saves: 0,
+    };
+    const fetch = mockApi((url) =>
+      url.includes('/progress') ? data : undefined,
+    );
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    await screen.findByText('未启动审核 Agent');
+    expect(screen.getAllByRole('button', { name: '查看报告' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('radio', { name: 'Agent 图' }));
+    expect(
+      await screen.findByText('本文件未进入审核 Agent'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'Agent 调用关系图' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('报告保存')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看路由轨迹' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('radio', { name: '轨迹树' }));
+    fireEvent.click(screen.getByRole('radio', { name: '流程图' }));
+    expect(
+      fetch.mock.calls.filter(([url]) => url.includes('/progress')),
+    ).toHaveLength(1);
+    expect(
+      fetch.mock.calls.filter(([url]) => url === '/api/audit-tasks/audit-1'),
+    ).toHaveLength(1);
+  });
+  it('工具组只列实际调用，点击成员才读取详情；可回到所属图节点', async () => {
+    const main = { ...span('main'), kind: 'batch', title: '主审核会话' };
+    const call = {
+      ...span('call'),
+      kind: 'tool',
+      parent_span_id: 'main',
+      tool_name: 'search_documents',
+      name: 'search_documents',
+      title: 'search_documents',
+    };
+    const fetch = mockApi((url) =>
+      url.includes('/progress')
+        ? progressData([main, call])
+        : url.includes('/trace/call')
+          ? {
+              span: call,
+              input: { query_list: [] },
+              output: '原文检索完成',
+              error: null,
+              truncated: false,
+            }
+          : undefined,
+    );
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    await screen.findByText('当前文件 · 已观测');
+    fireEvent.click(screen.getByRole('radio', { name: 'Agent 图' }));
+    const graph = await screen.findByRole('region', {
+      name: 'Agent 调用关系图',
+    });
+    fireEvent.click(within(graph).getByRole('button', { name: /原文检索/ }));
+    expect(fetch.mock.calls.some(([url]) => url.includes('/trace/'))).toBe(
+      false,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: '原文检索' }));
+    expect(await screen.findByText('原文检索完成')).toBeInTheDocument();
+    expect(
+      fetch.mock.calls.filter(([url]) => url.includes('/trace/call')),
+    ).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: '在图中定位' }));
+    expect(screen.getByRole('radio', { name: 'Agent 图' })).toBeChecked();
+    expect(
+      fetch.mock.calls.filter(([url]) => url.includes('/progress')),
+    ).toHaveLength(1);
+  });
+  it('完成任务仍排空增量页，忽略跨文件span，不把状态更新计为新调用', async () => {
+    const fetch = mockApi((url) => {
+      if (!url.includes('/progress')) return undefined;
+      return url.includes('after_seq=150')
+        ? {
+            ...progressData(),
+            trace_updates: [
+              { seq: 151, span: span('same') },
+              { seq: 152, span: { ...span('foreign'), file_id: 'file-other' } },
+            ],
+            next_seq: 160,
+          }
+        : {
+            ...progressData(),
+            trace_updates: [{ seq: 1, span: span('same', 'running') }],
+            next_seq: 150,
+            has_more: true,
+          };
+    });
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([url]) => url.includes('/progress')),
+      ).toHaveLength(2),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByText('正在加载剩余轨迹；当前为部分记录'),
+      ).not.toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: '执行记录' }));
+    expect(await screen.findByText(/已加载 1 个独立节点/)).toBeInTheDocument();
+    expect(
+      fetch.mock.calls.some(([url]) => url.includes('after_seq=150')),
+    ).toBe(true);
+  });
+  it('调用详情归属不符时禁止展示内容', async () => {
+    const fetch = mockApi((url) =>
+      url.includes('/trace/')
+        ? {
+            span: { ...span('span-1'), file_id: 'other' },
+            input: null,
+            output: '别的文件机密',
+            error: null,
+            truncated: false,
+          }
+        : undefined,
+    );
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    await screen.findByText('当前文件 · 已观测');
+    fireEvent.click(screen.getByRole('button', { name: '执行记录' }));
+    fireEvent.click(await screen.findByRole('button', { name: '模型调用' }));
+    expect(
+      await screen.findByText('调用详情归属不符，已阻止展示'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('别的文件机密')).not.toBeInTheDocument();
+    expect(
+      fetch.mock.calls.some(([url]) => url.includes('/trace/span-1')),
+    ).toBe(true);
+  });
+  it('切换文件取消旧进度，迟到响应不能覆盖当前图与计数', async () => {
+    const second = {
+      ...file,
+      file_id: 'file-2',
+      file_name: '标书二.md',
+      source_path: '乙/标书二.md',
+    };
+    let finish: ((value: Response) => void) | undefined;
+    let oldSignal: AbortSignal | null | undefined;
+    const delayed = new Promise<Response>((resolve) => {
+      finish = resolve;
+    });
+    const response = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const fetch = vi.fn((input: string, init?: RequestInit) => {
+      if (input.includes('/progress') && input.includes('file_id=file-1')) {
+        oldSignal = init?.signal;
+        return delayed;
+      }
+      if (input.includes('/progress'))
+        return Promise.resolve(
+          response({
+            ...progressData([{ ...span('second'), file_id: 'file-2' }], second),
+            files: [file, second],
+            activity: {
+              ...progressData().activity,
+              file_id: 'file-2',
+              model_calls: 7,
+            },
+          }),
+        );
+      return Promise.resolve(response({ task, files: [file, second] }));
+    });
+    vi.stubGlobal('fetch', fetch);
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    await screen.findByRole('combobox', { name: '当前投标文件' });
+    await waitFor(() => expect(oldSignal).toBeDefined());
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '当前投标文件' }));
+    fireEvent.click(
+      await screen.findByText('标书二.md', {
+        selector: '.ant-select-item-option-content',
+      }),
+    );
+    await screen.findByText('当前文件 · 已观测');
+    expect(document.querySelector('.audit-observed')?.textContent).toContain(
+      '模型调用7',
+    );
+    expect(oldSignal?.aborted).toBe(true);
+    await act(async () => {
+      finish?.(
+        response({
+          ...progressData(),
+          activity: { ...progressData().activity, model_calls: 99 },
+        }),
+      );
+      await delayed;
+    });
+    expect(document.querySelector('.audit-observed')?.textContent).toContain(
+      '模型调用7',
+    );
+    expect(
+      document.querySelector('.audit-observed')?.textContent,
+    ).not.toContain('99');
+    fireEvent.click(screen.getByRole('button', { name: '执行记录' }));
+    expect(await screen.findByText(/已加载 1 个独立节点/)).toBeInTheDocument();
+  });
+  it('正式报告读取失败仍能换文件和查看处理过程', async () => {
+    const response = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string) =>
+        input.endsWith('/files/file-1')
+          ? response(
+              {
+                error: {
+                  code: 'report_unavailable',
+                  message: '报告正文不可读取',
+                },
+              },
+              500,
+            )
+          : response({ task, files: [file] }),
+      ),
+    );
+    render(
+      <App>
+        <Report />
+      </App>,
+    );
+    expect(await screen.findByText('报告正文不可读取')).toBeInTheDocument();
+    expect(
+      screen.getByRole('combobox', { name: '切换报告文件' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '查看处理过程' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('项目不匹配')).not.toBeInTheDocument();
   });
 });

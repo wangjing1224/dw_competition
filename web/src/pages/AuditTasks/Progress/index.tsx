@@ -1,269 +1,116 @@
-import { Link, useParams, useSearchParams } from '@umijs/max';
-import EntityLabel from '@/components/EntityLabel';
-import { fileLabel } from '@/utils/displayLabels';
+import { useParams, useSearchParams } from '@umijs/max';
 import {
   Alert,
   Button,
+  Drawer,
   Empty,
+  Grid,
   Segmented,
   Select,
-  Space,
   Spin,
-  Table,
-  Tag,
-  Tree,
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
-import type { DataNode } from 'antd/es/tree';
-import { PageHeading, Failure } from '@/pages/RuleLibraries/shared';
-import { api, fileUrl, mergeTrace } from '@/services/auditTasks';
+import EntityLabel from '@/components/EntityLabel';
+import { Failure, PageHeading } from '@/pages/RuleLibraries/shared';
 import type {
   ProgressData,
-  ReportData,
-  Span,
-  SpanDetail,
   TaskDetail,
   TraceUpdate,
 } from '@/services/auditTasks';
-import { useRemote, Status, Binding, Markdown, FileErrors } from '../shared';
+import { api, mergeTrace } from '@/services/auditTasks';
+import { fileLabel } from '@/utils/displayLabels';
+import { Binding, FileErrors, useRemote } from '../shared';
+import AgentGraph from './AgentGraph';
+import ExecutionOverview from './ExecutionOverview';
+import ExecutionRecords from './ExecutionRecords';
+import GraphCanvas from './GraphCanvas';
+import { agentGraph, ancestors, flowGraph } from './graphModel';
+import type { Selection } from './Inspector';
+import Inspector from './Inspector';
+import TraceTree from './TraceTree';
+import './execution.less';
 
-const actors: Record<string, string> = {
-  system: '系统',
-  router: '适用性判断',
-  bid_agent: '主审核 Agent',
-  evidence_subagent: '资料核验 Agent',
-};
-function Inspector({
-  task,
-  file,
+export type View = 'flow' | 'agent' | 'tree';
+export const readView = (value: string | null): View =>
+  value === 'agent' || value === 'tree' ? value : 'flow';
+function FileWorkspace({
+  taskId,
+  fileId,
+  view,
   spanId,
-  revision,
-  kind,
-  spanRevision,
+  onNavigate,
+  onProgress,
 }: {
-  task: string;
-  file: string;
+  taskId: string;
+  fileId: string;
+  view: View;
   spanId?: string;
-  revision: string | null;
-  kind: string;
-  spanRevision?: number;
+  onNavigate: (view: View, span?: string) => void;
+  onProgress: (data: ProgressData) => void;
 }) {
-  const [tab, setTab] = useState('节点详情');
-  const node = useRemote(
-    (s) =>
-      spanId
-        ? api<SpanDetail>(`/${task}/trace/${spanId}`, { signal: s })
-        : Promise.resolve(null),
-    [task, spanId, spanRevision],
-  );
-  const draft = useRemote(
-    (s) =>
-      tab === '报告草稿'
-        ? api<ReportData>(`/${task}/files/${file}`, { signal: s })
-        : Promise.resolve(null),
-    [task, file, revision, kind, tab],
-  );
-  return (
-    <section className="audit-panel">
-      <header>
-        <Segmented
-          value={tab}
-          onChange={setTab}
-          options={['节点详情', '报告草稿']}
-        />
-      </header>
-      <div className="audit-inspector">
-        {tab === '报告草稿' ? (
-          <>
-            {draft.error && (
-              <Failure error={draft.error} retry={draft.reload} />
-            )}
-            <Tag color={kind === 'final' ? 'green' : 'orange'}>
-              {kind === 'final' ? '已定稿' : '未定稿 · 最近一次保存'}
-            </Tag>
-            {draft.data?.document.markdown ? (
-              <Markdown text={draft.data.document.markdown} />
-            ) : (
-              <Empty description="尚无已保存正文" />
-            )}
-          </>
-        ) : (
-          <>
-            {node.error && <Failure error={node.error} retry={node.reload} />}{' '}
-            {!spanId ? (
-              <Empty description="选择一个调用节点查看安全参数与可见结果" />
-            ) : !node.data ? (
-              <Spin />
-            ) : (
-              <>
-                <h3>{node.data.span.title}</h3>
-                <Space wrap>
-                  <Status value={node.data.span.status} />
-                  <Tag>
-                    {actors[node.data.span.actor] || node.data.span.actor}
-                  </Tag>
-                  <span>
-                    {node.data.span.duration_ms === null
-                      ? '执行中'
-                      : `${(node.data.span.duration_ms / 1000).toFixed(2)}s`}
-                  </span>
-                </Space>
-                {node.data.span.rule_id && (
-                  <p>核验规则：{node.data.span.rule_id}</p>
-                )}
-                {!!node.data.span.target_file_ids?.length && (
-                  <p>授权资料：{node.data.span.target_file_ids.join('、')}</p>
-                )}
-                {node.data.truncated && (
-                  <Alert
-                    type="info"
-                    title="展示内容已脱敏或截断，不影响业务结果"
-                  />
-                )}
-                {node.data.error && (
-                  <Alert type="error" title={node.data.error.message} />
-                )}
-                <h4>调用输入</h4>
-                <pre>{JSON.stringify(node.data.input, null, 2) || '无'}</pre>
-                <h4>可见输出</h4>
-                <pre>
-                  {typeof node.data.output === 'string'
-                    ? node.data.output
-                    : JSON.stringify(node.data.output, null, 2) || '尚无返回'}
-                </pre>
-              </>
-            )}
-          </>
-        )}
-      </div>
-    </section>
-  );
-}
-function Graph({
-  nodes,
-  onSelect,
-  selected,
-  scale,
-  tree,
-}: {
-  nodes: Span[];
-  onSelect: (id: string) => void;
-  selected?: string;
-  scale: number;
-  tree: boolean;
-}) {
-  const [closed, setClosed] = useState<Set<string>>(new Set());
-  const byParent = useMemo(() => {
-    const known = new Set(nodes.map((n) => n.span_id));
-    const map = new Map<string, Span[]>();
-    nodes.forEach((n) => {
-      // 父节点还没加载时暂存，不伪造为根节点或另一个会话的分支。
-      if (n.parent_span_id && !known.has(n.parent_span_id)) return;
-      const p = n.parent_span_id || '';
-      map.set(p, [...(map.get(p) || []), n]);
-    });
-    return map;
-  }, [nodes]);
-  const treeNodes = (id: string): DataNode[] =>
-    (byParent.get(id) || []).map((n) => ({
-      key: n.span_id,
-      title: (
-        <Space>
-          <span>{n.title}</span>
-          <Status value={n.status} />
-        </Space>
-      ),
-      children: treeNodes(n.span_id),
-    }));
-  const draw = (id: string): React.ReactNode => (
-    <ul>
-      {(byParent.get(id) || []).map((n) => (
-        <li key={n.span_id}>
-          <Space>
-            <button
-              type="button"
-              className={`audit-node ${selected === n.span_id ? 'active' : ''} ${n.actor === 'evidence_subagent' ? 'child-agent' : ''}`}
-              onClick={() => onSelect(n.span_id)}
-            >
-              <span className="node-actor">
-                {actors[n.actor] || n.actor} · {n.kind}
-              </span>
-              {n.title} <Status value={n.status} />
-              <small>
-                {n.duration_ms === null
-                  ? '运行中'
-                  : `${(n.duration_ms / 1000).toFixed(2)}s`}
-              </small>
-            </button>
-            {byParent.has(n.span_id) && (
-              <Button
-                size="small"
-                type="text"
-                aria-label={closed.has(n.span_id) ? '展开分支' : '折叠分支'}
-                onClick={() =>
-                  setClosed((s) => {
-                    const t = new Set(s);
-                    if (t.has(n.span_id)) t.delete(n.span_id);
-                    else t.add(n.span_id);
-                    return t;
-                  })
-                }
-              >
-                {closed.has(n.span_id) ? '+' : '−'}
-              </Button>
-            )}
-          </Space>
-          {!closed.has(n.span_id) && draw(n.span_id)}
-        </li>
-      ))}
-    </ul>
-  );
-  if (!nodes.length)
-    return <Empty description="尚无调用记录；接收与等待不代表模型已执行" />;
-  return tree ? (
-    <Tree
-      treeData={treeNodes('')}
-      defaultExpandAll
-      selectedKeys={selected ? [selected] : []}
-      onSelect={(keys) => keys[0] && onSelect(String(keys[0]))}
-    />
-  ) : (
-    <div className="audit-graph" style={{ zoom: scale }}>
-      {draw('')}
-    </div>
-  );
-}
-function FileWorkspace({ taskId, fileId }: { taskId: string; fileId: string }) {
   const [progress, setProgress] = useState<ProgressData>();
   const [updates, setUpdates] = useState<TraceUpdate[]>([]);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
-  const [selected, setSelected] = useState<string>();
-  const [view, setView] = useState('调用图');
-  const [scale, setScale] = useState(1);
-  const [eventFilter, setEventFilter] = useState('all');
+  const [selection, setSelection] = useState<Selection | undefined>(
+    spanId ? { type: 'span', id: spanId } : undefined,
+  );
+  const [session, setSession] = useState<string>();
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [records, setRecords] = useState(false);
+  const [focus, setFocus] = useState<{ id: string; nonce: number }>();
+  const screens = Grid.useBreakpoint();
   useEffect(() => {
-    const c = new AbortController();
+    if (spanId) setSelection({ type: 'span', id: spanId });
+  }, [spanId]);
+  useEffect(() => {
+    const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     let cursor = 0;
     setUpdates([]);
     setProgress(undefined);
-    setSelected(undefined);
     const tick = async () => {
       try {
-        const d = await api<ProgressData>(
-          `/${taskId}/progress?${new URLSearchParams({ include_trace: 'true', file_id: fileId, after_seq: String(cursor), limit: '150' })}`,
-          { signal: c.signal },
-        );
-        if (c.signal.aborted) return;
+        const query = new URLSearchParams({
+          include_trace: 'true',
+          file_id: fileId,
+          after_seq: String(cursor),
+          limit: '150',
+        });
+        const d = await api<ProgressData>(`/${taskId}/progress?${query}`, {
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        if (
+          d.task.task_id !== taskId ||
+          !d.files.some((f) => f.file_id === fileId) ||
+          (d.activity.scope && d.activity.scope !== 'file') ||
+          (d.activity.file_id && d.activity.file_id !== fileId)
+        )
+          throw new Error('进度数据归属不符');
         setError('');
         setProgress(d);
-        setUpdates((p) => mergeTrace(p, d.trace_updates));
+        onProgress(d);
+        setUpdates((prev) =>
+          mergeTrace(
+            prev,
+            d.trace_updates.filter(
+              (u) =>
+                u.span.file_id === fileId &&
+                (!u.span.task_id || u.span.task_id === taskId),
+            ),
+          ),
+        );
         cursor = d.next_seq;
-        if (d.has_more || d.task.status === 'running')
+        // 完成后仍排空增量页；排队中的任务也需要继续轮询。
+        if (
+          d.has_more ||
+          ['queued', 'running'].includes(d.task.status) ||
+          d.files.some((f) => ['queued', 'running'].includes(f.status))
+        )
           timer = setTimeout(tick, d.has_more ? 50 : 1500);
       } catch (e) {
-        if (!c.signal.aborted) {
+        if (!controller.signal.aborted) {
           setError((e as Error).message);
           timer = setTimeout(tick, 4000);
         }
@@ -271,22 +118,96 @@ function FileWorkspace({ taskId, fileId }: { taskId: string; fileId: string }) {
     };
     void tick();
     return () => {
-      c.abort();
+      controller.abort();
       clearTimeout(timer);
     };
-  }, [taskId, fileId, retry]);
-  const nodes = updates.map((u) => u.span);
+  }, [taskId, fileId, retry, onProgress]);
+  const nodes = useMemo(() => updates.map((u) => u.span), [updates]);
   const file = progress?.files.find((f) => f.file_id === fileId);
-  const events = [...nodes]
-    .reverse()
-    .filter(
-      (n) =>
-        eventFilter === 'all' ||
-        (eventFilter === 'errors' &&
-          ['failed', 'interrupted'].includes(n.status)) ||
-        (eventFilter === 'tools' && n.kind === 'tool') ||
-        n.actor === eventFilter,
+  const flow = useMemo(
+    () => (file ? flowGraph(file, nodes) : { nodes: [], edges: [] }),
+    [file, nodes],
+  );
+  const agent = useMemo(
+    () => agentGraph(nodes, session, collapsed),
+    [nodes, session, collapsed],
+  );
+  const selectSpan = (id: string) => {
+    setRecords(false);
+    setSelection({ type: 'span', id });
+    onNavigate('tree', id);
+  };
+  const changeView = (next: View) => {
+    if (selection?.type !== 'span') setSelection(undefined);
+    onNavigate(next, selection?.type === 'span' ? selection.id : undefined);
+  };
+  const close = () => {
+    setSelection(undefined);
+    onNavigate(view);
+  };
+  const selectFlow = (id: string) => {
+    setSelection({ type: 'flow', id });
+    onNavigate('flow');
+  };
+  const locate = (id: string) => {
+    const span = nodes.find((s) => s.span_id === id);
+    if (!span) return;
+    const chain = [
+      span,
+      ...ancestors(span, new Map(nodes.map((s) => [s.span_id, s]))),
+    ];
+    const root = chain.find(
+      (s) => s.kind === 'batch' && s.actor === 'bid_agent',
     );
+    if (root) {
+      const model = agentGraph(nodes, root.span_id),
+        target = model.spanToNode.get(id);
+      if (target) {
+        setCollapsed(new Set());
+        setSession(root.span_id);
+        onNavigate('agent', id);
+        setFocus({ id: target, nonce: Date.now() });
+        return;
+      }
+    }
+    const phase = chain.find((s) =>
+      ['file', 'parsing', 'routing', 'indexing', 'auditing', 'export'].includes(
+        s.kind,
+      ),
+    );
+    if (phase) {
+      const target = phase.kind === 'export' ? 'exporting' : phase.kind;
+      onNavigate('flow', id);
+      setFocus({ id: target, nonce: Date.now() });
+    }
+  };
+  const node =
+    selection?.type === 'flow'
+      ? flow.nodes.find((n) => n.id === selection.id)
+      : selection?.type === 'agent'
+        ? agent.nodes.find((n) => n.id === selection.id)
+        : undefined;
+  const partial =
+    !!progress?.has_more ||
+    !!progress?.trace_warning ||
+    progress?.activity.observation !== 'complete';
+  const routeSpan = nodes.find((n) => n.kind === 'routing');
+  const inspector =
+    file && selection ? (
+      <Inspector
+        key={`${fileId}/${selection.type}/${selection.id}`}
+        task={taskId}
+        file={file}
+        selection={selection}
+        node={node}
+        spans={nodes}
+        spanRevision={updates.find((u) => u.span.span_id === selection.id)?.seq}
+        onClose={close}
+        onSpan={selectSpan}
+        onLocate={locate}
+        onAgent={() => changeView('agent')}
+      />
+    ) : null;
   return (
     <>
       {error && (
@@ -294,172 +215,174 @@ function FileWorkspace({ taskId, fileId }: { taskId: string; fileId: string }) {
           error={`连接异常：${error}。保留上次记录，正在重连。`}
           retry={() => setRetry((v) => v + 1)}
         />
-      )}{' '}
-      {file && (
+      )}
+      {!file && !error && <Spin />}
+      {file && progress && (
         <>
           <Binding file={file} />
           <div className="section-gap">
             <FileErrors file={file} />
           </div>
-          <div className="audit-band">
-            {[
-              ['model_calls', '模型调用'],
-              ['tool_calls', '工具调用'],
-              ['evidence_checks', '资料核验'],
-              ['report_saves', '报告保存'],
-            ].map(([key, label]) => (
-              <div key={key}>
-                {label}
-                <strong>
-                  {progress?.activity[key as 'model_calls'] ?? '—'}
-                </strong>
+          <ExecutionOverview
+            task={taskId}
+            file={file}
+            activity={progress.activity}
+            onStage={selectFlow}
+            onDraft={() => setSelection({ type: 'draft', id: 'draft' })}
+          />
+          {progress.trace_warning && (
+            <Alert type="warning" title={progress.trace_warning.message} />
+          )}
+          {progress.has_more && (
+            <Alert type="info" title="正在加载剩余轨迹；当前为部分记录" />
+          )}
+          <section className="audit-panel audit-three-views">
+            <header>
+              <Segmented
+                aria-label="执行视图"
+                value={view}
+                onChange={changeView}
+                options={[
+                  { label: '流程图', value: 'flow' },
+                  { label: 'Agent 图', value: 'agent' },
+                  { label: '轨迹树', value: 'tree' },
+                ]}
+              />
+              <Button onClick={() => setRecords(true)}>执行记录</Button>
+            </header>
+            <div
+              className={
+                'audit-visual-body' +
+                (inspector && screens.lg ? ' with-inspector' : '')
+              }
+            >
+              <div className="audit-visual-main">
+                <div hidden={view !== 'flow'}>
+                  <GraphCanvas
+                    graph={flow}
+                    label="审核流程图"
+                    onSelect={(id) =>
+                      id === 'auditing' ? changeView('agent') : selectFlow(id)
+                    }
+                    selected={
+                      selection?.type === 'flow' ? selection.id : focus?.id
+                    }
+                    focus={focus}
+                  />
+                </div>
+                <div hidden={view !== 'agent'}>
+                  <AgentGraph
+                    file={file}
+                    graph={agent}
+                    partial={partial}
+                    onSession={(id) => {
+                      setSession(id);
+                      setSelection(undefined);
+                      setFocus(undefined);
+                      onNavigate('agent');
+                    }}
+                    selected={
+                      selection?.type === 'agent'
+                        ? selection.id
+                        : selection?.type === 'span'
+                          ? agent.spanToNode.get(selection.id)
+                          : undefined
+                    }
+                    onSelect={(id) => {
+                      setSelection({ type: 'agent', id });
+                      onNavigate('agent');
+                    }}
+                    onFlow={() => changeView('flow')}
+                    onRoute={
+                      routeSpan
+                        ? () => selectSpan(routeSpan.span_id)
+                        : undefined
+                    }
+                    focus={focus}
+                    onToggle={(id) => {
+                      setCollapsed((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(id)) next.delete(id);
+                        else next.add(id);
+                        return next;
+                      });
+                      setSelection({ type: 'agent', id });
+                      onNavigate('agent');
+                    }}
+                  />
+                </div>
+                <div hidden={view !== 'tree'}>
+                  <TraceTree
+                    spans={nodes}
+                    selected={
+                      selection?.type === 'span' ? selection.id : undefined
+                    }
+                    onSelect={selectSpan}
+                  />
+                </div>
               </div>
-            ))}
-          </div>
-          <div className="audit-muted">
-            当前文件已观测调用次数，不代表完成百分比；不展示隐藏推理。
-          </div>
+              {screens.lg && inspector}
+            </div>
+          </section>
+          {!screens.lg && (
+            <Drawer
+              open={!!selection && !records}
+              onClose={close}
+              size={480}
+              title="执行详情"
+            >
+              {inspector}
+            </Drawer>
+          )}
+          <ExecutionRecords
+            open={records}
+            onClose={() => setRecords(false)}
+            spans={nodes}
+            partial={partial}
+            onSelect={selectSpan}
+          />
         </>
       )}
-      {progress?.trace_warning && (
-        <Alert
-          className="section-gap"
-          type="warning"
-          title={progress.trace_warning.message}
-        />
-      )}
-      {progress?.has_more && (
-        <Alert type="info" title="正在加载剩余轨迹；当前为部分记录" />
-      )}
-      <div className="audit-workspace section-gap">
-        <section className="audit-panel">
-          <header>
-            <Segmented
-              options={['调用图', '轨迹树']}
-              value={view}
-              onChange={setView}
-            />
-            <Space>
-              <Button
-                size="small"
-                onClick={() => setScale((s) => Math.max(0.5, s - 0.1))}
-              >
-                缩小
-              </Button>
-              <Button size="small" onClick={() => setScale(1)}>
-                重置
-              </Button>
-              <Button
-                size="small"
-                onClick={() => setScale((s) => Math.min(1.5, s + 0.1))}
-              >
-                放大
-              </Button>
-            </Space>
-          </header>
-          <div className="audit-canvas">
-            <Graph
-              nodes={nodes}
-              selected={selected}
-              onSelect={setSelected}
-              scale={scale}
-              tree={view === '轨迹树'}
-            />
-          </div>
-        </section>
-        <Inspector
-          task={taskId}
-          file={fileId}
-          spanId={selected}
-          spanRevision={updates.find((u) => u.span.span_id === selected)?.seq}
-          revision={file?.report_revision || null}
-          kind={file?.report_kind || 'none'}
-        />
-      </div>
-      <section className="audit-panel audit-events">
-        <header>
-          <strong>事件流水 · {nodes.length} 个已观测节点</strong>
-          <Select
-            value={eventFilter}
-            onChange={setEventFilter}
-            style={{ width: 160 }}
-            options={[
-              { value: 'all', label: '全部节点' },
-              { value: 'bid_agent', label: '主 Agent' },
-              { value: 'evidence_subagent', label: '资料子 Agent' },
-              { value: 'tools', label: '工具调用' },
-              { value: 'errors', label: '异常节点' },
-            ]}
-          />
-        </header>
-        <Table<Span>
-          size="small"
-          rowKey="span_id"
-          dataSource={events}
-          rowClassName={(r) =>
-            r.span_id === selected ? 'audit-selected-row' : ''
-          }
-          onRow={(r) => ({ onClick: () => setSelected(r.span_id) })}
-          scroll={{ x: 650, y: 240 }}
-          pagination={{ pageSize: 8, showSizeChanger: false }}
-          columns={[
-            {
-              title: '时间',
-              width: 105,
-              render: (_, r) => new Date(r.started_at).toLocaleTimeString(),
-            },
-            { title: '执行方', render: (_, r) => actors[r.actor] || r.actor },
-            { title: '动作', dataIndex: 'title' },
-            { title: '状态', render: (_, r) => <Status value={r.status} /> },
-            {
-              title: '耗时',
-              render: (_, r) =>
-                r.duration_ms === null
-                  ? '—'
-                  : `${(r.duration_ms / 1000).toFixed(2)}s`,
-            },
-          ]}
-        />
-      </section>
     </>
   );
 }
-export default function AuditProgress() {
-  const { taskId = '' } = useParams();
+function Workspace({ taskId }: { taskId: string }) {
   const [params, setParams] = useSearchParams();
-  const { data, error, reload } = useRemote(
-    (s) => api<TaskDetail>(`/${taskId}`, { signal: s }),
+  // 身份只初始化一次；阶段、文件列表与统计共享同一条 progress 轮询。
+  const initial = useRemote(
+    (signal) => api<TaskDetail>(`/${taskId}`, { signal }),
     [taskId],
-    (d) => d.task.status === 'running',
   );
+  const [live, setLive] = useState<ProgressData>();
+  const data = live || initial.data;
   const file =
     data?.files.find((f) => f.file_id === params.get('file')) || data?.files[0];
+  const view = readView(params.get('view'));
+  const navigate = (next: View, span?: string) => {
+    const p = new URLSearchParams();
+    if (file) p.set('file', file.file_id);
+    p.set('view', next);
+    if (span) p.set('span', span);
+    setParams(p, { replace: true });
+  };
   return (
     <div className="business-page audit-page">
       <PageHeading
-        title={
-          <EntityLabel id={taskId}>
-            {data?.task.display_name || '审核执行工作区'}
-          </EntityLabel>
+        title="文件执行工作区"
+        description={
+          data ? (
+            <EntityLabel id={taskId}>
+              任务：{data.task.display_name}
+            </EntityLabel>
+          ) : undefined
         }
-        description="查看真实调用与逐文件进展，已保存成果可随时查看。"
         backTo="/audit-tasks"
         backLabel="返回审核任务"
-        actions={
-          <Space>
-            {data && <Status value={data.task.status} />}
-            {file && (
-              <Link to={fileUrl(taskId, file.file_id)}>
-                <Button type="primary" disabled={file.report_kind === 'none'}>
-                  查看当前报告
-                </Button>
-              </Link>
-            )}
-          </Space>
-        }
       />
-      {error && <Failure error={error} retry={reload} />}{' '}
-      {!data && !error && <Spin />}
+      {initial.error && (
+        <Failure error={initial.error} retry={initial.reload} />
+      )}
+      {!data && !initial.error && <Spin />}
       {data && (
         <>
           <div className="audit-toolbar">
@@ -467,13 +390,13 @@ export default function AuditProgress() {
               aria-label="当前投标文件"
               className="audit-file-selector"
               value={file?.file_id}
-              onChange={(v) => setParams({ file: v })}
+              onChange={(id) => setParams({ file: id, view })}
               options={data.files.map((f) => ({
                 value: f.file_id,
                 label: fileLabel(f.file_id, data.files),
               }))}
             />
-            <span>
+            <span className="audit-muted">
               {data.task.finished_files} / {data.task.total_files} 份文件已结束
             </span>
           </div>
@@ -482,18 +405,20 @@ export default function AuditProgress() {
               key={`${taskId}/${file.file_id}`}
               taskId={taskId}
               fileId={file.file_id}
+              view={view}
+              spanId={params.get('span') || undefined}
+              onNavigate={navigate}
+              onProgress={setLive}
             />
           ) : (
-            <Empty
-              description={
-                data.task.legacy
-                  ? '历史任务未记录逐文件执行轨迹'
-                  : '暂无文件记录'
-              }
-            />
+            <Empty description="暂无文件记录" />
           )}
         </>
       )}
     </div>
   );
+}
+export default function AuditProgress() {
+  const { taskId = '' } = useParams();
+  return <Workspace key={taskId} taskId={taskId} />;
 }
