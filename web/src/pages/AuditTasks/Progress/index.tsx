@@ -1,4 +1,6 @@
 import { Link, useParams, useSearchParams } from '@umijs/max';
+import EntityLabel from '@/components/EntityLabel';
+import { fileLabel } from '@/utils/displayLabels';
 import {
   Alert,
   Button,
@@ -435,7 +437,11 @@ export default function AuditProgress() {
   return (
     <div className="business-page audit-page">
       <PageHeading
-        title={data?.task.display_name || '审核执行工作区'}
+        title={
+          <EntityLabel id={taskId}>
+            {data?.task.display_name || '审核执行工作区'}
+          </EntityLabel>
+        }
         description="查看真实调用与逐文件进展，已保存成果可随时查看。"
         backTo="/audit-tasks"
         backLabel="返回审核任务"
@@ -464,7 +470,7 @@ export default function AuditProgress() {
               onChange={(v) => setParams({ file: v })}
               options={data.files.map((f) => ({
                 value: f.file_id,
-                label: `${f.file_name} · ${f.file_id}`,
+                label: fileLabel(f.file_id, data.files),
               }))}
             />
             <span>

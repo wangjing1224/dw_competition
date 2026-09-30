@@ -1,3 +1,4 @@
+import EntityLabel from '@/components/EntityLabel';
 import { Link } from '@umijs/max';
 import {
   Button,
@@ -198,11 +199,9 @@ export default function TaskListPage() {
                       onClick={() => setSelected(r.task_id)}
                       style={{ padding: 0 }}
                     >
-                      {r.display_name}
+                      <EntityLabel id={r.task_id}>{r.display_name}</EntityLabel>
                     </Button>
-                    <div className="audit-muted">
-                      {r.task_id} · {dateText(r.created_at)}
-                    </div>
+                    <div className="audit-muted">{dateText(r.created_at)}</div>
                   </>
                 ),
               },

@@ -6,6 +6,8 @@ import {
   FileTextOutlined,
 } from '@ant-design/icons';
 import type { ReactNode } from 'react';
+import EntityLabel from '@/components/EntityLabel';
+import { fileLabel } from '@/utils/displayLabels';
 import {
   priorities,
   provenances,
@@ -22,8 +24,8 @@ export function PageHeading({
   backTo = '/rule-libraries',
   backLabel = '返回规则库',
 }: {
-  title: string;
-  description?: string;
+  title: ReactNode;
+  description?: ReactNode;
   actions?: ReactNode;
   back?: boolean;
   backTo?: string;
@@ -83,10 +85,12 @@ export function NoRules() {
 }
 export function RuleCard({
   rule,
+  label,
   onSource,
   onEdit,
 }: {
   rule: Rule;
+  label?: string;
   onSource?: (id: string) => void;
   onEdit?: () => void;
 }) {
@@ -94,7 +98,7 @@ export function RuleCard({
     <article className="rule-card">
       <div className="rule-card-top">
         <Space wrap>
-          <code>{rule.rule_id}</code>
+          <EntityLabel id={rule.rule_id}>{label || '规则'}</EntityLabel>
           <Tag
             color={
               rule.priority === 'critical'
@@ -133,7 +137,9 @@ export function RuleCard({
             onClick={() => onSource?.(source.file_id)}
             disabled={!onSource}
           >
-            {source.file_name}
+            <EntityLabel id={source.file_id}>
+              {fileLabel(source.file_id, rule.sources)}
+            </EntityLabel>
           </Button>
         ))}
       </div>

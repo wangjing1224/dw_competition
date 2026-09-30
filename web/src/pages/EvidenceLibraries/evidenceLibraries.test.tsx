@@ -207,6 +207,11 @@ describe('投标方资料库', () => {
       '/evidence-libraries',
     );
     expect(screen.getAllByText('AI 整理').length).toBeGreaterThan(0);
+    expect(screen.queryByText('file-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('bidder-1')).not.toBeInTheDocument();
+    expect(
+      document.querySelector('[data-entity-id="file-1"]'),
+    ).toHaveTextContent('合同.md');
   });
 
   it('资料目录只按全部、AI 整理、人工修正筛选，不显示读取限制标签', async () => {
@@ -460,6 +465,10 @@ describe('投标方资料库', () => {
     expect(screen.queryByText(/存在读取限制/)).not.toBeInTheDocument();
     expect(screen.getByText('1 / 2')).toBeInTheDocument();
     expect(screen.getByText('第二份未完成')).toBeInTheDocument();
+    expect(screen.queryByText('file-1')).not.toBeInTheDocument();
+    expect(
+      document.querySelector('.ant-card-head [data-entity-id="file-1"]'),
+    ).toHaveTextContent('合同.md');
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(
       screen.getByRole('region', { name: '资料 Agent 执行轨迹' }),

@@ -141,6 +141,8 @@ export type ProgressData = {
   saved_rule_count: number;
   files: SourceFile[];
   recent_rules: Rule[];
+  // 与最近保存的规则来自同一完整快照；不能用 recent_rules 的位置编号。
+  rule_order: string[];
   error: Warning;
   trace: {
     trace_status: string;

@@ -1,4 +1,6 @@
 import { Link, useParams, useSearchParams } from '@umijs/max';
+import EntityLabel from '@/components/EntityLabel';
+import { fileLabel, ruleLabels } from '@/utils/displayLabels';
 import {
   Alert,
   Button,
@@ -153,6 +155,7 @@ function ReportFile({ taskId, fileId }: { taskId: string; fileId: string }) {
     () => new Map(data?.rules.map((r) => [r.rule_id, r]) || []),
     [data?.rules],
   );
+  const labels = useMemo(() => ruleLabels(data?.rules || []), [data?.rules]);
   const findings = data
     ? orderedFindings(data.result?.findings || [], data.rules)
     : [];
@@ -307,7 +310,9 @@ function ReportFile({ taskId, fileId }: { taskId: string; fileId: string }) {
                           style={{ padding: 0 }}
                           onClick={() => update('rule', r.rule_id)}
                         >
-                          {r.rule_id}
+                          <EntityLabel id={r.rule_id}>
+                            {labels.get(r.rule_id) || '规则'}
+                          </EntityLabel>
                         </Button>
                         <div style={{ maxWidth: 380, whiteSpace: 'normal' }}>
                           {r.summary}
@@ -335,9 +340,13 @@ function ReportFile({ taskId, fileId }: { taskId: string; fileId: string }) {
             </Card>
             <Card
               title={
-                rule
-                  ? `${rule.rule_id} · ${categories[rule.category]}`
-                  : '规则详情'
+                rule ? (
+                  <EntityLabel id={rule.rule_id}>
+                    {labels.get(rule.rule_id)} · {categories[rule.category]}
+                  </EntityLabel>
+                ) : (
+                  '规则详情'
+                )
               }
             >
               <div className="audit-rule-inspector">
@@ -364,7 +373,9 @@ function ReportFile({ taskId, fileId }: { taskId: string; fileId: string }) {
                           type="link"
                           onClick={() => setSource(s.file_id)}
                         >
-                          {s.file_name} · {s.file_id}
+                          <EntityLabel id={s.file_id}>
+                            {fileLabel(s.file_id, rule.sources)}
+                          </EntityLabel>
                         </Button>
                       ))}
                     </Space>
@@ -445,8 +456,18 @@ export default function AuditReport() {
   return (
     <div className="business-page audit-page">
       <PageHeading
-        title={file?.file_name || '审核报告'}
-        description={data ? `${data.task.display_name} · ${taskId}` : undefined}
+        title={
+          file ? (
+            <EntityLabel id={file.file_id}>{file.file_name}</EntityLabel>
+          ) : (
+            '审核报告'
+          )
+        }
+        description={
+          data ? (
+            <EntityLabel id={taskId}>{data.task.display_name}</EntityLabel>
+          ) : undefined
+        }
         backTo="/audit-tasks"
         backLabel="返回审核任务"
         actions={
@@ -469,7 +490,7 @@ export default function AuditReport() {
           onChange={(v) => setParams({ file: v })}
           options={data?.files.map((f) => ({
             value: f.file_id,
-            label: `${f.file_name} · ${f.file_id}`,
+            label: fileLabel(f.file_id, data.files),
           }))}
         />
       </div>

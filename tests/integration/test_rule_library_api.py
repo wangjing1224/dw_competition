@@ -18,7 +18,13 @@ from app.models.documents import (
     ParsedSection,
     document_ref_from_record,
 )
-from app.models.rules import RuleItem, RuleSet, RuleSourceFile
+from app.models.rules import (
+    RuleCommitRecord,
+    RuleExtractionProgress,
+    RuleItem,
+    RuleSet,
+    RuleSourceFile,
+)
 from app.parsers.assets import AssetStore, file_asset_root
 from app.parsers.service import persist_parse_result
 from app.rules.local_trace import LocalTrace
@@ -127,6 +133,40 @@ def draft(file, **kwargs):
         source_file_ids=[file.file_id],
         **kwargs,
     )
+
+
+def test_progress_rule_order_uses_full_snapshot_without_changing_ids(env):
+    pid, file, detail = ready(env)
+    ruleset = RuleSet.model_validate(detail["rule_set"])
+    ids = ["rule-147", "rule-193", "rule-205", "rule-319"]
+    ruleset.rules = [
+        ruleset.rules[0].model_copy(update={"rule_id": rid}) for rid in ids
+    ]
+    path = ProjectService(env.settings)._write_rule_set(ruleset)
+    original = path.read_bytes()
+    progress = RuleExtractionProgress(
+        project_id=pid,
+        document_index=1,
+        document_count=1,
+        current_file_id=file.file_id,
+        completed_file_ids=[file.file_id],
+        model_calls=1,
+        rule_set=ruleset,
+        commits=[
+            RuleCommitRecord(tool_call_id="save", before=[], after=ruleset.rules)
+        ],
+    )
+    progress_path = path.parent / f"{pid}.progress.json"
+    progress_path.write_text(progress.model_dump_json(), encoding="utf-8")
+    response = env.client.get(f"/api/projects/{pid}/progress")
+    assert response.status_code == 200
+    view = response.json()
+    assert view["rule_order"] == ids
+    assert [r["rule_id"] for r in view["recent_rules"]] == list(reversed(ids))[:3]
+    assert path.read_bytes() == original
+    assert env.client.get(f"/api/projects/{pid}").json()[
+        "rule_set"
+    ] == ruleset.model_dump(mode="json")
 
 
 def test_upload_is_async_idempotent_and_recoverable(env):

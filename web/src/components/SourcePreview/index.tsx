@@ -1,21 +1,12 @@
 // biome-ignore-all lint/security/noDangerouslySetInnerHtml: 唯一 HTML 渲染点只接收下方 safeMarkdown 的净化产物，安全边界有专门测试。
 
-import {
-  Alert,
-  App,
-  Button,
-  Drawer,
-  Image,
-  Input,
-  Space,
-  Spin,
-  Tag,
-} from 'antd';
+import { Alert, App, Button, Drawer, Image, Input, Space, Spin } from 'antd';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useEffect, useMemo, useState } from 'react';
 import { Failure } from '@/pages/RuleLibraries/shared';
 import type { Preview } from '@/services/ruleLibraries';
+import EntityLabel from '@/components/EntityLabel';
 
 export function validImageUrl(
   url: string,
@@ -164,7 +155,13 @@ export default function SourcePreview({
   return (
     <Drawer
       className="source-drawer"
-      title={data?.file_name || '来源文件'}
+      title={
+        fileId ? (
+          <EntityLabel id={fileId}>{data?.file_name || '来源文件'}</EntityLabel>
+        ) : (
+          '来源文件'
+        )
+      }
       open={!!fileId}
       onClose={close}
       size="large"
@@ -188,7 +185,6 @@ export default function SourcePreview({
         description="展示登记文件的解析正文；不代表已精确定位原句，请结合原件核对。图片可点击放大。"
       />
       <Space className="section-gap" wrap>
-        <Tag>{fileId}</Tag>
         <span className="muted">{data?.source_path}</span>
       </Space>
       {error && <Failure error={error} retry={() => setReload((n) => n + 1)} />}

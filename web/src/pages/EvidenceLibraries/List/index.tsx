@@ -1,3 +1,4 @@
+import EntityLabel from '@/components/EntityLabel';
 import {
   ArrowRightOutlined,
   FolderOpenOutlined,
@@ -167,8 +168,11 @@ export default function Libraries() {
                 </span>
                 <Status status={item.status} />
               </div>
-              <h2>{item.display_name}</h2>
-              <p className="muted">{item.bidder_id}</p>
+              <h2>
+                <EntityLabel id={item.bidder_id}>
+                  {item.display_name}
+                </EntityLabel>
+              </h2>
               <LibraryCounts
                 fileCount={item.file_count}
                 resultCount={item.material_count}

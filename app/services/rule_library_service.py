@@ -499,6 +499,8 @@ class RuleLibraryService:
             "snapshot_kind": kind,
             "files": files,
             "recent_rules": recent,
+            # 只读展示索引，来自完整快照；不改变真实规则 ID 或持久化结构。
+            "rule_order": list(by_id),
             "trace": self.trace_page(project_id, project.status, after_seq, limit)
             if include_trace
             else None,

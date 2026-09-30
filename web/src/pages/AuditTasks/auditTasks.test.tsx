@@ -199,6 +199,49 @@ function mockApi(overrides?: (url: string) => unknown) {
   return fetch;
 }
 describe('审核工作区', () => {
+  it('报告编号来自冻结规则快照，按结论筛选不会重编号，也不读取当前规则库', async () => {
+    const frozenRules = rules.map((r, i) => ({
+      ...r,
+      rule_id: `rule-${147 + i}`,
+    }));
+    const fetch = mockApi((url) =>
+      url.endsWith('/files/file-1')
+        ? {
+            ...report,
+            rules: frozenRules,
+            result: {
+              ...report.result,
+              findings: [
+                finding('rule-147', 'compliant'),
+                finding('rule-148', 'risk'),
+              ],
+            },
+          }
+        : undefined,
+    );
+    render(
+      <App>
+        <Report />
+      </App>,
+    );
+    await screen.findByRole('button', { name: '规则 02' });
+    expect(
+      screen.queryByRole('button', { name: '规则 01' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('rule-148')).not.toBeInTheDocument();
+    for (const id of ['project-1', 'bidder-1', 'audit-1', 'file-1', 'file-3']) {
+      expect(screen.queryByText(id)).not.toBeInTheDocument();
+    }
+    expect(screen.getByText('规则库 · 规则库甲')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '查看全部规则' }));
+    expect(
+      await screen.findByRole('button', { name: '规则 01' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '规则 02' })).toBeInTheDocument();
+    expect(
+      fetch.mock.calls.every(([url]) => !url.startsWith('/api/projects')),
+    ).toBe(true);
+  });
   it('span 完成覆盖开始，旧更新不得覆盖新更新', () => {
     const merged = mergeTrace(
       [{ seq: 2, span: span('s') }],

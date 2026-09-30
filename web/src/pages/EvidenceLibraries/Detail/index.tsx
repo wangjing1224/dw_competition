@@ -1,5 +1,7 @@
 // biome-ignore-all lint/security/noDangerouslySetInnerHtml: 只渲染共用 safeMarkdown 净化后的 HTML。
 
+import EntityLabel from '@/components/EntityLabel';
+import { fileLabel } from '@/utils/displayLabels';
 import { Link, useParams } from '@umijs/max';
 import {
   Alert,
@@ -122,8 +124,7 @@ export default function LibraryDetail() {
           (filter === 'human' && item.provenance === 'human_modified'))
       );
     }) || [];
-  const fileName = (id: string) =>
-    data?.files.find((item) => item.file_id === id)?.file_name || id;
+  const fileName = (id: string) => fileLabel(id, data?.files || []);
   async function openImage(path: string) {
     const id = path.split('/')[0];
     if (!data?.files.some((f) => f.file_id === id)) {
@@ -220,8 +221,12 @@ export default function LibraryDetail() {
   return (
     <main className="business-page">
       <Heading
-        title={data?.bidder.display_name || '资料库详情'}
-        description={`${bidderId} · ${data?.files.length || 0} 份来源文件 · ${data?.files.filter((f) => f.ingestion_status === 'completed').length || 0} 份已完成`}
+        title={
+          <EntityLabel id={bidderId}>
+            {data?.bidder.display_name || '资料库详情'}
+          </EntityLabel>
+        }
+        description={`${data?.files.length || 0} 份来源文件 · ${data?.files.filter((f) => f.ingestion_status === 'completed').length || 0} 份已完成`}
         actions={
           <>
             <Status status={data?.bidder.status || 'processing_evidence'} />
@@ -312,10 +317,13 @@ export default function LibraryDetail() {
                   className={`material-file ${selected === item.file_id ? 'active' : ''}`}
                   onClick={() => setSelected(item.file_id)}
                 >
-                  <strong>{item.file_name}</strong>
+                  <strong>
+                    <EntityLabel id={item.file_id}>
+                      {item.file_name}
+                    </EntityLabel>
+                  </strong>
                   <small>{item.source_path}</small>
                   <Space wrap>
-                    <code>{item.file_id}</code>
                     <Provenance value={item.provenance} />
                   </Space>
                 </button>
@@ -339,7 +347,9 @@ export default function LibraryDetail() {
               <Card
                 title={
                   <Space wrap>
-                    <span>{file.file_name}</span>
+                    <EntityLabel id={file.file_id}>
+                      {file.file_name}
+                    </EntityLabel>
                     <Provenance value={file.provenance} />
                   </Space>
                 }
@@ -362,7 +372,7 @@ export default function LibraryDetail() {
                 }
               >
                 <p className="muted">
-                  {file.file_id} · {file.source_path} ·{' '}
+                  {file.source_path} ·{' '}
                   {parseLabels[file.parse_status] || file.parse_status}
                   {' · '}
                   {ingestionLabels[file.ingestion_status] ||
@@ -406,14 +416,18 @@ export default function LibraryDetail() {
                             type="link"
                             onClick={() => setSelected(edge.from)}
                           >
-                            {fileName(edge.from)} ({edge.from})
+                            <EntityLabel id={edge.from}>
+                              {fileName(edge.from)}
+                            </EntityLabel>
                           </Button>
                           <span>→ {edge.relation} →</span>
                           <Button
                             type="link"
                             onClick={() => setSelected(edge.to)}
                           >
-                            {fileName(edge.to)} ({edge.to})
+                            <EntityLabel id={edge.to}>
+                              {fileName(edge.to)}
+                            </EntityLabel>
                           </Button>
                         </div>
                       ))
@@ -565,7 +579,7 @@ export default function LibraryDetail() {
                     .filter((m) => m.file_id !== draft.file_id)
                     .map((m) => ({
                       value: m.file_id,
-                      label: `${fileName(m.file_id)} (${m.file_id})`,
+                      label: fileName(m.file_id),
                     }))}
                   onChange={(value) =>
                     setDraft({

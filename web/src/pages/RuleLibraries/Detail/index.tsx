@@ -37,6 +37,8 @@ import {
 } from '@/services/ruleLibraries';
 import { Failure, NoRules, PageHeading, RuleCard, Status } from '../shared';
 import SourcePreview from './SourcePreview';
+import EntityLabel from '@/components/EntityLabel';
+import { fileLabel, ruleLabels } from '@/utils/displayLabels';
 
 const options = (values: Record<string, string>) =>
   Object.entries(values).map(([value, label]) => ({ value, label }));
@@ -80,6 +82,8 @@ export default function LibraryDetail() {
   const editable =
     data?.project.status === 'rule_ready' && !!data.rule_set && !!data.revision;
   const rules = data?.rule_set?.rules || [];
+  const labels = useMemo(() => ruleLabels(rules), [rules]);
+  const sourceName = (id: string) => fileLabel(id, data?.files || []);
   const visible = useMemo(
     () =>
       rules
@@ -90,9 +94,10 @@ export default function LibraryDetail() {
             (!verification || r.verification === verification) &&
             (!provenance || r.provenance === provenance) &&
             (!source || r.sources.some((s) => s.file_id === source)) &&
-            `${r.rule_id} ${r.requirement} ${r.reason}`
+            `${labels.get(r.rule_id)} ${r.rule_id} ${r.requirement} ${r.reason}`
               .toLowerCase()
-              .includes(q.toLowerCase()),
+              .replace(/\s/g, '')
+              .includes(q.toLowerCase().replace(/\s/g, '')),
         )
         .sort(
           (a, b) =>
@@ -101,7 +106,7 @@ export default function LibraryDetail() {
             Object.keys(priorities).indexOf(a.priority) -
               Object.keys(priorities).indexOf(b.priority),
         ),
-    [rules, category, priority, verification, provenance, source, q],
+    [rules, labels, category, priority, verification, provenance, source, q],
   );
   function openRule(rule: Rule | 'new') {
     setRevision(data?.revision || '');
@@ -132,6 +137,7 @@ export default function LibraryDetail() {
   async function loadForComparison() {
     try {
       const latest = await api<Detail>(`/${projectId}`);
+      const latestLabels = ruleLabels(latest.rule_set?.rules || []);
       setData(latest);
       modal.confirm({
         title: '已读取最新版本，请确认差异后再保存',
@@ -151,7 +157,10 @@ export default function LibraryDetail() {
                 : profileOpen
                   ? latest.rule_set?.project_profile
                   : latest.rule_set?.rules
-                      .map((rule) => `${rule.rule_id}：${rule.requirement}`)
+                      .map(
+                        (rule) =>
+                          `${latestLabels.get(rule.rule_id)}：${rule.requirement}`,
+                      )
                       .join('\n\n') || '当前尚无规则'}
             </pre>
           </div>
@@ -219,7 +228,7 @@ export default function LibraryDetail() {
           <span className="muted">保存后</span>
           <p>{values.requirement}</p>
           <p>依据说明：{values.reason || '未填写'}</p>
-          <p>来源：{values.source_file_ids.join('、')}</p>
+          <p>来源：{values.source_file_ids.map(sourceName).join('、')}</p>
         </div>
       ),
       onOk: () => persistRule(values),
@@ -259,8 +268,11 @@ export default function LibraryDetail() {
   return (
     <main className="business-page">
       <PageHeading
-        title={data?.project.display_name || '规则库详情'}
-        description={projectId}
+        title={
+          <EntityLabel id={projectId}>
+            {data?.project.display_name || '规则库详情'}
+          </EntityLabel>
+        }
         actions={
           <>
             <Link to={`/rule-libraries/${projectId}/progress`}>
@@ -399,7 +411,7 @@ export default function LibraryDetail() {
                       <div className="rule-filters">
                         <Input.Search
                           allowClear
-                          placeholder="搜索规则、ID 或依据说明"
+                          placeholder="搜索规则编号、内容或依据说明"
                           value={q}
                           onChange={(e) => setQ(e.target.value)}
                         />
@@ -428,7 +440,7 @@ export default function LibraryDetail() {
                           allowClear
                           placeholder="来源文件"
                           options={data.files.map((f) => ({
-                            label: f.file_name,
+                            label: sourceName(f.file_id),
                             value: f.file_id,
                           }))}
                           value={source}
@@ -443,6 +455,7 @@ export default function LibraryDetail() {
                         <RuleCard
                           key={rule.rule_id}
                           rule={rule}
+                          label={labels.get(rule.rule_id)}
                           onSource={setSourceOpen}
                           onEdit={editable ? () => openRule(rule) : undefined}
                         />
@@ -475,13 +488,15 @@ export default function LibraryDetail() {
                         render: (_, file) => (
                           <div>
                             <strong>
-                              <FileTextOutlined /> {file.file_name}
+                              <FileTextOutlined />{' '}
+                              <EntityLabel id={file.file_id}>
+                                {file.file_name}
+                              </EntityLabel>
                             </strong>
                             <div className="muted">{file.source_path}</div>
                           </div>
                         ),
                       },
-                      { title: '文件 ID', dataIndex: 'file_id' },
                       {
                         title: '大小',
                         render: (_, f) => fileSize(f.size_bytes),
@@ -532,7 +547,15 @@ export default function LibraryDetail() {
       />
       <Modal
         title={
-          editing === 'new' ? '人工新增规则' : `编辑 ${editing?.rule_id || ''}`
+          editing === 'new' ? (
+            '人工新增规则'
+          ) : editing ? (
+            <EntityLabel id={editing.rule_id}>
+              编辑{labels.get(editing.rule_id) || '规则'}
+            </EntityLabel>
+          ) : (
+            '编辑规则'
+          )
         }
         open={!!editing}
         width={760}
@@ -611,7 +634,7 @@ export default function LibraryDetail() {
             <Select
               mode="multiple"
               options={data?.files.map((f) => ({
-                label: `${f.file_name} · ${f.file_id}`,
+                label: sourceName(f.file_id),
                 value: f.file_id,
               }))}
             />

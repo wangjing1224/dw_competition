@@ -109,13 +109,13 @@ export function LibrarySelect({
   };
   const list = options.map((o) => ({
     value: o.project_id || o.bidder_id || '',
-    label: `${o.display_name} · ${o.project_id || o.bidder_id}`,
+    label: o.display_name,
     disabled: !o.available_for_audit,
   }));
   if (value && !list.some((o) => o.value === value.id))
     list.unshift({
       value: value.id,
-      label: `${value.name} · ${value.id}`,
+      label: value.name,
       disabled: false,
     });
   return (

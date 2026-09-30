@@ -16,6 +16,8 @@ import {
   phases,
 } from '@/services/ruleLibraries';
 import { Failure, PageHeading, RuleCard, Status } from '../shared';
+import EntityLabel from '@/components/EntityLabel';
+import { ruleLabels } from '@/utils/displayLabels';
 
 export { mergeChanges } from '@/components/LibraryTrace';
 
@@ -106,10 +108,17 @@ export default function ProgressPage() {
     'saving',
     'completed',
   ];
+  const labels = ruleLabels(
+    (data?.rule_order || []).map((rule_id) => ({ rule_id })),
+  );
   return (
     <main className="business-page rule-progress-page">
       <PageHeading
-        title={data?.display_name || '规则抽取进度'}
+        title={
+          <EntityLabel id={projectId}>
+            {data?.display_name || '规则抽取进度'}
+          </EntityLabel>
+        }
         description="追踪真实文件处理、模型调用与工具执行；已保存成果可随时查看。"
         actions={
           <>
@@ -197,10 +206,11 @@ export default function ProgressPage() {
                 key={file.file_id}
                 className={`file-progress ${file.extraction_status === 'processing' ? 'active' : ''}`}
               >
-                <strong>{file.file_name}</strong>
+                <strong>
+                  <EntityLabel id={file.file_id}>{file.file_name}</EntityLabel>
+                </strong>
                 <small>{file.source_path}</small>
                 <Space wrap>
-                  <code>{file.file_id}</code>
                   <Tag
                     color={
                       file.extraction_status === 'completed'
@@ -265,7 +275,11 @@ export default function ProgressPage() {
           <div className="recent-rules">
             {data?.recent_rules.length ? (
               data.recent_rules.map((rule) => (
-                <RuleCard key={rule.rule_id} rule={rule} />
+                <RuleCard
+                  key={rule.rule_id}
+                  rule={rule}
+                  label={labels.get(rule.rule_id)}
+                />
               ))
             ) : (
               <Empty description="暂无已保存规则" />

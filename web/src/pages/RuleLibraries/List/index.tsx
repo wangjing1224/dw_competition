@@ -1,3 +1,4 @@
+import EntityLabel from '@/components/EntityLabel';
 import { useEffect, useState } from 'react';
 import { Link } from '@umijs/max';
 import {
@@ -224,8 +225,11 @@ export default function Libraries() {
                 </span>
                 <Status status={item.status} />
               </div>
-              <h2>{item.display_name}</h2>
-              <div className="muted">{item.project_id}</div>
+              <h2>
+                <EntityLabel id={item.project_id}>
+                  {item.display_name}
+                </EntityLabel>
+              </h2>
               <LibraryCounts
                 fileCount={item.file_count}
                 resultCount={item.rule_count}

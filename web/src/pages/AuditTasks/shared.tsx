@@ -1,5 +1,6 @@
 // biome-ignore-all lint/security/noDangerouslySetInnerHtml: HTML 只来自经过测试的 safeMarkdown 净化器。
 import { Alert, App, Button, Empty, Space, Tag } from 'antd';
+import EntityLabel from '@/components/EntityLabel';
 import { useEffect, useState } from 'react';
 import type { DependencyList } from 'react';
 import { safeMarkdown } from '@/components/SourcePreview';
@@ -129,9 +130,9 @@ export function StageMatrix({
             >
               <td>
                 <button type="button" onClick={() => onSelect(f)}>
-                  {f.file_name}
+                  <EntityLabel id={f.file_id}>{f.file_name}</EntityLabel>
                 </button>
-                <small>{f.file_id}</small>
+                <small>{f.source_path}</small>
               </td>
               {Object.keys(stageLabels).map((phase) => {
                 const stage = f.stages.find((s) => s.phase === phase);
@@ -168,10 +169,14 @@ export function Binding({ file }: { file: AuditFile }) {
   return (
     <Space wrap>
       <Tag color="blue">
-        规则库 · {file.project_name} / {file.project_id}
+        <EntityLabel id={file.project_id}>
+          规则库 · {file.project_name}
+        </EntityLabel>
       </Tag>
       <Tag color="purple">
-        资料库 · {file.bidder_name} / {file.bidder_id}
+        <EntityLabel id={file.bidder_id}>
+          资料库 · {file.bidder_name}
+        </EntityLabel>
       </Tag>
     </Space>
   );

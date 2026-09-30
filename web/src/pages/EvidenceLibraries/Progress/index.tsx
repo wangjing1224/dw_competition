@@ -1,3 +1,5 @@
+import EntityLabel from '@/components/EntityLabel';
+import { fileLabel } from '@/utils/displayLabels';
 import { Link, useParams } from '@umijs/max';
 import { Alert, Button, Card, Drawer, Empty, Space, Steps, Tag } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -100,7 +102,11 @@ export default function Progress() {
   return (
     <main className="business-page rule-progress-page">
       <Heading
-        title={data?.display_name || '资料整理进度'}
+        title={
+          <EntityLabel id={bidderId}>
+            {data?.display_name || '资料整理进度'}
+          </EntityLabel>
+        }
         description="查看实际文件处理与 Agent 执行情况，已保存摘要可随时查阅。"
         actions={
           <>
@@ -175,11 +181,10 @@ export default function Progress() {
               className={`file-progress ${file.ingestion_status === 'processing' ? 'active' : ''}`}
             >
               <Button type="link" onClick={() => setPreviewFile(file.file_id)}>
-                {file.file_name}
+                <EntityLabel id={file.file_id}>{file.file_name}</EntityLabel>
               </Button>
               <small>{file.source_path}</small>
               <Space wrap>
-                <code>{file.file_id}</code>
                 <Tag
                   color={
                     file.ingestion_status === 'completed'
@@ -228,7 +233,11 @@ export default function Progress() {
                 key={material.file_id}
                 className="section-gap"
                 size="small"
-                title={material.file_id}
+                title={
+                  <EntityLabel id={material.file_id}>
+                    {fileLabel(material.file_id, data.files)}
+                  </EntityLabel>
+                }
               >
                 <p className="material-text">{material.bid_summary}</p>
                 <Link

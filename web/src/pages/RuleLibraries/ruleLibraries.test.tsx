@@ -41,6 +41,73 @@ afterEach(() => {
 });
 
 describe('规则库工作台', () => {
+  it('规则按完整库编号，搜索/编辑只换展示，不改提交的真实 ID', async () => {
+    const source = {
+      file_id: 'file-38',
+      file_name: '招标文件.md',
+      source_path: '采购/招标文件.md',
+    };
+    const rules = ['rule-147', 'rule-193'].map((rule_id, i) => ({
+      rule_id,
+      category: 'technical',
+      priority: 'important',
+      verification: 'bid_only',
+      provenance: 'ai_generated',
+      requirement: i ? '设备精度至少100' : '设备数量至少10',
+      reason: '依据技术要求',
+      sources: [source],
+    }));
+    const detail = {
+      project: {
+        project_id: 'project-1',
+        display_name: '设备规则库',
+        status: 'rule_ready',
+      },
+      revision: 'rev1',
+      rule_set: { rules, project_profile: '设备采购', source_files: [source] },
+      files: [source],
+      warning: null,
+      available_for_audit: true,
+    };
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => ({
+      ok: true,
+      json: async () =>
+        init?.method === 'POST' ? { revision: 'rev2' } : detail,
+    }));
+    vi.stubGlobal('fetch', fetch);
+    render(
+      <App>
+        <LibraryDetail />
+      </App>,
+    );
+    await screen.findByText('规则 02');
+    expect(screen.queryByText('rule-193')).not.toBeInTheDocument();
+    expect(screen.queryByText('project-1')).not.toBeInTheDocument();
+    const search = screen.getByPlaceholderText('搜索规则编号、内容或依据说明');
+    fireEvent.change(search, { target: { value: '规则02' } });
+    expect(screen.queryByText('规则 01')).not.toBeInTheDocument();
+    expect(screen.getByText('规则 02')).toBeInTheDocument();
+    // 技术排查仍能用真实 ID 搜索；得到的仍是规则 02，而非筛选后的规则 01。
+    fireEvent.change(search, { target: { value: 'rule-193' } });
+    fireEvent.click(screen.getByRole('button', { name: /编辑$/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('编辑规则 02')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'OK' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认保存' }));
+    await waitFor(() =>
+      expect(fetch.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(
+        true,
+      ),
+    );
+    const saved = fetch.mock.calls.find(([, init]) => init?.method === 'POST');
+    if (!saved) throw new Error('未提交规则保存请求');
+    const [url, init] = saved;
+    expect(url).toBe('/api/projects/project-1/edit');
+    expect(JSON.parse(String(init?.body)).data).toMatchObject({
+      rule_id: 'rule-193',
+      source_file_ids: ['file-38'],
+    });
+  });
   it('页面标题提供明确的返回入口，子页面默认返回规则库', () => {
     const { rerender } = render(<PageHeading title="新建规则库" />);
     expect(screen.getByRole('link', { name: '返回规则库' })).toHaveAttribute(
@@ -212,7 +279,7 @@ describe('规则库工作台', () => {
     }));
     const rules = fileCount
       ? Array.from({ length: 3 }, (_, i) => ({
-          rule_id: `rule-${i + 1}`,
+          rule_id: `rule-${147 + i}`,
           category: 'technical',
           priority: 'critical',
           verification: 'bid_only',
@@ -238,6 +305,11 @@ describe('规则库工作台', () => {
                 saved_rule_count: rules.length,
                 files,
                 recent_rules: rules,
+                rule_order: [
+                  'rule-11',
+                  'rule-12',
+                  ...rules.map((r) => r.rule_id),
+                ],
                 error: null,
                 trace: {
                   trace_status: 'completed',
@@ -308,6 +380,14 @@ describe('规则库工作台', () => {
     expect(page.querySelectorAll('.recent-rules .rule-card')).toHaveLength(
       rules.length,
     );
+    if (fileCount) {
+      expect(
+        within(page.querySelector('.recent-rules') as HTMLElement).getByText(
+          '规则 03',
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('rule-147')).not.toBeInTheDocument();
+    }
   });
   it('首页只有业务入口，不请求统计、不展示使用说明条', () => {
     const fetch = vi.fn();
