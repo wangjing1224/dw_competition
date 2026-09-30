@@ -1,7 +1,5 @@
 // biome-ignore-all lint/security/noDangerouslySetInnerHtml: 只渲染共用 safeMarkdown 净化后的 HTML。
 
-import EntityLabel from '@/components/EntityLabel';
-import { fileLabel } from '@/utils/displayLabels';
 import { Link, useParams } from '@umijs/max';
 import {
   Alert,
@@ -18,6 +16,7 @@ import {
   Spin,
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import EntityLabel from '@/components/EntityLabel';
 import SourcePreview, {
   safeMarkdown,
   validImageUrl,
@@ -31,7 +30,9 @@ import {
   type Material,
   type Preview,
 } from '@/services/evidenceLibraries';
+import { fileLabel } from '@/utils/displayLabels';
 import { Failure, Heading, Provenance, Status } from '../shared';
+import './editor.less';
 
 type Draft = Omit<Material, 'provenance'>;
 const parseLabels: Record<string, string> = {
@@ -475,6 +476,7 @@ export default function LibraryDetail() {
       )}
       <Drawer
         title="修订摘要与关系"
+        rootClassName="material-editor"
         size="large"
         open={!!draft}
         onClose={() => {
@@ -532,91 +534,126 @@ export default function LibraryDetail() {
           />
         )}
         {draft && (
-          <>
-            <label className="field-label" htmlFor="bid-summary">
-              简洁摘要
-            </label>
-            <Input.TextArea
-              id="bid-summary"
-              rows={4}
-              value={draft.bid_summary}
-              onChange={(e) =>
-                setDraft({ ...draft, bid_summary: e.target.value })
-              }
-            />
-            <label className="field-label" htmlFor="evidence-summary">
-              详细摘要（支持 Markdown）
-            </label>
-            <Input.TextArea
-              id="evidence-summary"
-              rows={12}
-              value={draft.evidence_summary}
-              onChange={(e) =>
-                setDraft({ ...draft, evidence_summary: e.target.value })
-              }
-            />
-            <h3>出向关系</h3>
-            {draft.relations.map(([relation, target], index) => (
-              <div className="material-relation-edit" key={relationKeys[index]}>
-                <Input
-                  aria-label={`关系短语 ${index + 1}`}
-                  placeholder="关系短语"
-                  value={relation}
-                  onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      relations: draft.relations.map((pair, i) =>
-                        i === index ? [e.target.value, target] : pair,
-                      ),
-                    })
-                  }
-                />
-                <Select
-                  aria-label={`目标文件 ${index + 1}`}
-                  placeholder="目标文件"
-                  value={target || undefined}
-                  options={materials
-                    .filter((m) => m.file_id !== draft.file_id)
-                    .map((m) => ({
-                      value: m.file_id,
-                      label: fileName(m.file_id),
-                    }))}
-                  onChange={(value) =>
-                    setDraft({
-                      ...draft,
-                      relations: draft.relations.map((pair, i) =>
-                        i === index ? [relation, value] : pair,
-                      ),
-                    })
-                  }
-                />
+          <div className="material-editor-sections">
+            <section aria-labelledby="bid-summary-label">
+              <div className="material-editor-heading">
+                <label id="bid-summary-label" htmlFor="bid-summary">
+                  简洁摘要
+                </label>
+              </div>
+              <Input.TextArea
+                id="bid-summary"
+                rows={4}
+                value={draft.bid_summary}
+                onChange={(e) =>
+                  setDraft({ ...draft, bid_summary: e.target.value })
+                }
+              />
+            </section>
+            <section aria-labelledby="evidence-summary-label">
+              <div className="material-editor-heading">
+                <label id="evidence-summary-label" htmlFor="evidence-summary">
+                  详细摘要
+                </label>
+                <span
+                  id="evidence-summary-format"
+                  className="material-editor-hint"
+                >
+                  支持 Markdown
+                </span>
+              </div>
+              <Input.TextArea
+                id="evidence-summary"
+                aria-describedby="evidence-summary-format"
+                rows={12}
+                value={draft.evidence_summary}
+                onChange={(e) =>
+                  setDraft({ ...draft, evidence_summary: e.target.value })
+                }
+              />
+            </section>
+            <section aria-labelledby="material-relations-label">
+              <div className="material-editor-heading">
+                <h3 id="material-relations-label">出向关系</h3>
+                <span className="material-editor-hint">
+                  当前文件 → 关联文件
+                </span>
                 <Button
+                  size="small"
                   onClick={() => {
-                    setRelationKeys((keys) =>
-                      keys.filter((_, i) => i !== index),
-                    );
+                    setRelationKeys((keys) => [...keys, crypto.randomUUID()]);
                     setDraft({
                       ...draft,
-                      relations: draft.relations.filter((_, i) => i !== index),
+                      relations: [...draft.relations, ['', '']],
                     });
                   }}
                 >
-                  移除
+                  添加关系
                 </Button>
               </div>
-            ))}
-            <Button
-              onClick={() => {
-                setRelationKeys((keys) => [...keys, crypto.randomUUID()]);
-                setDraft({
-                  ...draft,
-                  relations: [...draft.relations, ['', '']],
-                });
-              }}
-            >
-              添加关系
-            </Button>
-          </>
+              {draft.relations.length === 0 && (
+                <div className="material-editor-empty">
+                  暂无出向关系，可按需添加。
+                </div>
+              )}
+              {draft.relations.map(([relation, target], index) => (
+                <div
+                  className="material-relation-edit"
+                  key={relationKeys[index]}
+                >
+                  <Input
+                    aria-label={`关系短语 ${index + 1}`}
+                    placeholder="关系短语"
+                    value={relation}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        relations: draft.relations.map((pair, i) =>
+                          i === index ? [e.target.value, target] : pair,
+                        ),
+                      })
+                    }
+                  />
+                  <Select
+                    aria-label={`目标文件 ${index + 1}`}
+                    placeholder="目标文件"
+                    value={target || undefined}
+                    options={materials
+                      .filter((m) => m.file_id !== draft.file_id)
+                      .map((m) => ({
+                        value: m.file_id,
+                        label: fileName(m.file_id),
+                      }))}
+                    onChange={(value) =>
+                      setDraft({
+                        ...draft,
+                        relations: draft.relations.map((pair, i) =>
+                          i === index ? [relation, value] : pair,
+                        ),
+                      })
+                    }
+                  />
+                  <Button
+                    danger
+                    type="text"
+                    onClick={() => {
+                      setRelationKeys((keys) =>
+                        keys.filter((_, i) => i !== index),
+                      );
+                      setDraft({
+                        ...draft,
+                        relations: draft.relations.filter(
+                          (_, i) => i !== index,
+                        ),
+                      });
+                    }}
+                  >
+                    移除
+                  </Button>
+                </div>
+              ))}
+            </section>
+          </div>
         )}
       </Drawer>
       <Modal

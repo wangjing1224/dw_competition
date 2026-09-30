@@ -27,6 +27,7 @@ import Create from './Create';
 import List from './List';
 import Progress from './Progress';
 import Report from './Report';
+import { StageMatrix } from './shared';
 
 vi.mock('@umijs/max', () => ({
   Link: ({ to, children, ...props }: { to: string; children: ReactNode }) => (
@@ -360,6 +361,68 @@ describe('审核工作区', () => {
       screen.getByRole('button', { name: '导出任务结果' }),
     ).toBeInTheDocument();
   });
+  it('文件矩阵整行可选，名称按钮保留键盘入口且点击只触发一次', () => {
+    const onSelect = vi.fn();
+    render(
+      <StageMatrix
+        files={[file]}
+        selected={file.file_id}
+        onSelect={onSelect}
+      />,
+    );
+    const table = screen.getByRole('table', { name: '文件处理矩阵' });
+    const row = within(table).getAllByRole('row')[1];
+    expect(row).toHaveAttribute('aria-selected', 'true');
+    const button = within(row).getByRole('button', { name: file.file_name });
+    expect(button).toHaveAttribute('type', 'button');
+    expect(button).toHaveAttribute('aria-pressed', 'true');
+    button.focus();
+    expect(button).toHaveFocus();
+    for (const target of [
+      row,
+      within(row).getAllByRole('cell')[2],
+      within(row).getByText(file.source_path),
+      button,
+    ]) {
+      onSelect.mockClear();
+      fireEvent.click(target);
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith(file);
+    }
+  });
+  it('点击文件矩阵的状态区域切换文件详情及报告链接', async () => {
+    const second = {
+      ...file,
+      file_id: 'file-2',
+      file_name: '标书二.md',
+      source_path: '乙/标书二.md',
+    };
+    mockApi((url) =>
+      url.includes('/progress')
+        ? {
+            ...progressData(),
+            task: { ...task, total_files: 2, finished_files: 2 },
+            files: [file, second],
+          }
+        : undefined,
+    );
+    render(
+      <App>
+        <List />
+      </App>,
+    );
+    const table = await screen.findByRole('table', { name: '文件处理矩阵' });
+    const rows = within(table).getAllByRole('row');
+    fireEvent.click(within(rows[2]).getAllByRole('cell')[3]);
+    expect(rows[1]).toHaveAttribute('aria-selected', 'false');
+    expect(rows[2]).toHaveAttribute('aria-selected', 'true');
+    expect(
+      screen.getByText(second.file_name, { selector: 'strong' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '查看报告' })).toHaveAttribute(
+      'href',
+      '/audit-tasks/audit-1/report?file=file-2',
+    );
+  });
   it('文件未配置两库时禁止提交；不为每行提前请求所有库', async () => {
     const fetch = mockApi();
     const { container } = render(
@@ -596,6 +659,13 @@ describe('审核工作区', () => {
       screen.queryByRole('region', { name: 'Agent 调用关系图' }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText('报告保存')).not.toBeInTheDocument();
+    const boundary = screen.getByRole('region', { name: '本次处理范围与输出' });
+    expect(within(boundary).getByText('已跳过')).toBeInTheDocument();
+    expect(within(boundary).getByText('未执行')).toBeInTheDocument();
+    expect(
+      within(boundary).getByText('正式结果已就绪 · Word 已生成'),
+    ).toBeInTheDocument();
+    expect(document.querySelector('.audit-skipped-agent aside')).toBeNull();
     expect(screen.getByRole('button', { name: '查看路由轨迹' })).toBeEnabled();
     fireEvent.click(screen.getByRole('radio', { name: '轨迹树' }));
     fireEvent.click(screen.getByRole('radio', { name: '流程图' }));
@@ -605,6 +675,32 @@ describe('审核工作区', () => {
     expect(
       fetch.mock.calls.filter(([url]) => url === '/api/audit-tasks/audit-1'),
     ).toHaveLength(1);
+  });
+  it('未进入 Agent 的输出区保留待判断与导出失败的真实状态', async () => {
+    const data = progressData([], {
+      ...excluded('uncertain').file,
+      word_status: 'failed',
+    });
+    mockApi((url) => (url.includes('/progress') ? data : undefined));
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    await screen.findByText('未启动审核 Agent');
+    fireEvent.click(screen.getByRole('radio', { name: 'Agent 图' }));
+    expect(
+      await screen.findByText('本文件暂未进入审核 Agent'),
+    ).toBeInTheDocument();
+    const boundary = screen.getByRole('region', { name: '本次处理范围与输出' });
+    expect(
+      within(boundary).getByText('正式结果已就绪 · Word 导出失败'),
+    ).toBeInTheDocument();
+    expect(within(boundary).queryByText(/Word 已生成/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看路由轨迹' })).toBeDisabled();
+    expect(
+      screen.getByText('跳过规则审核不代表审核不通过。'),
+    ).toBeInTheDocument();
   });
   it('工具组只列实际调用，点击成员才读取详情；可回到所属图节点', async () => {
     const main = { ...span('main'), kind: 'batch', title: '主审核会话' };

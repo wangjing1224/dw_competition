@@ -357,6 +357,56 @@ describe('投标方资料库', () => {
     expect(screen.getByText('资料快照不可读取')).toBeInTheDocument();
   });
 
+  it('编辑抽屉按摘要与关系分区，添加移除关系不丢失摘要草稿', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(detail)));
+    render(
+      <App>
+        <LibraryDetail />
+      </App>,
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: '编辑摘要与关系' }),
+    );
+    const editor = (await screen.findByText('修订摘要与关系')).closest(
+      '.material-editor',
+    );
+    if (!editor) throw new Error('抽屉缺少独立样式作用域');
+    const drawer = within(editor as HTMLElement);
+    const brief = drawer.getByRole('region', { name: '简洁摘要' });
+    const summary = drawer.getByRole('region', { name: '详细摘要' });
+    const relations = drawer.getByRole('region', { name: '出向关系' });
+    expect(within(brief).getByLabelText('简洁摘要')).toHaveValue(
+      material.bid_summary,
+    );
+    expect(
+      within(summary).getByLabelText('详细摘要'),
+    ).toHaveAccessibleDescription('支持 Markdown');
+    fireEvent.change(within(brief).getByLabelText('简洁摘要'), {
+      target: { value: '保留我的摘要草稿' },
+    });
+    expect(
+      within(relations).getByText('暂无出向关系，可按需添加。'),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(relations).getByRole('button', { name: '添加关系' }),
+    );
+    fireEvent.change(within(relations).getByLabelText('关系短语 1'), {
+      target: { value: '补充说明' },
+    });
+    expect(drawer.getByRole('button', { name: '对比并保存' })).toBeDisabled();
+    fireEvent.click(within(relations).getByRole('button', { name: '移除' }));
+    expect(
+      within(relations).queryByLabelText('关系短语 1'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(relations).getByText('暂无出向关系，可按需添加。'),
+    ).toBeInTheDocument();
+    expect(drawer.getByRole('textbox', { name: '简洁摘要' })).toHaveValue(
+      '保留我的摘要草稿',
+    );
+    expect(drawer.getByRole('button', { name: '对比并保存' })).toBeEnabled();
+  });
+
   it('保存只发单文件内容和 If-Match，409 保留草稿', async () => {
     const fetch = vi
       .fn()
@@ -382,13 +432,15 @@ describe('投标方资料库', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: '编辑摘要与关系' }),
     );
-    fireEvent.change(screen.getByLabelText('简洁摘要'), {
+    fireEvent.change(screen.getByRole('textbox', { name: '简洁摘要' }), {
       target: { value: '我的修改草稿' },
     });
     fireEvent.click(screen.getByRole('button', { name: '对比并保存' }));
     fireEvent.click(await screen.findByRole('button', { name: '确认保存' }));
     await screen.findByText('资料库已变化，草稿未保存');
-    expect(screen.getByLabelText('简洁摘要')).toHaveValue('我的修改草稿');
+    expect(screen.getByRole('textbox', { name: '简洁摘要' })).toHaveValue(
+      '我的修改草稿',
+    );
     const call = fetch.mock.calls.find(([, init]) => init?.method === 'POST');
     expect(call?.[1]?.headers).toEqual({
       'Content-Type': 'application/json',

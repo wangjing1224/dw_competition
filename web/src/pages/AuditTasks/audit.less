@@ -5,6 +5,22 @@
 .audit-panel {background:white;border:1px solid #e3eaf5;border-radius:12px;min-width:0;overflow:hidden;>header{padding:16px 20px;border-bottom:1px solid #edf0f7;display:flex;align-items:center;justify-content:space-between;gap:12px;} }
 .audit-matrix-scroll{overflow:auto;max-height:380px;min-height:210px;} .audit-matrix{width:100%;border-collapse:collapse;font-size:13px;th,td{padding:14px 8px;border-bottom:1px solid #eef1f6;text-align:center;white-space:nowrap;}th{background:#f7f9fd;color:#667895;font-weight:500;}td:first-child{text-align:left;max-width:210px;white-space:normal;button{border:0;background:none;color:#275bc5;text-align:left;cursor:pointer;}small{display:block;color:#8b99ae;margin:5px;}}.is-selected{background:#eef4ff;} }
 .stage-completed{color:#158f6e}.stage-failed,.stage-interrupted{color:#cb4848}.stage-running{color:#2563ed;font-weight:600}.stage-waiting,.stage-not_run,.stage-skipped{color:#8b97aa}
+.audit-matrix tbody tr {
+  cursor: pointer;
+  &:hover > td {
+    background: #f5f8ff;
+  }
+  &.is-selected > td {
+    background: #edf4ff;
+  }
+  &.is-selected:hover > td {
+    background: #e5efff !important;
+  }
+  &:focus-within {
+    outline: 2px solid #91b8ff;
+    outline-offset: -2px;
+  }
+}
 .audit-file-context{padding:18px 20px;border-top:1px solid #edf0f7;min-height:140px;overflow-wrap:anywhere;p{color:#738198;margin:10px 0;}}
 .audit-pagination{display:flex;justify-content:flex-end;min-height:52px;align-items:center;margin-top:18px;}
 .audit-upload{padding:25px;text-align:center;border:1px dashed #b9cbea;border-radius:10px;background:#f8faff;margin:20px 0;} .audit-config{min-height:330px;max-height:530px;overflow:auto;} .audit-config .ant-select{width:100%;min-width:185px;}.audit-config .ant-table-cell{vertical-align:middle;} .audit-config-footer{position:sticky;bottom:0;padding:16px 22px;background:white;border-top:1px solid #e6ebf5;display:flex;justify-content:space-between;gap:15px;z-index:2;}

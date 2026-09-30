@@ -1,16 +1,16 @@
 // biome-ignore-all lint/security/noDangerouslySetInnerHtml: HTML 只来自经过测试的 safeMarkdown 净化器。
 import { Alert, App, Button, Empty, Space, Tag } from 'antd';
-import EntityLabel from '@/components/EntityLabel';
-import { useEffect, useState } from 'react';
 import type { DependencyList } from 'react';
+import { useEffect, useState } from 'react';
+import EntityLabel from '@/components/EntityLabel';
 import { safeMarkdown } from '@/components/SourcePreview';
+import type { AuditFile } from '@/services/auditTasks';
 import {
   downloadFile,
-  statusLabels,
-  stageStates,
   stageLabels,
+  stageStates,
+  statusLabels,
 } from '@/services/auditTasks';
-import type { AuditFile } from '@/services/auditTasks';
 import './audit.less';
 
 // 每次身份变化丢弃旧数据；轮询不重叠，晚到响应不覆盖其他文件。
@@ -113,7 +113,7 @@ export function StageMatrix({
 }) {
   return files.length ? (
     <div className="audit-matrix-scroll">
-      <table className="audit-matrix">
+      <table className="audit-matrix" aria-label="文件处理矩阵">
         <thead>
           <tr>
             <th>投标文件</th>
@@ -127,9 +127,12 @@ export function StageMatrix({
             <tr
               key={f.file_id}
               className={selected === f.file_id ? 'is-selected' : ''}
+              aria-selected={selected === f.file_id}
+              onClick={() => onSelect(f)}
             >
               <td>
-                <button type="button" onClick={() => onSelect(f)}>
+                {/* 名称按钮保留原生键盘操作，点击统一冒泡到行，避免重复选择。 */}
+                <button type="button" aria-pressed={selected === f.file_id}>
                   <EntityLabel id={f.file_id}>{f.file_name}</EntityLabel>
                 </button>
                 <small>{f.source_path}</small>

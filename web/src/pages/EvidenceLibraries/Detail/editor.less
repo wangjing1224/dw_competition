@@ -1,0 +1,82 @@
+.material-editor {
+  .material-editor-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    margin-top: 24px;
+  }
+
+  .material-editor-heading {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-bottom: 12px;
+
+    label,
+    h3 {
+      margin: 0;
+      color: #223451;
+      font-size: 15px;
+      line-height: 24px;
+      font-weight: 600;
+    }
+
+    > .ant-btn {
+      margin-left: auto;
+    }
+  }
+
+  .material-editor-hint {
+    color: #7b89a0;
+    font-size: 12px;
+    font-weight: 400;
+  }
+
+  textarea.ant-input {
+    padding: 12px 14px;
+    line-height: 1.75;
+    border-color: #dce4f0;
+    border-radius: 8px;
+
+    &:hover {
+      border-color: #8eb5ff;
+    }
+
+    &:focus {
+      border-color: #2460ed;
+    }
+  }
+
+  .material-editor-empty {
+    padding: 18px;
+    border: 1px dashed #dce4f0;
+    border-radius: 8px;
+    background: #f8faff;
+    color: #7b89a0;
+    font-size: 13px;
+  }
+
+  .material-relation-edit {
+    padding: 12px;
+    background: #f8faff;
+    border: 1px solid #e8edf5;
+    border-radius: 8px;
+    align-items: start;
+
+    > .ant-input,
+    > .ant-select {
+      min-width: 0;
+    }
+  }
+}
+
+@media (max-width: 600px) {
+  .material-editor .material-relation-edit {
+    grid-template-columns: minmax(0, 1fr) auto;
+
+    > .ant-input {
+      grid-column: 1 / -1;
+    }
+  }
+}

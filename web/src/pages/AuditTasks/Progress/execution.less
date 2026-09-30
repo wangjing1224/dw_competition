@@ -366,37 +366,79 @@
   }
 }
 .audit-skipped-agent {
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr);
-  gap: 34px;
-  padding: 38px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 32px;
   h2 {
-    font-size: 23px;
-    margin: 12px 0;
+    font-size: 22px;
+    font-weight: 600;
+    margin: 10px 0;
+  }
+  h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #344764;
+    margin: 0 0 12px;
   }
   p {
+    margin: 0;
     line-height: 1.8;
     color: #5e7497;
   }
-  aside {
-    padding: 24px;
+  .audit-skipped-reason {
+    padding: 20px;
     background: #f6f9ff;
-    border: 1px solid #edf2fa;
-    border-radius: 12px;
+    border: 1px solid #e7eefb;
+    border-left: 3px solid #9fbfff;
+    border-radius: 8px;
+    p {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
   }
   dl {
     display: grid;
-    grid-template-columns: 1fr 1.3fr;
-    gap: 18px;
+    grid-template-columns: 1fr 1fr 2fr;
+    margin: 0;
+    padding: 18px 0;
+    border: 1px solid #e7edf6;
+    border-radius: 8px;
     font-size: 13px;
+    > div {
+      min-width: 0;
+      padding: 0 20px;
+      &:not(:last-child) {
+        border-right: 1px solid #e7edf6;
+      }
+    }
+  }
+  dt {
+    color: #7b89a0;
+    margin-bottom: 8px;
   }
   dd {
     margin: 0;
-    color: #6a7d9b;
+    color: #344764;
+    line-height: 1.6;
+    font-weight: 500;
   }
-  small {
-    color: #8593a9;
+  .audit-skipped-output {
+    margin-top: 6px;
+    color: #6a7d9b;
+    font-size: 12px;
+    font-weight: 400;
+  }
+  footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .audit-skipped-note {
+    font-size: 13px;
+    color: #7b89a0;
   }
 }
 .audit-reason-box {
@@ -418,7 +460,6 @@
 }
 @media (max-width: 1000px) {
   .audit-skipped-agent {
-    grid-template-columns: 1fr;
     padding: 24px;
     gap: 20px;
   }
@@ -437,6 +478,20 @@
   }
 }
 @media (max-width: 700px) {
+  .audit-skipped-agent {
+    padding: 20px;
+    dl {
+      grid-template-columns: 1fr;
+      padding: 0 16px;
+      > div {
+        padding: 14px 0;
+        &:not(:last-child) {
+          border-right: 0;
+          border-bottom: 1px solid #e7edf6;
+        }
+      }
+    }
+  }
   .audit-overview {
     padding: 15px;
   }

@@ -29,7 +29,7 @@ export default function AgentGraph({
   if (skippedAudit(file))
     return (
       <div className="audit-skipped-agent">
-        <div>
+        <header>
           <div className="audit-muted">按流程跳过</div>
           <h2>
             本文件{file.route?.match_status === 'uncertain' ? '暂未' : '未'}
@@ -41,33 +41,49 @@ export default function AgentGraph({
               : '项目适用性判断为不匹配'}
             ，因此未启动规则审核和资料核验。
           </p>
-          <h4>判断原因</h4>
-          <p className="audit-reason-box">
-            {file.route?.match_reason || '未记录判断原因'}
-          </p>
+        </header>
+        <section
+          className="audit-skipped-reason"
+          aria-labelledby="audit-skipped-reason-title"
+        >
+          <h3 id="audit-skipped-reason-title">判断原因</h3>
+          <p>{file.route?.match_reason || '未记录判断原因'}</p>
+        </section>
+        <section
+          className="audit-skipped-boundary"
+          aria-labelledby="audit-skipped-boundary-title"
+        >
+          <h3 id="audit-skipped-boundary-title">本次处理范围与输出</h3>
+          <dl>
+            <div>
+              <dt>规则审核</dt>
+              <dd>已跳过</dd>
+            </div>
+            <div>
+              <dt>资料核验</dt>
+              <dd>未执行</dd>
+            </div>
+            <div>
+              <dt>输出内容</dt>
+              <dd>项目适用性说明</dd>
+              <dd className="audit-skipped-output">{outputText(file)}</dd>
+            </div>
+          </dl>
+        </section>
+        <footer>
+          <div>
+            <p className="audit-skipped-note">跳过规则审核不代表审核不通过。</p>
+            {!onRoute && (
+              <p className="audit-muted">路由轨迹尚未加载或未记录。</p>
+            )}
+          </div>
           <Space wrap>
             <Button onClick={onFlow}>返回流程图</Button>
             <Button disabled={!onRoute} onClick={onRoute}>
               查看路由轨迹
             </Button>
           </Space>
-          {!onRoute && (
-            <p className="audit-muted">路由轨迹尚未加载或未记录。</p>
-          )}
-        </div>
-        <aside>
-          <h3>本次处理边界</h3>
-          <dl>
-            <dt>规则审核</dt>
-            <dd>已跳过</dd>
-            <dt>资料核验</dt>
-            <dd>未执行</dd>
-            <dt>输出内容</dt>
-            <dd>项目适用性说明</dd>
-          </dl>
-          <p>{outputText(file)}</p>
-          <small>跳过规则审核不代表审核不通过。</small>
-        </aside>
+        </footer>
       </div>
     );
   if (!graph.session)
