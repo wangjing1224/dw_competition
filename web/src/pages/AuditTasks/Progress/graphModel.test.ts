@@ -155,71 +155,92 @@ describe('三视图的真实数据投影', () => {
   });
   it('普通工具按最近真实会话聚合，子会话不串主会话；失败调用仍保留', () => {
     const graph = agentGraph(sample());
-    const group = graph.nodes.find(
-      (n) => n.id === 'tool:main:bid_agent:search_documents',
-    );
+    const group = graph.nodes.find((n) => n.id === 'main-search');
     expect(group?.members).toEqual(['search1', 'search2']);
-    expect(group?.subtitle).toBe('共 2 次 · 失败 1 次');
-    expect(group?.status).toBe('failed');
+    expect(group?.subtitle).toBe('调用 2 次 · 曾失败 1 次');
+    expect(group?.status).toBe('completed');
     expect(
-      graph.nodes.find(
-        (n) => n.id === 'tool:child1:evidence_subagent:search_documents',
-      )?.members,
+      graph.nodes.find((n) => n.id === 'evidence-search')?.members,
     ).toEqual(['cs']);
-    expect(graph.nodes.find((n) => n.id === 'main')?.subtitle).toContain(
-      '含 1 次失败调用',
+    expect(graph.nodes.find((n) => n.id === 'main-agent')?.status).toBe(
+      'completed',
     );
-    expect(graph.nodes.find((n) => n.id === 'main')?.status).toBe('completed');
-    expect(graph.spanToNode.get('cm')).toBe('child1');
+    expect(graph.spanToNode.get('cm')).toBe('evidence-agent');
   });
-  it('相同规则/check_index的多次委派保持独立，不受继承session_id影响', () => {
+  it('同类能力固定聚合，重复委派保留独立成员与事项定位', () => {
     const graph = agentGraph(sample());
-    expect(graph.edges).toContainEqual({
-      source: 'delegate1',
-      target: 'check1',
-      active: true,
-    });
-    expect(graph.edges).toContainEqual({
-      source: 'check1',
-      target: 'child1',
-      active: true,
-    });
-    expect(graph.edges).toContainEqual({
-      source: 'delegate2',
-      target: 'check2',
-      active: true,
-    });
-    expect(graph.nodes.filter((n) => n.kind === 'evidence_check')).toHaveLength(
-      2,
+    expect(graph.nodes.find((n) => n.id === 'delegate')?.members).toEqual([
+      'delegate1',
+      'delegate2',
+    ]);
+    expect(graph.spanToNode.get('check1')).toBe('evidence-agent');
+    expect(graph.spanToNode.get('check2')).toBe('evidence-agent');
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        source: 'delegate',
+        target: 'evidence-agent',
+        active: true,
+      }),
     );
+    expect(graph.nodes).toHaveLength(8);
     expect(graph.nodes.some((n) => n.id === 'cm')).toBe(false);
   });
   it('模型/轮次定位到所属会话，工具定位到所属聚合节点', () => {
     const graph = agentGraph(sample());
-    expect(graph.spanToNode.get('t')).toBe('main');
-    expect(graph.spanToNode.get('cs')).toBe(
-      'tool:child1:evidence_subagent:search_documents',
-    );
+    expect(graph.spanToNode.get('t')).toBe('main-agent');
+    expect(graph.spanToNode.get('cs')).toBe('evidence-search');
   });
-  it('折叠子会话只改变展示，保留调用计数与原始定位', () => {
-    const graph = agentGraph(sample(), 'main', new Set(['child1']));
-    expect(graph.nodes.find((n) => n.id === 'child1')?.collapsed).toBe(true);
-    expect(graph.nodes.find((n) => n.id === 'child1')?.subtitle).toContain(
-      '模型调用 1 次',
+  it('首次加载即展示固定结构，增加调用不增加节点或改变坐标', () => {
+    const empty = agentGraph([]);
+    const populated = agentGraph(sample());
+    expect(empty.nodes.map((n) => [n.id, n.x, n.y])).toEqual(
+      populated.nodes.map((n) => [n.id, n.x, n.y]),
     );
     expect(
-      graph.nodes.some(
-        (n) => n.id === 'tool:child1:evidence_subagent:search_documents',
-      ),
-    ).toBe(false);
-    expect(graph.spanToNode.get('cs')).toBe(
-      'tool:child1:evidence_subagent:search_documents',
-    );
-    expect(
-      agentGraph(sample()).nodes.some(
-        (n) => n.id === graph.spanToNode.get('cs'),
-      ),
+      empty.nodes.every((n) => n.status === 'inactive' && !n.members.length),
     ).toBe(true);
+    expect(empty.edges.every((e) => !e.active && !e.running)).toBe(true);
+  });
+  it('模型、工具、下一轮模型在固定节点间切换高亮，不把等待的父会话常亮', () => {
+    const main = node('main', 'batch', null, 'bid_agent', {
+      status: 'running',
+    });
+    const model = node('model', 'model', 'main', 'bid_agent', {
+      status: 'running',
+    });
+    const first = agentGraph([main, model]);
+    expect(
+      first.nodes.filter((n) => n.status === 'running').map((n) => n.id),
+    ).toEqual(['main-agent']);
+    const search = node('search', 'tool', 'main', 'bid_agent', {
+      status: 'running',
+      tool_name: 'search_documents',
+    });
+    const next = agentGraph([main, { ...model, status: 'completed' }, search]);
+    expect(
+      next.nodes.filter((n) => n.status === 'running').map((n) => n.id),
+    ).toEqual(['main-search']);
+    expect(next.nodes.find((n) => n.id === 'main-agent')?.label).toBe(
+      '等待工具返回',
+    );
+    expect(next.edges.filter((e) => e.running).map((e) => e.target)).toEqual([
+      'main-search',
+    ]);
+    const last = agentGraph([
+      main,
+      { ...model, status: 'completed' },
+      { ...search, status: 'completed' },
+      { ...model, span_id: 'model2' },
+    ]);
+    expect(
+      last.nodes.filter((n) => n.status === 'running').map((n) => n.id),
+    ).toEqual(['main-agent']);
+    expect(last.nodes.find((n) => n.id === 'main-agent')?.subtitle).toBe(
+      '模型调用 2 次',
+    );
+    expect(first.nodes.map((n) => [n.id, n.x, n.y])).toEqual(
+      last.nodes.map((n) => [n.id, n.x, n.y]),
+    );
   });
   it('默认展示进行中或最近主会话，保留用户明确选择', () => {
     const spans = [
@@ -235,9 +256,9 @@ describe('三视图的真实数据投影', () => {
   it('父节点晚到才连接；最终缺父及循环归到未连接记录', () => {
     const spans = sample(),
       late = spans.filter((s) => s.span_id !== 'delegate1');
-    expect(agentGraph(late).nodes.some((n) => n.id === 'child1')).toBe(false);
+    expect(agentGraph(late).spanToNode.has('child1')).toBe(false);
     expect(agentGraph(late).detached.map((s) => s.span_id)).toContain('cs');
-    expect(agentGraph(spans).nodes.some((n) => n.id === 'child1')).toBe(true);
+    expect(agentGraph(spans).spanToNode.get('child1')).toBe('evidence-agent');
     const cycle = [node('a', 'batch', 'b'), node('b', 'turn', 'a')];
     expect(traceForest(cycle).detached).toHaveLength(2);
     expect(
@@ -259,7 +280,7 @@ describe('三视图的真实数据投影', () => {
     const first = agentGraph(shuffled, 'main'),
       second = agentGraph(shuffled, 'main2');
     expect(first.sessions).toHaveLength(2);
-    expect(first.nodes.find((n) => n.id === 'main')?.x).toBe(28);
+    expect(first.nodes.find((n) => n.id === 'main-agent')?.x).toBe(30);
     expect(first.nodes.some((n) => n.members.includes('search3'))).toBe(false);
     expect(second.nodes.some((n) => n.members.includes('search1'))).toBe(false);
   });

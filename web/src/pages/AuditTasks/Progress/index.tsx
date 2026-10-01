@@ -56,7 +56,6 @@ function FileWorkspace({
     spanId ? { type: 'span', id: spanId } : undefined,
   );
   const [session, setSession] = useState<string>();
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [records, setRecords] = useState(false);
   const [focus, setFocus] = useState<{ id: string; nonce: number }>();
   const screens = Grid.useBreakpoint();
@@ -128,10 +127,7 @@ function FileWorkspace({
     () => (file ? flowGraph(file, nodes) : { nodes: [], edges: [] }),
     [file, nodes],
   );
-  const agent = useMemo(
-    () => agentGraph(nodes, session, collapsed),
-    [nodes, session, collapsed],
-  );
+  const agent = useMemo(() => agentGraph(nodes, session), [nodes, session]);
   const selectSpan = (id: string) => {
     setRecords(false);
     setSelection({ type: 'span', id });
@@ -167,7 +163,6 @@ function FileWorkspace({
       const model = agentGraph(nodes, root.span_id),
         target = model.spanToNode.get(id);
       if (target) {
-        setCollapsed(new Set());
         setSession(root.span_id);
         onNavigate('agent', id);
         setFocus({ id: target, nonce: Date.now() });
@@ -304,16 +299,6 @@ function FileWorkspace({
                         : undefined
                     }
                     focus={focus}
-                    onToggle={(id) => {
-                      setCollapsed((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(id)) next.delete(id);
-                        else next.add(id);
-                        return next;
-                      });
-                      setSelection({ type: 'agent', id });
-                      onNavigate('agent');
-                    }}
                   />
                 </div>
                 <div hidden={view !== 'tree'}>

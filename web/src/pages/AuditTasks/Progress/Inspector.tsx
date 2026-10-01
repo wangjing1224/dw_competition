@@ -8,6 +8,7 @@ import type {
 } from '@/services/auditTasks';
 import { api } from '@/services/auditTasks';
 import { ruleLabels } from '@/utils/displayLabels';
+import ExpandableContent from '../ExpandableContent';
 import { Markdown, Status, useRemote } from '../shared';
 import type { GraphNode } from './graphModel';
 import {
@@ -22,15 +23,31 @@ import {
 export type Selection =
   | { type: 'flow' | 'agent' | 'span'; id: string }
   | { type: 'draft'; id: 'draft' };
-function VisibleValue({ value, empty }: { value: unknown; empty: string }) {
+function VisibleValue({
+  value,
+  empty,
+  label,
+  markdown = false,
+}: {
+  value: unknown;
+  empty: string;
+  label: string;
+  markdown?: boolean;
+}) {
+  const text =
+    value == null
+      ? empty
+      : typeof value === 'string'
+        ? value
+        : JSON.stringify(value, null, 2);
   return (
-    <pre>
-      {value == null
-        ? empty
-        : typeof value === 'string'
-          ? value
-          : JSON.stringify(value, null, 2)}
-    </pre>
+    <ExpandableContent text={text} label={label} previewHeight={128}>
+      {markdown && typeof value === 'string' ? (
+        <Markdown text={text} />
+      ) : (
+        <pre>{text}</pre>
+      )}
+    </ExpandableContent>
   );
 }
 export default function Inspector({
@@ -167,11 +184,14 @@ export default function Inspector({
                     <VisibleValue
                       value={details.data?.input}
                       empty="未记录输入"
+                      label="调用输入"
                     />
                     <h4>可见输出</h4>
                     <VisibleValue
                       value={details.data?.output}
                       empty="尚无可见返回"
+                      label="可见输出"
+                      markdown
                     />
                   </>
                 )
@@ -192,6 +212,7 @@ export default function Inspector({
                           target_file_ids: span.target_file_ids,
                         }}
                         empty="无"
+                        label="技术信息"
                       />
                     ),
                   },
@@ -260,14 +281,14 @@ export default function Inspector({
                     ) : null;
                   })}
                 </div>
-                <p className="audit-muted">
-                  选择一次实际调用查看参数与结果；虚拟节点不会请求调用详情。
-                </p>
+                <p className="audit-muted">选择一次实际调用查看参数与结果。</p>
               </>
             )}
             {!memberIds.length && (
               <p className="audit-muted">
-                此处展示业务状态，没有对应的已加载调用记录。
+                {selection.type === 'agent'
+                  ? '这是固定能力节点，尚无已加载调用记录。具体执行情况以轨迹树为准。'
+                  : '此处展示业务状态，没有对应的已加载调用记录。'}
               </p>
             )}
           </>

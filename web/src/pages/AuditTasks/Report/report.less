@@ -1,0 +1,96 @@
+.audit-report-summary {
+  align-items: start;
+  > div { min-width: 0; }
+  .audit-conclusion {
+    margin: 8px 0 14px;
+    font-size: 22px;
+    line-height: 1.4;
+  }
+  .audit-report-conclusion > .audit-muted:last-child {
+    display: block;
+    margin-top: 14px;
+    line-height: 1.7;
+  }
+}
+.audit-report-summary,
+.audit-rule-inspector {
+  .audit-markdown {
+    font-size: 14px;
+    line-height: 1.85;
+    p { margin: 0 0 10px; }
+    ul, ol { padding-left: 22px; }
+    strong { font-weight: 600; }
+    > :last-child { margin-bottom: 0; }
+    table { display: block; max-width: 100%; overflow: auto; }
+  }
+}
+.audit-report-body {
+  > .ant-card {
+    display: flex;
+    flex-direction: column;
+    height: 700px;
+    > .ant-card-head { flex-shrink: 0; }
+    > .ant-card-body {
+      flex: 1;
+      min-height: 0;
+      padding: 20px;
+      overflow: auto;
+    }
+  }
+  .ant-table-row { cursor: pointer; }
+  .ant-table-cell { vertical-align: top; }
+  .audit-rule-inspector {
+    max-height: none;
+    white-space: normal;
+    overflow: visible;
+  }
+}
+.audit-finding-preview {
+  max-width: 380px;
+  margin-top: 6px;
+  color: #60718c;
+  .audit-markdown {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    font-size: 13px;
+    line-height: 1.7;
+    p { margin: 0; }
+  }
+}
+.audit-report-section {
+  margin-top: 22px;
+  h4 {
+    margin: 0 0 10px;
+    color: #334966;
+    font-size: 14px;
+    font-weight: 600;
+  }
+}
+.audit-rule-requirement,
+.audit-finding-explanation {
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid #e7edf7;
+  background: #f8faff;
+}
+.audit-finding-explanation {
+  background: #fff;
+  border-left: 3px solid #96b8f5;
+}
+.audit-report-sources {
+  border-top: 1px solid #edf1f7;
+  padding-top: 18px;
+  h4:not(:first-child) { margin-top: 18px; }
+  .ant-btn-link {
+    padding-inline: 0;
+    height: auto;
+    white-space: normal;
+    text-align: left;
+  }
+  blockquote { margin: 10px 0; border-left: 3px solid #dfe8f5; padding-left: 12px; color: #60718c; }
+}
+@media (max-width: 700px) {
+  .audit-report-body > .ant-card { height: auto; max-height: 680px; }
+}

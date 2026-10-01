@@ -3,7 +3,7 @@ import { Button, Space } from 'antd';
 import type { ZoomBehavior, ZoomTransform } from 'd3';
 import { select, zoom, zoomIdentity } from 'd3';
 import type { ReactNode } from 'react';
-import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { Graph } from './graphModel';
 import { statusText } from './graphModel';
 
@@ -14,7 +14,6 @@ export default function GraphCanvas({
   label,
   extra,
   focus,
-  onToggle,
 }: {
   graph: Graph;
   selected?: string;
@@ -22,7 +21,6 @@ export default function GraphCanvas({
   label: string;
   extra?: ReactNode;
   focus?: { id: string; nonce: number };
-  onToggle?: (id: string) => void;
 }) {
   const host = useRef<HTMLElement>(null);
   const behavior = useRef<ZoomBehavior<HTMLElement, unknown>>(undefined);
@@ -230,11 +228,14 @@ export default function GraphCanvas({
               return (
                 <g key={`${edge.source}/${edge.target}`}>
                   <path
+                    className={edge.running ? 'audit-edge-running' : undefined}
                     d={`M${x1} ${y1} H${mid} V${y2} H${x2}`}
                     fill="none"
                     stroke={edge.active ? '#3478ff' : '#bac5d7'}
-                    strokeWidth={2}
-                    strokeDasharray={edge.active ? undefined : '5 5'}
+                    strokeWidth={edge.running ? 3 : 2}
+                    strokeDasharray={
+                      edge.running ? '8 5' : edge.active ? undefined : '5 5'
+                    }
                     markerEnd={`url(#${marker}-${edge.active ? 'active' : 'idle'})`}
                   />
                   {edge.label && (
@@ -256,48 +257,35 @@ export default function GraphCanvas({
             })}
           </svg>
           {graph.nodes.map((node) => (
-            <Fragment key={node.id}>
-              <button
-                type="button"
-                aria-pressed={selected === node.id}
-                className={`audit-graph-node ${node.tone || ''} ${node.diamond ? 'decision' : ''} ${selected === node.id ? 'selected' : ''} node-${node.status}`}
-                style={{
-                  left: node.x,
-                  top: node.y,
-                  width: node.width,
-                  height: node.height,
-                }}
-                title={[
-                  node.title,
-                  node.label || statusText(node.status),
-                  node.subtitle,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-                onClick={() => onSelect(node.id)}
-              >
-                <strong>{node.title}</strong>
-                <span className={`audit-node-status stage-${node.status}`}>
-                  {node.label || statusText(node.status)}
-                </span>
-                {node.subtitle && <small>{node.subtitle}</small>}
-              </button>
-              {node.collapsible && onToggle && (
-                <button
-                  type="button"
-                  className="audit-branch-toggle"
-                  style={{
-                    left: node.x + node.width - 29,
-                    top: node.y + node.height - 28,
-                  }}
-                  aria-label={`${node.collapsed ? '展开' : '收起'}${node.title}的工具`}
-                  aria-expanded={!node.collapsed}
-                  onClick={() => onToggle(node.id)}
-                >
-                  {node.collapsed ? '＋' : '−'}
-                </button>
-              )}
-            </Fragment>
+            <button
+              key={node.id}
+              type="button"
+              aria-pressed={selected === node.id}
+              className={`audit-graph-node ${node.tone || ''} ${node.diamond ? 'decision' : ''} ${selected === node.id ? 'selected' : ''} node-${node.status}`}
+              style={{
+                left: node.x,
+                top: node.y,
+                width: node.width,
+                height: node.height,
+              }}
+              title={[
+                node.title,
+                node.label || statusText(node.status),
+                node.subtitle,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+              onClick={() => onSelect(node.id)}
+            >
+              <strong>{node.title}</strong>
+              <span className={`audit-node-status stage-${node.status}`}>
+                {node.status === 'running' && (
+                  <i className="audit-running-dot" aria-hidden="true" />
+                )}
+                {node.label || statusText(node.status)}
+              </span>
+              {node.subtitle && <small>{node.subtitle}</small>}
+            </button>
           ))}
         </div>
       </section>

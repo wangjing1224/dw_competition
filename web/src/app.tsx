@@ -22,15 +22,7 @@ export const layout: RunTimeLayoutConfig = () => ({
   menu: { locale: false },
   siderWidth: 224,
   logo: <span className="brand-mark">审</span>,
-  // side 布局会把 actions 放进侧栏；收起时不输出长文案，避免挤成竖排。
-  actionsRender: ({ collapsed }) =>
-    collapsed
-      ? []
-      : [
-          <span key="label" className="header-note">
-            招投标智能审核 · 规则 · 资料 · 审核
-          </span>,
-        ],
+  actionsRender: false,
   avatarProps: undefined,
   footerRender: false,
   menuItemRender: (item, dom) =>

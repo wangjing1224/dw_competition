@@ -1,0 +1,19 @@
+.audit-expandable {
+  min-width: 0;
+  > .ant-btn {
+    margin-top: 6px;
+    padding-inline: 0;
+    font-size: 12px;
+  }
+  .audit-expandable-body {
+    position: relative;
+    overflow-wrap: anywhere;
+    scrollbar-gutter: stable;
+    > :first-child { margin-top: 0; }
+    > :last-child { margin-bottom: 0; }
+    &:focus-visible { outline: 2px solid #91b8ff; outline-offset: -2px; }
+  }
+  &.is-folded .audit-expandable-body {
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
+  }
+}

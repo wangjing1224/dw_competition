@@ -1,4 +1,3 @@
-import { hierarchy, tree } from 'd3';
 import type { AuditFile, ReportData, Span } from '@/services/auditTasks';
 import { stageStates, statusLabels } from '@/services/auditTasks';
 
@@ -107,13 +106,12 @@ export type GraphNode = {
   members: string[];
   parent?: string;
   kind?: string;
-  collapsible?: boolean;
-  collapsed?: boolean;
 };
 export type GraphEdge = {
   source: string;
   target: string;
   active?: boolean;
+  running?: boolean;
   label?: string;
 };
 export type Graph = { nodes: GraphNode[]; edges: GraphEdge[] };
@@ -277,11 +275,80 @@ export function spanTitle(span: Span, spans: Span[]) {
     return `${span.actor === 'bid_agent' ? '主审核' : '资料核验'}会话 ${String(spans.filter((s) => s.kind === 'batch' && s.actor === span.actor).findIndex((s) => s.span_id === span.span_id) + 1).padStart(2, '0')}`;
   return span.title;
 }
-export function agentGraph(
-  spans: Span[],
-  requestedSession?: string,
-  collapsed: ReadonlySet<string> = new Set(),
-) {
+// 固定能力拓扑对应主审核的四个工具与资料子 Agent 的两个工具。
+// 节点是能力，不是单次 span；实际调用仅更新成员、状态和次数，不改变布局。
+const agentTopology = [
+  {
+    id: 'main-agent',
+    title: '主审核 Agent',
+    actor: 'bid_agent',
+    x: 30,
+    y: 180,
+  },
+  {
+    id: 'main-search',
+    title: '原文检索',
+    actor: 'bid_agent',
+    tool: 'search_documents',
+    parent: 'main-agent',
+    x: 300,
+    y: 20,
+  },
+  {
+    id: 'main-image',
+    title: '查看图片',
+    actor: 'bid_agent',
+    tool: 'view_image',
+    parent: 'main-agent',
+    x: 300,
+    y: 140,
+  },
+  {
+    id: 'main-report',
+    title: '报告维护',
+    actor: 'bid_agent',
+    tool: 'report_document',
+    parent: 'main-agent',
+    x: 300,
+    y: 260,
+  },
+  {
+    id: 'delegate',
+    title: '资料核验委派',
+    actor: 'bid_agent',
+    tool: 'request_evidence_review',
+    parent: 'main-agent',
+    x: 300,
+    y: 380,
+  },
+  {
+    id: 'evidence-agent',
+    title: '资料核验 Agent',
+    actor: 'evidence_subagent',
+    parent: 'delegate',
+    x: 570,
+    y: 380,
+  },
+  {
+    id: 'evidence-search',
+    title: '原文检索',
+    actor: 'evidence_subagent',
+    tool: 'search_documents',
+    parent: 'evidence-agent',
+    x: 840,
+    y: 310,
+  },
+  {
+    id: 'evidence-image',
+    title: '查看图片',
+    actor: 'evidence_subagent',
+    tool: 'view_image',
+    parent: 'evidence-agent',
+    x: 840,
+    y: 450,
+  },
+];
+export function agentGraph(spans: Span[], requestedSession?: string) {
   const { byId, detached } = traceForest(spans);
   const detachedIds = new Set(detached.map((s) => s.span_id));
   const sessions = spans.filter(
@@ -294,126 +361,67 @@ export function agentGraph(
     sessions.find((s) => s.span_id === requestedSession) ||
     [...sessions].reverse().find((s) => s.status === 'running') ||
     sessions.at(-1);
-  let nodes: GraphNode[] = [];
   const spanToNode = new Map<string, string>();
-  if (!session)
-    return { nodes, edges: [], sessions, session, spanToNode, detached };
   const inSession = spans.filter(
     (s) =>
+      session &&
       !detachedIds.has(s.span_id) &&
       (s === session || ancestors(s, byId).includes(session)),
   );
-  const anchor = (s: Span) =>
-    s.kind === 'batch' ||
-    s.kind === 'evidence_check' ||
-    (s.kind === 'tool' &&
-      (s.tool_name || s.name) === 'request_evidence_review');
-  const owner = (s: Span) => ancestors(s, byId).find(anchor);
-  for (const s of inSession.filter(anchor)) {
-    const ownSpans = inSession.filter(
-      (n) => ancestors(n, byId).find((p) => p.kind === 'batch') === s,
-    );
-    const failed = ownSpans.filter(
-      (n) => n.kind === 'tool' && failure(n.status),
-    ).length;
-    const turns = ownSpans.filter((n) => n.kind === 'turn').length;
-    const models = ownSpans.filter((n) => n.kind === 'model').length;
-    nodes.push({
-      id: s.span_id,
-      title: spanTitle(s, spans),
-      subtitle:
-        s.kind === 'batch'
-          ? `${turns} 轮 · 模型调用 ${models} 次${failed ? ` · 含 ${failed} 次失败调用` : ''}`
-          : duration(s),
-      status: s.status,
-      parent: s === session ? undefined : owner(s)?.span_id,
-      members: [s.span_id],
-      kind: s.kind,
-      tone:
-        s.actor === 'evidence_subagent' || s.kind === 'evidence_check'
-          ? 'purple'
-          : 'blue',
-      x: 0,
-      y: 0,
-      width: 210,
-      height: 104,
-    });
-    spanToNode.set(s.span_id, s.span_id);
-  }
-  for (const s of inSession.filter((s) => s.kind === 'tool' && !anchor(s))) {
-    const nearest = ancestors(s, byId).find((p) => p.kind === 'batch');
-    if (!nearest || !spanToNode.has(nearest.span_id)) continue;
-    const name = s.tool_name || s.name;
-    const id = `tool:${nearest.span_id}:${s.actor}:${name}`;
-    let node = nodes.find((n) => n.id === id);
-    if (!node) {
-      node = {
-        id,
-        title: tools[name] || s.title,
-        subtitle: '',
-        status: s.status,
-        parent: nearest.span_id,
-        members: [],
-        kind: 'tool_group',
-        tone: s.actor === 'evidence_subagent' ? 'purple' : 'blue',
-        x: 0,
-        y: 0,
-        width: 210,
-        height: 104,
-      };
-      nodes.push(node);
-    }
-    node.members.push(s.span_id);
-    spanToNode.set(s.span_id, id);
-  }
-  for (const node of nodes.filter((n) => n.kind === 'tool_group')) {
-    const members = node.members.flatMap((id) => {
-      const value = byId.get(id);
-      return value ? [value] : [];
-    });
-    const failures = members.filter((s) => failure(s.status)).length;
-    node.subtitle = `共 ${members.length} 次${failures ? ` · 失败 ${failures} 次` : ''}`;
-    node.status = members.some((s) => s.status === 'running')
+  const latestStatus = (members: Span[]) =>
+    members.some((s) => s.status === 'running')
       ? 'running'
-      : failures
-        ? 'failed'
-        : members.every((s) => ['completed', 'succeeded'].includes(s.status))
-          ? 'completed'
-          : 'unknown';
-  }
-  // 折叠只隐藏显示节点，不改变调用计数、原始 span 和双向定位映射。
-  const allNodes = new Map(nodes.map((n) => [n.id, n]));
-  const parents = new Set(nodes.map((n) => n.parent));
-  for (const node of nodes) {
-    node.collapsible =
-      node.kind === 'batch' &&
-      byId.get(node.id)?.actor === 'evidence_subagent' &&
-      parents.has(node.id);
-    node.collapsed = node.collapsible && collapsed.has(node.id);
-  }
-  nodes = nodes.filter((node) => {
-    let parent = node.parent ? allNodes.get(node.parent) : undefined;
-    while (parent) {
-      if (parent.collapsed) return false;
-      parent = parent.parent ? allNodes.get(parent.parent) : undefined;
+      : [...members]
+          .sort((a, b) => a.started_at.localeCompare(b.started_at))
+          .at(-1)?.status || 'inactive';
+  const nodes: GraphNode[] = agentTopology.map((template) => {
+    const owned = inSession.filter((s) => s.actor === template.actor);
+    const members = template.tool
+      ? owned.filter(
+          (s) => s.kind === 'tool' && (s.tool_name || s.name) === template.tool,
+        )
+      : owned.filter((s) => s.kind === 'model');
+    const batches = owned.filter((s) => s.kind === 'batch');
+    const failures = members.filter((s) => failure(s.status)).length;
+    let status = latestStatus(members);
+    let label = members.length ? statusText(status) : '尚无调用记录';
+    if (!template.tool) {
+      // batch 在整个循环中都是 running；仅模型真正运行时点亮 Agent。
+      // 工具执行时 Agent 等待，不能把父会话常亮当作正在调用模型。
+      if (status === 'running') label = '模型调用中';
+      else if (owned.some((s) => s.kind === 'tool' && s.status === 'running')) {
+        status = 'waiting';
+        label = '等待工具返回';
+      } else if (batches.some((s) => s.status === 'running')) {
+        status = 'waiting';
+        label = '等待下一步';
+      } else if (batches.length) {
+        status = latestStatus(batches);
+        label = status === 'completed' ? '已结束' : statusText(status);
+      }
     }
-    return true;
+    for (const s of members) spanToNode.set(s.span_id, template.id);
+    for (const s of template.tool
+      ? []
+      : owned.filter((s) =>
+          ['batch', 'turn', 'evidence_check'].includes(s.kind),
+        ))
+      spanToNode.set(s.span_id, template.id);
+    return {
+      ...template,
+      width: 220,
+      height: 100,
+      kind: template.tool ? 'tool_group' : 'agent',
+      tone: template.actor === 'evidence_subagent' ? 'purple' : 'blue',
+      status,
+      label,
+      subtitle: `${template.tool ? '调用' : '模型调用'} ${members.length} 次${failures ? ` · 曾失败 ${failures} 次` : ''}`,
+      members: (template.tool || members.length ? members : batches).map(
+        (s) => s.span_id,
+      ),
+    };
   });
-  // D3 只计算布局，节点身份及父子关系均来自上面的真实投影。
-  const childMap = new Map<string, GraphNode[]>();
-  for (const node of nodes)
-    if (node.parent)
-      childMap.set(node.parent, [...(childMap.get(node.parent) || []), node]);
-  const rootNode = nodes.find((n) => n.id === session.span_id);
-  if (!rootNode) throw new Error('主审核会话投影缺失');
-  const root = tree<GraphNode>().nodeSize([140, 270])(
-    hierarchy(rootNode, (n) => childMap.get(n.id)),
-  );
-  const minX = Math.min(...root.descendants().map((n) => n.x));
-  for (const n of root.descendants()) {
-    n.data.x = n.y + 28;
-    n.data.y = n.x - minX + 36;
-  }
+  // 未映射的事件定位到最近的已知能力；完整单次调用始终保留在轨迹树。
   for (const s of inSession) {
     if (!spanToNode.has(s.span_id)) {
       const parent = ancestors(s, byId).find((p) => spanToNode.has(p.span_id));
@@ -424,7 +432,16 @@ export function agentGraph(
   return {
     nodes,
     edges: nodes.flatMap((n) =>
-      n.parent ? [{ source: n.parent, target: n.id, active: true }] : [],
+      n.parent
+        ? [
+            {
+              source: n.parent,
+              target: n.id,
+              active: !!n.members.length,
+              running: n.status === 'running',
+            },
+          ]
+        : [],
     ),
     sessions,
     session,

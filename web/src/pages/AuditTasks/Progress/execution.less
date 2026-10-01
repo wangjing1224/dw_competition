@@ -127,12 +127,16 @@
   }
 }
 .audit-three-views {
+  --audit-workspace-height: clamp(500px, 65vh, 720px);
   margin-top: 16px;
   > header {
     flex-wrap: wrap;
   }
 }
 .audit-visual-body {
+  height: var(--audit-workspace-height);
+  min-height: 0;
+  overflow: hidden;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   &.with-inspector {
@@ -141,11 +145,19 @@
 }
 .audit-visual-main {
   min-width: 0;
+  min-height: 0;
+  > div:not([hidden]) {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
   [hidden] {
     display: none !important;
   }
 }
 .audit-graph-toolbar {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -163,6 +175,11 @@
 }
 .audit-diagram {
   height: clamp(400px, 53vh, 640px);
+  .audit-visual-main & {
+    flex: 1;
+    height: auto;
+    min-height: 260px;
+  }
   position: relative;
   overflow: hidden;
   background-color: #f8faff;
@@ -256,34 +273,40 @@
   &.selected {
     background: #ecf4ff;
   }
+  &.node-running {
+    border: 2px solid #3478ff;
+    background: #edf5ff;
+    box-shadow: 0 0 0 5px #3478ff18, 0 6px 20px #3478ff25;
+  }
+}
+.audit-running-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #3478ff;
+  animation: audit-pulse 1.4s ease-in-out infinite;
+}
+.audit-edge-running { animation: audit-edge-flow 1s linear infinite; }
+@keyframes audit-pulse { 50% { opacity: 0.35; } }
+@keyframes audit-edge-flow { to { stroke-dashoffset: -26; } }
+@media (prefers-reduced-motion: reduce) {
+  .audit-running-dot, .audit-edge-running { animation: none; }
 }
 .audit-node-status {
   font-size: 12px;
 }
-.audit-branch-toggle {
-  position: absolute;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid #d5dff2;
-  border-radius: 6px;
-  background: #fff;
-  color: #526fa4;
-  cursor: pointer;
-  &:hover {
-    background: #edf4ff;
-  }
-  &:focus-visible {
-    outline: 2px solid #3478ff;
-    outline-offset: 2px;
-  }
-}
 .audit-inspection-panel {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   border-left: 1px solid #e5ebf5;
   > header {
+    flex-shrink: 0;
     height: 49px;
     padding: 10px 18px;
     display: flex;
@@ -352,9 +375,11 @@
   }
 }
 .audit-trace-tree {
-  height: clamp(450px, 60vh, 690px);
-  overflow: auto;
-  padding: 18px;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 16px 16px;
   .ant-tree-node-content-wrapper {
     padding: 6px 8px;
   }
@@ -365,6 +390,15 @@
     background: #ecf4ff !important;
   }
 }
+.audit-tree-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 0;
+}
+.audit-tree-viewport { flex: 1; min-height: 0; overflow: auto; }
 .audit-skipped-agent {
   display: flex;
   flex-direction: column;

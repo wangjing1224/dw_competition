@@ -292,7 +292,12 @@ describe('审核工作区', () => {
       expect(screen.queryByText(id)).not.toBeInTheDocument();
     }
     expect(screen.getByText('规则库 · 规则库甲')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '查看全部规则' }));
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '规则结论筛选' }));
+    fireEvent.click(
+      await screen.findByText('全部规则', {
+        selector: '.ant-select-item-option-content',
+      }),
+    );
     expect(
       await screen.findByRole('button', { name: '规则 01' }),
     ).toBeInTheDocument();
@@ -480,7 +485,15 @@ describe('审核工作区', () => {
     expect(
       screen.getByRole('button', { name: '查看解析原文' }),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '查看全部规则' }));
+    expect(
+      screen.queryByRole('button', { name: '查看全部规则' }),
+    ).not.toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '规则结论筛选' }));
+    fireEvent.click(
+      await screen.findByText('全部规则', {
+        selector: '.ant-select-item-option-content',
+      }),
+    );
     expect(await screen.findByText('rule-2的核验说明')).toBeInTheDocument();
     expect(
       screen.getByRole('img', {
@@ -497,6 +510,91 @@ describe('审核工作区', () => {
     );
     expect(await screen.findByText('不是本次项目')).toBeInTheDocument();
     expect(screen.queryByText('已核验规则')).not.toBeInTheDocument();
+  });
+  it('报告长结论默认收起，规则详情分区渲染 Markdown 而非原始标记', async () => {
+    const long = `**关键风险**\n\n${'依据当前文件核验。'.repeat(80)}`;
+    mockApi((url) =>
+      url.endsWith('/files/file-1')
+        ? {
+            ...report,
+            result: {
+              ...report.result,
+              audit_summary: long,
+              findings: [
+                {
+                  ...finding('rule-1', 'risk'),
+                  summary: '**需要复核**\n\n- 查验原件',
+                },
+              ],
+            },
+          }
+        : undefined,
+    );
+    const { container } = render(
+      <App>
+        <Report />
+      </App>,
+    );
+    const toggle = await screen.findByRole('button', { name: '展开总体结论' });
+    expect(screen.getByRole('region', { name: '总体结论' })).toHaveStyle({
+      maxHeight: '168px',
+    });
+    fireEvent.click(toggle);
+    expect(screen.getByRole('region', { name: '总体结论' })).toHaveStyle({
+      overflowY: 'auto',
+      maxHeight: '360px',
+    });
+    expect(
+      container.querySelector('.audit-finding-explanation strong'),
+    ).toHaveTextContent('需要复核');
+    expect(
+      container.querySelector('.audit-finding-explanation li'),
+    ).toHaveTextContent('查验原件');
+    expect(
+      screen.queryByRole('button', { name: '查看全部规则' }),
+    ).not.toBeInTheDocument();
+  });
+  it('轨迹长输入输出默认收起，在详情框内展开且不丢失原文', async () => {
+    vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ lg: true });
+    const input = {
+      checks: Array.from({ length: 15 }, (_, i) => ({
+        request: `核验事项 ${i} 及其对应依据`,
+        file_ids: ['file-1'],
+      })),
+    };
+    const output = `**核验结果**\n\n${'需要进一步核对来源。'.repeat(100)}`;
+    mockApi((url) =>
+      url.includes('/trace/')
+        ? { span: span('span-1'), input, output, error: null, truncated: false }
+        : undefined,
+    );
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    await screen.findByText('当前文件 · 已观测');
+    fireEvent.click(screen.getByRole('radio', { name: '轨迹树' }));
+    fireEvent.click(
+      screen.getByText('模型调用', { selector: '.ant-tree-title span' }),
+    );
+    const inputToggle = await screen.findByRole('button', {
+      name: '展开调用输入',
+    });
+    expect(screen.getByRole('region', { name: '调用输入' })).toHaveStyle({
+      maxHeight: '128px',
+    });
+    expect(
+      screen.getByRole('button', { name: '展开可见输出' }),
+    ).toBeInTheDocument();
+    fireEvent.click(inputToggle);
+    expect(screen.getByRole('region', { name: '调用输入' })).toHaveStyle({
+      overflowY: 'auto',
+      maxHeight: '360px',
+    });
+    expect(screen.getByRole('region', { name: '调用输入' })).toHaveTextContent(
+      '核验事项 14',
+    );
   });
   it('进度使用真实服务端活动统计，不把树节点数当模型调用数', async () => {
     mockApi();
@@ -656,7 +754,7 @@ describe('审核工作区', () => {
       await screen.findByText('本文件未进入审核 Agent'),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole('region', { name: 'Agent 调用关系图' }),
+      screen.queryByRole('region', { name: 'Agent 执行图' }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText('报告保存')).not.toBeInTheDocument();
     const boundary = screen.getByRole('region', { name: '本次处理范围与输出' });
@@ -733,9 +831,11 @@ describe('审核工作区', () => {
     await screen.findByText('当前文件 · 已观测');
     fireEvent.click(screen.getByRole('radio', { name: 'Agent 图' }));
     const graph = await screen.findByRole('region', {
-      name: 'Agent 调用关系图',
+      name: 'Agent 执行图',
     });
-    fireEvent.click(within(graph).getByRole('button', { name: /原文检索/ }));
+    fireEvent.click(
+      within(graph).getByRole('button', { name: /原文检索.*调用 1 次/ }),
+    );
     expect(fetch.mock.calls.some(([url]) => url.includes('/trace/'))).toBe(
       false,
     );

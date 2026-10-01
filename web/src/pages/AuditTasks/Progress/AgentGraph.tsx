@@ -1,4 +1,4 @@
-import { Alert, Button, Empty, Select, Space } from 'antd';
+import { Button, Select, Space } from 'antd';
 import type { AuditFile } from '@/services/auditTasks';
 import GraphCanvas from './GraphCanvas';
 import { type agentGraph, outputText, skippedAudit, stage } from './graphModel';
@@ -13,7 +13,6 @@ export default function AgentGraph({
   onRoute,
   partial,
   focus,
-  onToggle,
 }: {
   file: AuditFile;
   graph: ReturnType<typeof agentGraph>;
@@ -24,7 +23,6 @@ export default function AgentGraph({
   onRoute?: () => void;
   partial: boolean;
   focus?: { id: string; nonce: number };
-  onToggle: (id: string) => void;
 }) {
   if (skippedAudit(file))
     return (
@@ -86,30 +84,16 @@ export default function AgentGraph({
         </footer>
       </div>
     );
-  if (!graph.session)
-    return (
-      <div className="audit-graph-empty">
-        <Empty
-          description={
-            stage(file, 'auditing').status === 'failed'
-              ? '审核阶段执行失败，尚无可连接的 Agent 会话'
-              : stage(file, 'auditing').status === 'waiting' ||
-                  stage(file, 'auditing').status === 'not_run'
-                ? '当前尚未进入规则审核阶段'
-                : '尚未取得可连接的 Agent 会话；不根据缺失轨迹推断未执行'
-          }
-        />
-        <Button onClick={onFlow}>查看流程状态</Button>
-        {!!graph.detached.length && (
-          <Alert
-            type="warning"
-            title="关联信息不完整，可在轨迹树中查看未连接记录"
-          />
-        )}
-      </div>
-    );
   return (
     <>
+      {!graph.session && (
+        <div className="audit-graph-notice">
+          {stage(file, 'auditing').status === 'failed'
+            ? '审核阶段执行失败，尚无可连接的 Agent 会话。'
+            : '等待 Agent 执行记录。'}
+          下方为固定能力结构，灰色不代表执行失败。
+        </div>
+      )}
       {partial && (
         <div className="audit-graph-notice">
           仅展示已加载调用，节点次数可能尚不完整。
@@ -121,18 +105,18 @@ export default function AgentGraph({
         </div>
       )}
       <GraphCanvas
-        key={graph.session.span_id}
         graph={graph}
-        label="Agent 调用关系图"
+        label="Agent 执行图"
         selected={selected}
         onSelect={onSelect}
         focus={focus}
-        onToggle={onToggle}
         extra={
           <Space wrap>
             <Select
               aria-label="主审核会话"
-              value={graph.session.span_id}
+              value={graph.session?.span_id}
+              disabled={!graph.sessions.length}
+              placeholder="等待主审核会话"
               onChange={onSession}
               options={graph.sessions.map((s, i) => ({
                 value: s.span_id,
@@ -140,7 +124,9 @@ export default function AgentGraph({
               }))}
               style={{ width: 220 }}
             />
-            <span className="audit-muted">连线表示调用归属，不表示并发</span>
+            <span className="audit-muted">
+              固定能力节点 · 蓝色亮起为正在执行 · 次数按已加载记录统计
+            </span>
           </Space>
         }
       />

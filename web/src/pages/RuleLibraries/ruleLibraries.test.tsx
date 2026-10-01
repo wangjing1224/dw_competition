@@ -122,29 +122,29 @@ describe('规则库工作台', () => {
       '/rule-libraries',
     );
   });
-  it('侧栏收起时隐藏两段说明，展开后恢复', () => {
+  it('侧栏移除重复说明，底部提示居中且收起时隐藏', () => {
     const config = layout({} as Parameters<typeof layout>[0]);
-    const actions = config.actionsRender;
+    expect(config.actionsRender).toBe(false);
     const footer = config.menuFooterRender;
-    if (typeof actions !== 'function' || typeof footer !== 'function') {
+    if (typeof footer !== 'function') {
       throw new Error('布局应提供侧栏渲染函数');
     }
     const sidebar = (collapsed: boolean) => (
       <>
         {config.logo}
-        {actions({ collapsed } as Parameters<typeof actions>[0])}
         {footer({ collapsed } as Parameters<typeof footer>[0])}
       </>
     );
     const { rerender } = render(sidebar(false));
-    expect(
-      screen.getByText('招投标智能审核 · 规则 · 资料 · 审核'),
-    ).toBeInTheDocument();
+    expect(screen.queryByText('招投标智能审核')).not.toBeInTheDocument();
+    expect(screen.queryByText('规则 · 资料 · 审核')).not.toBeInTheDocument();
     expect(screen.getByText(/智能整理 · 依据可查/)).toBeInTheDocument();
+    expect(screen.getByText(/人工审阅 · 规则可复用/)).toBeInTheDocument();
+    const styles = readFileSync('src/global.less', 'utf8');
+    expect(styles).toMatch(/\.sidebar-note\s*\{[^}]*text-align:\s*center/);
     rerender(sidebar(true));
-    expect(
-      screen.queryByText('招投标智能审核 · 规则 · 资料 · 审核'),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText('招投标智能审核')).not.toBeInTheDocument();
+    expect(screen.queryByText('规则 · 资料 · 审核')).not.toBeInTheDocument();
     expect(screen.queryByText(/智能整理 · 依据可查/)).not.toBeInTheDocument();
     expect(screen.getByText('审')).toBeInTheDocument();
     rerender(sidebar(false));

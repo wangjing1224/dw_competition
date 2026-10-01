@@ -167,7 +167,7 @@ it('节点和连线在同一变换层，键盘平移/缩放可用，更新节点
         members: [],
       },
     ],
-    edges: [{ source: 'file', target: 'parse', active: true }],
+    edges: [{ source: 'file', target: 'parse', active: true, running: true }],
   };
   const onSelect = vi.fn();
   const { container, rerender } = render(
@@ -177,6 +177,10 @@ it('节点和连线在同一变换层，键盘平移/缩放可用，更新节点
   const initial = layer?.style.transform;
   expect(layer?.querySelector('svg path')).toBeTruthy();
   expect(layer?.querySelector('button')).toBeTruthy();
+  const parsingNode = screen.getByRole('button', { name: /文档解析/ });
+  expect(parsingNode).toHaveClass('node-running');
+  expect(parsingNode.querySelector('.audit-running-dot')).toBeTruthy();
+  expect(layer?.querySelector('.audit-edge-running')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: '流程画布放大' }));
   expect(layer?.style.transform).not.toBe(initial);
   const scaled = layer?.style.transform;
@@ -190,12 +194,17 @@ it('节点和连线在同一变换层，键盘平移/缩放可用，更新节点
       graph={{
         ...graph,
         nodes: graph.nodes.map((n) => ({ ...n, status: 'completed' })),
+        edges: graph.edges.map((edge) => ({ ...edge, running: false })),
       }}
       onSelect={onSelect}
       label="流程画布"
     />,
   );
   expect(layer?.style.transform).toBe(moved);
+  expect(screen.getByRole('button', { name: /文档解析/ })).toBe(parsingNode);
+  expect(parsingNode).not.toHaveClass('node-running');
+  expect(layer?.querySelector('.audit-running-dot')).toBeNull();
+  expect(layer?.querySelector('.audit-edge-running')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: /文档解析/ }));
   expect(onSelect).toHaveBeenCalledWith('parse');
   expect(layer?.style.transform).toBe(moved);

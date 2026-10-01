@@ -30,6 +30,7 @@ import {
   verifications,
 } from '@/services/ruleLibraries';
 import { fileLabel, ruleLabels } from '@/utils/displayLabels';
+import ExpandableContent from '../ExpandableContent';
 import { reportBranch } from '../Progress/graphModel';
 import {
   Binding,
@@ -42,6 +43,7 @@ import {
 import ApplicabilityReport, {
   ExplanationDownloads,
 } from './ApplicabilityReport';
+import './report.less';
 
 function Charts({ data }: { data: ReportData }) {
   if (!data.counts || !data.result) return null;
@@ -114,12 +116,18 @@ function Charts({ data }: { data: ReportData }) {
           );
         })}
       </div>
-      <div>
+      <div className="audit-report-conclusion">
         <span className="audit-muted">当前文件总体结论</span>
         <p className="audit-conclusion">
           {resultLabels[result.overall_conclusion] || result.overall_conclusion}
         </p>
-        <p>{result.audit_summary || '详见逐条审核说明。'}</p>
+        <ExpandableContent
+          text={result.audit_summary || ''}
+          label="总体结论"
+          previewHeight={168}
+        >
+          <Markdown text={result.audit_summary || '详见逐条审核说明。'} />
+        </ExpandableContent>
         <span className="audit-muted">
           统计完整正式结果，不随下方筛选改变；问题数为规则条数，非独立缺陷数。
         </span>
@@ -309,6 +317,7 @@ function ReportFile({
           <div className="audit-toolbar">
             <Space wrap>
               <Select
+                aria-label="规则类别筛选"
                 value={category}
                 style={{ width: 190 }}
                 onChange={(v) => update('category', v)}
@@ -321,12 +330,13 @@ function ReportFile({
                 ]}
               />
               <Select
+                aria-label="规则结论筛选"
                 value={conclusion}
                 style={{ width: 160 }}
                 onChange={(v) => update('result', v)}
                 options={[
                   { value: 'issues', label: '问题规则' },
-                  { value: 'all', label: '全部结论' },
+                  { value: 'all', label: '全部规则' },
                   ...Object.entries(resultLabels)
                     .filter(([k]) => k !== 'not_applicable')
                     .map(([value, label]) => ({ value, label })),
@@ -334,9 +344,6 @@ function ReportFile({
               />
               <span>{filtered.length} 条规则</span>
             </Space>
-            <Button onClick={() => update('result', 'all')}>
-              查看全部规则
-            </Button>
           </div>
           <div className="audit-report-body">
             <Card
@@ -350,7 +357,7 @@ function ReportFile({
                   r.rule_id === chosen?.rule_id ? 'audit-selected-row' : ''
                 }
                 onRow={(r) => ({ onClick: () => update('rule', r.rule_id) })}
-                scroll={{ y: 520, x: 430 }}
+                scroll={{ y: 460, x: 430 }}
                 pagination={{ pageSize: 10, showSizeChanger: false }}
                 locale={{
                   emptyText: findings.every((f) => f.result === 'compliant')
@@ -371,8 +378,8 @@ function ReportFile({
                             {labels.get(r.rule_id) || '规则'}
                           </EntityLabel>
                         </Button>
-                        <div style={{ maxWidth: 380, whiteSpace: 'normal' }}>
-                          {r.summary}
+                        <div className="audit-finding-preview">
+                          <Markdown text={r.summary} />
                         </div>
                       </>
                     ),
@@ -406,7 +413,7 @@ function ReportFile({
                 )
               }
             >
-              <div className="audit-rule-inspector">
+              <div className="audit-rule-inspector" key={chosen?.rule_id}>
                 {rule && chosen ? (
                   <>
                     <Space wrap>
@@ -416,56 +423,83 @@ function ReportFile({
                         {resultLabels[chosen.result]}
                       </Tag>
                     </Space>
-                    <h4>规则要求</h4>
-                    <p>{rule.requirement}</p>
-                    <h4>依据说明</h4>
-                    <p>{rule.reason || '未补充依据说明'}</p>
-                    <h4>审核说明</h4>
-                    <p>{chosen.summary}</p>
-                    <h4>招标来源</h4>
-                    <Space wrap>
-                      {rule.sources.map((s) => (
-                        <Button
-                          key={s.file_id}
-                          type="link"
-                          onClick={() => setSource(s.file_id)}
-                        >
-                          <EntityLabel id={s.file_id}>
-                            {fileLabel(s.file_id, rule.sources)}
-                          </EntityLabel>
-                        </Button>
-                      ))}
-                    </Space>
-                    <h4>已记录核验来源</h4>
-                    {keys.length ? (
-                      keys.map((key) => {
-                        const src = data.result?.sources[key];
-                        return src ? (
-                          <div key={key}>
-                            <Tag>{key}</Tag>
-                            <p>
-                              {src.section || '文件级来源'}
-                              {src.page_numbers.length
-                                ? ` · 页 ${src.page_numbers.join('、')}`
-                                : ''}
-                            </p>
-                            {src.quote && <blockquote>{src.quote}</blockquote>}
-                            <Button
-                              type="link"
-                              onClick={() => setSource(src.file_id)}
-                            >
-                              查看解析原文 · {src.file_name}
-                            </Button>
-                          </div>
-                        ) : (
-                          <p key={key}>{key} · 未登记可查看来源</p>
-                        );
-                      })
-                    ) : (
-                      <p className="audit-muted">
-                        此项未记录引用；不从审核说明推测原文位置。
-                      </p>
-                    )}
+                    <section className="audit-report-section audit-rule-requirement">
+                      <h4>规则要求</h4>
+                      <ExpandableContent
+                        text={rule.requirement}
+                        label="规则要求"
+                      >
+                        <Markdown text={rule.requirement} />
+                      </ExpandableContent>
+                    </section>
+                    <section className="audit-report-section">
+                      <h4>依据说明</h4>
+                      <ExpandableContent
+                        text={rule.reason || ''}
+                        label="依据说明"
+                        previewHeight={100}
+                      >
+                        <Markdown text={rule.reason || '未补充依据说明'} />
+                      </ExpandableContent>
+                    </section>
+                    <section className="audit-report-section audit-finding-explanation">
+                      <h4>审核说明</h4>
+                      <ExpandableContent
+                        text={chosen.summary}
+                        label="审核说明"
+                        previewHeight={180}
+                      >
+                        <Markdown text={chosen.summary} />
+                      </ExpandableContent>
+                    </section>
+                    <section className="audit-report-section audit-report-sources">
+                      <h4>招标来源</h4>
+                      <Space wrap>
+                        {rule.sources.map((s) => (
+                          <Button
+                            key={s.file_id}
+                            type="link"
+                            onClick={() => setSource(s.file_id)}
+                          >
+                            <EntityLabel id={s.file_id}>
+                              {fileLabel(s.file_id, rule.sources)}
+                            </EntityLabel>
+                          </Button>
+                        ))}
+                      </Space>
+                      <h4>已记录核验来源</h4>
+                      {keys.length ? (
+                        keys.map((key) => {
+                          const src = data.result?.sources[key];
+                          return src ? (
+                            <div key={key}>
+                              <Tag>{key}</Tag>
+                              <p>
+                                {src.section || '文件级来源'}
+                                {src.page_numbers.length
+                                  ? ` · 页 ${src.page_numbers.join('、')}`
+                                  : ''}
+                              </p>
+                              {src.quote && (
+                                <blockquote>{src.quote}</blockquote>
+                              )}
+                              <Button
+                                type="link"
+                                onClick={() => setSource(src.file_id)}
+                              >
+                                查看解析原文 · {src.file_name}
+                              </Button>
+                            </div>
+                          ) : (
+                            <p key={key}>{key} · 未登记可查看来源</p>
+                          );
+                        })
+                      ) : (
+                        <p className="audit-muted">
+                          此项未记录引用；不从审核说明推测原文位置。
+                        </p>
+                      )}
+                    </section>
                   </>
                 ) : (
                   <Empty description="选择一条规则查看核验内容" />
