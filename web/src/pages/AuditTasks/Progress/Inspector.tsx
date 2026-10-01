@@ -61,6 +61,7 @@ export default function Inspector({
   onSpan,
   onLocate,
   onAgent,
+  replaying = false,
 }: {
   task: string;
   file: AuditFile;
@@ -72,6 +73,7 @@ export default function Inspector({
   onSpan: (id: string) => void;
   onLocate: (id: string) => void;
   onAgent: () => void;
+  replaying?: boolean;
 }) {
   const span =
     selection.type === 'span'
@@ -111,6 +113,12 @@ export default function Inspector({
         </Button>
       </header>
       <div className="audit-inspection-body">
+        {replaying && (
+          <Alert
+            type="info"
+            title="图中为历史回放状态；单次调用详情是最新已保存记录，不是该时刻的内容快照。"
+          />
+        )}
         {selection.type === 'draft' ? (
           <>
             {report.error && (

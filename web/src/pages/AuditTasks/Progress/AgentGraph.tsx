@@ -2,6 +2,8 @@ import { Button, Select, Space } from 'antd';
 import type { AuditFile } from '@/services/auditTasks';
 import GraphCanvas from './GraphCanvas';
 import { type agentGraph, outputText, skippedAudit, stage } from './graphModel';
+import ReplayControls from './ReplayControls';
+import type { AgentReplay } from './useAgentReplay';
 
 export default function AgentGraph({
   file,
@@ -13,6 +15,7 @@ export default function AgentGraph({
   onRoute,
   partial,
   focus,
+  replay,
 }: {
   file: AuditFile;
   graph: ReturnType<typeof agentGraph>;
@@ -23,6 +26,7 @@ export default function AgentGraph({
   onRoute?: () => void;
   partial: boolean;
   focus?: { id: string; nonce: number };
+  replay: AgentReplay;
 }) {
   if (skippedAudit(file))
     return (
@@ -105,11 +109,12 @@ export default function AgentGraph({
         </div>
       )}
       <GraphCanvas
-        graph={graph}
+        graph={replay.graph}
         label="Agent 执行图"
         selected={selected}
         onSelect={onSelect}
         focus={focus}
+        toolbarFooter={<ReplayControls replay={replay} />}
         extra={
           <Space wrap>
             <Select
@@ -125,7 +130,9 @@ export default function AgentGraph({
               style={{ width: 220 }}
             />
             <span className="audit-muted">
-              固定能力节点 · 蓝色亮起为正在执行 · 次数按已加载记录统计
+              {replay.replaying
+                ? '历史回放 · 蓝色亮起为该时刻正在执行 · 次数随回放累积'
+                : '固定能力节点 · 蓝色亮起为正在执行 · 次数按已加载记录统计'}
             </span>
           </Space>
         }

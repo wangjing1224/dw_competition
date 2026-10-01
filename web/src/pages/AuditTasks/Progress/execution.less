@@ -173,6 +173,35 @@
   color: #986d29;
   background: #fffaf0;
 }
+.audit-replay-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #edf1f8;
+  background: #fbfcff;
+  &.is-replaying { background: #f0f6ff; }
+  .ant-tag { margin: 0; }
+}
+.audit-replay-slider {
+  flex: 1 1 180px;
+  min-width: 120px;
+  margin: 6px 8px;
+}
+.audit-replay-time {
+  font-size: 12px;
+  color: #526987;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.audit-replay-note {
+  flex-basis: 100%;
+  color: #6f83a0;
+  font-size: 12px;
+  line-height: 1.6;
+}
 .audit-diagram {
   height: clamp(400px, 53vh, 640px);
   .audit-visual-main & {

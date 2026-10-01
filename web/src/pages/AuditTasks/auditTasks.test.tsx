@@ -800,6 +800,71 @@ describe('审核工作区', () => {
       screen.getByText('跳过规则审核不代表审核不通过。'),
     ).toBeInTheDocument();
   });
+  it('Agent 回放控制可暂停、拖动、重播和退出；不新增请求，切视图不残留', async () => {
+    const main = { ...span('main'), kind: 'batch', title: '主审核会话' };
+    const model = {
+      ...span('replay-model'),
+      parent_span_id: 'main',
+      started_at: '2026-09-28T12:00:01Z',
+      finished_at: '2026-09-28T12:00:30Z',
+      duration_ms: 29000,
+    };
+    const fetch = mockApi((url) =>
+      url.includes('/progress') ? progressData([main, model]) : undefined,
+    );
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    await screen.findByText('当前文件 · 已观测');
+    fireEvent.click(screen.getByRole('radio', { name: 'Agent 图' }));
+    const requests = fetch.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: '回放执行' }));
+    expect(screen.getByText('回放中')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '暂停回放' }));
+    expect(screen.getByText('回放已暂停')).toBeInTheDocument();
+    const slider = screen.getByRole('slider', { name: '回放进度' });
+    fireEvent.keyDown(slider, { key: 'End', keyCode: 35, which: 35 });
+    expect(slider).toHaveAttribute('aria-valuenow', '60000');
+    expect(
+      screen.getByRole('button', { name: '重新播放' }),
+    ).toBeInTheDocument();
+    const graph = screen.getByRole('region', { name: 'Agent 执行图' });
+    expect(
+      within(graph).getByRole('button', {
+        name: /主审核 Agent.*模型调用 1 次/,
+      }),
+    ).toHaveClass('node-completed');
+    fireEvent.keyDown(slider, { key: 'Home', keyCode: 36, which: 36 });
+    expect(slider).toHaveAttribute('aria-valuenow', '0');
+    expect(
+      within(graph).getByRole('button', {
+        name: /主审核 Agent.*模型调用 0 次/,
+      }),
+    ).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: '回放倍速' }));
+    fireEvent.click(
+      screen.getByText('4×', { selector: '.ant-select-item-option-content' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: '回到实时' }));
+    expect(
+      screen.queryByRole('slider', { name: '回放进度' }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(graph).getByRole('button', {
+        name: /主审核 Agent.*模型调用 1 次/,
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '回放执行' }));
+    fireEvent.click(screen.getByRole('radio', { name: '轨迹树' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Agent 图' }));
+    expect(
+      screen.queryByRole('slider', { name: '回放进度' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '回放执行' })).toBeEnabled();
+    expect(fetch.mock.calls).toHaveLength(requests);
+  });
   it('工具组只列实际调用，点击成员才读取详情；可回到所属图节点', async () => {
     const main = { ...span('main'), kind: 'batch', title: '主审核会话' };
     const call = {

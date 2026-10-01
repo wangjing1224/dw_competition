@@ -24,10 +24,11 @@ import AgentGraph from './AgentGraph';
 import ExecutionOverview from './ExecutionOverview';
 import ExecutionRecords from './ExecutionRecords';
 import GraphCanvas from './GraphCanvas';
-import { agentGraph, ancestors, flowGraph } from './graphModel';
+import { agentGraph, ancestors, flowGraph, skippedAudit } from './graphModel';
 import type { Selection } from './Inspector';
 import Inspector from './Inspector';
 import TraceTree from './TraceTree';
+import useAgentReplay from './useAgentReplay';
 import './execution.less';
 
 export type View = 'flow' | 'agent' | 'tree';
@@ -128,6 +129,17 @@ function FileWorkspace({
     [file, nodes],
   );
   const agent = useMemo(() => agentGraph(nodes, session), [nodes, session]);
+  const replay = useAgentReplay({
+    spans: nodes,
+    live: agent,
+    active: view === 'agent' && !!file && !skippedAudit(file),
+    loading: !!progress?.has_more,
+    onStart: (id) => {
+      setSession(id);
+      setSelection(undefined);
+      setFocus(undefined);
+    },
+  });
   const selectSpan = (id: string) => {
     setRecords(false);
     setSelection({ type: 'span', id });
@@ -184,7 +196,7 @@ function FileWorkspace({
     selection?.type === 'flow'
       ? flow.nodes.find((n) => n.id === selection.id)
       : selection?.type === 'agent'
-        ? agent.nodes.find((n) => n.id === selection.id)
+        ? replay.graph.nodes.find((n) => n.id === selection.id)
         : undefined;
   const partial =
     !!progress?.has_more ||
@@ -198,6 +210,7 @@ function FileWorkspace({
         task={taskId}
         file={file}
         selection={selection}
+        replaying={replay.replaying}
         node={node}
         spans={nodes}
         spanRevision={updates.find((u) => u.span.span_id === selection.id)?.seq}
@@ -274,6 +287,7 @@ function FileWorkspace({
                   <AgentGraph
                     file={file}
                     graph={agent}
+                    replay={replay}
                     partial={partial}
                     onSession={(id) => {
                       setSession(id);

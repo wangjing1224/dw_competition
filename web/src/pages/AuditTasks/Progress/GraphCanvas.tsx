@@ -13,6 +13,7 @@ export default function GraphCanvas({
   onSelect,
   label,
   extra,
+  toolbarFooter,
   focus,
 }: {
   graph: Graph;
@@ -20,6 +21,7 @@ export default function GraphCanvas({
   onSelect: (id: string) => void;
   label: string;
   extra?: ReactNode;
+  toolbarFooter?: ReactNode;
   focus?: { id: string; nonce: number };
 }) {
   const host = useRef<HTMLElement>(null);
@@ -148,6 +150,7 @@ export default function GraphCanvas({
           </Button>
         </Space>
       </div>
+      {toolbarFooter}
       <section
         className="audit-diagram"
         ref={host}
