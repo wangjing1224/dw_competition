@@ -536,6 +536,15 @@ describe('审核工作区', () => {
       </App>,
     );
     const toggle = await screen.findByRole('button', { name: '展开总体结论' });
+    const donut = screen.getByRole('figure', { name: '规则结论分布' });
+    const charts = donut.parentElement;
+    if (!charts) throw new Error('缺少图表容器');
+    expect(charts).toHaveClass('audit-report-charts');
+    expect(within(charts).getByText('规则类别分布')).toBeInTheDocument();
+    expect(
+      within(charts).queryByRole('region', { name: '总体结论' }),
+    ).not.toBeInTheDocument();
+    expect(donut.querySelectorAll('figcaption > span')).toHaveLength(4);
     expect(screen.getByRole('region', { name: '总体结论' })).toHaveStyle({
       maxHeight: '168px',
     });

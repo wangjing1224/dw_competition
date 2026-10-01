@@ -59,62 +59,64 @@ function Charts({ data }: { data: ReportData }) {
   });
   return (
     <section className="audit-panel audit-report-summary">
-      <div>
-        <div
-          className="audit-donut"
-          style={{
-            background: total
-              ? `conic-gradient(${stops.join(',')})`
-              : '#eef1f7',
-          }}
-          role="img"
-          aria-label={Object.keys(resultColors)
-            .map((k) => `${resultLabels[k]} ${counts[k]} 条`)
-            .join('，')}
-        >
-          <div>
-            <strong>{total}</strong>
-            <span>已核验规则</span>
-          </div>
-        </div>
-        <div className="audit-legend">
-          {Object.keys(resultColors).map((k) => (
-            <span key={k}>
-              <i style={{ background: resultColors[k] }} />
-              {resultLabels[k]} {counts[k]}
-            </span>
-          ))}
-        </div>
-      </div>
-      <div>
-        <strong>规则类别分布</strong>
-        {Object.entries(categories).map(([category, label]) => {
-          const ids = new Set(
-            data.rules
-              .filter((r) => r.category === category)
-              .map((r) => r.rule_id),
-          );
-          const findings = result.findings.filter((f) => ids.has(f.rule_id));
-          if (!ids.size) return null;
-          return (
-            <div className="audit-bar-row" key={category}>
-              <span>{label}</span>
-              <div className="audit-bar">
-                {Object.keys(resultColors).map((k) => (
-                  <span
-                    key={k}
-                    title={`${resultLabels[k]} ${findings.filter((f) => f.result === k).length}`}
-                    style={{
-                      background: resultColors[k],
-                      width: `${findings.length ? (100 * findings.filter((f) => f.result === k).length) / findings.length : 0}%`,
-                    }}
-                  />
-                ))}
-              </div>
-              <span>{findings.length}</span>
+      <div className="audit-report-charts">
+        <figure className="audit-report-donut" aria-label="规则结论分布">
+          <div
+            className="audit-donut"
+            style={{
+              background: total
+                ? `conic-gradient(${stops.join(',')})`
+                : '#eef1f7',
+            }}
+            role="img"
+            aria-label={Object.keys(resultColors)
+              .map((k) => `${resultLabels[k]} ${counts[k]} 条`)
+              .join('，')}
+          >
+            <div>
+              <strong>{total}</strong>
+              <span>已核验规则</span>
             </div>
-          );
-        })}
+          </div>
+          <figcaption className="audit-legend">
+            {Object.keys(resultColors).map((k) => (
+              <span key={k}>
+                <i style={{ background: resultColors[k] }} />
+                {resultLabels[k]} {counts[k]}
+              </span>
+            ))}
+          </figcaption>
+        </figure>
+        <div>
+          <strong>规则类别分布</strong>
+          {Object.entries(categories).map(([category, label]) => {
+            const ids = new Set(
+              data.rules
+                .filter((r) => r.category === category)
+                .map((r) => r.rule_id),
+            );
+            const findings = result.findings.filter((f) => ids.has(f.rule_id));
+            if (!ids.size) return null;
+            return (
+              <div className="audit-bar-row" key={category}>
+                <span>{label}</span>
+                <div className="audit-bar">
+                  {Object.keys(resultColors).map((k) => (
+                    <span
+                      key={k}
+                      title={`${resultLabels[k]} ${findings.filter((f) => f.result === k).length}`}
+                      style={{
+                        background: resultColors[k],
+                        width: `${findings.length ? (100 * findings.filter((f) => f.result === k).length) / findings.length : 0}%`,
+                      }}
+                    />
+                  ))}
+                </div>
+                <span>{findings.length}</span>
+              </div>
+            );
+          })}
+        </div>
       </div>
       <div className="audit-report-conclusion">
         <span className="audit-muted">当前文件总体结论</span>
@@ -128,9 +130,6 @@ function Charts({ data }: { data: ReportData }) {
         >
           <Markdown text={result.audit_summary || '详见逐条审核说明。'} />
         </ExpandableContent>
-        <span className="audit-muted">
-          统计完整正式结果，不随下方筛选改变；问题数为规则条数，非独立缺陷数。
-        </span>
       </div>
     </section>
   );
