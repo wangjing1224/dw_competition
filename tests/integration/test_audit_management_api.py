@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import sqlite3
 from io import BytesIO
 from types import SimpleNamespace
@@ -42,6 +43,9 @@ class Embedding:
 
     async def embed(self, texts):
         return np.ones((len(texts), self.dimension), dtype=np.float32)
+
+    async def embed_query(self, text):
+        return np.ones(self.dimension, dtype=np.float32)
 
 
 @pytest.fixture
@@ -269,7 +273,11 @@ class ReportModel:
             return AIMessage(content="处理完毕")
         return tool_response(
             "report_document",
-            {"action": "write", "content": filled_report(self.rules), "edits": None},
+            {
+                "action": "write",
+                "content": filled_report(self.rules, version=2),
+                "edits": None,
+            },
         )
 
 
@@ -319,6 +327,23 @@ async def test_real_pipeline_per_file_results_traces_and_word_error(env, monkeyp
         assert report["result"]["report_title"] == "设备采购投标文件审核报告"
         assert report["rules"][0]["requirement"] == "精度至少100"
         assert env.service.output(task, "md", f["file_id"]).is_file()
+        assert report["result"]["report_format_version"] == 2
+        context = report["result"]["report_context"]
+        assert context["task_name"] == "混合审核" and context["finalized_at"]
+        assert context["rule_library_name"] == f["project_name"]
+        assert context["evidence_library_name"] == f["bidder_name"]
+        assert isinstance(report["document"]["revision"], str)
+        assert len(report["document"]["revision"]) == 64
+        assert "### rule-1" in report["document"]["markdown"]
+        formal = env.service.output(task, "md", f["file_id"])
+        assert formal.parent.name == "reports"
+        assert formal.read_text() == report["document"]["display_markdown"]
+        assert "rule-1" not in formal.read_text()
+        assert "## 四、审核明细及原文摘录" in formal.read_text()
+        assert (
+            env.service.report(task, f["file_id"])["result"]["report_context"]
+            == context
+        )
     batch = json.loads(env.service.output(task, "json").read_bytes())
     assert batch["schema_version"] == "3.0" and len(batch["rule_libraries"]) == 2
     progress = env.service.progress(task, True, files[0], limit=2)
@@ -424,6 +449,8 @@ async def test_routed_files_have_reason_without_findings_or_audit_calls(
         assert report["counts"] is None
         assert report["result"]["findings"] == []
         assert report["result"]["exclusion_reason"]
+        assert report["result"]["report_format_version"] == 2
+        assert "审核明细" not in report["document"]["display_markdown"]
         title = report["result"]["report_title"]
         assert title.endswith("项目适用性说明")
         assert (
@@ -435,6 +462,151 @@ async def test_routed_files_have_reason_without_findings_or_audit_calls(
             env.service.progress(task, True, file["file_id"])["activity"]["model_calls"]
             == 1
         )
+
+
+@pytest.mark.asyncio
+async def test_v2_markdown_failure_retains_json_without_exposing_draft(
+    env, monkeypatch
+):
+    from app.core.errors import BusinessError
+
+    task = upload(env).json()["task_id"]
+
+    def fail(*args):
+        raise OSError("模拟磁盘写入失败")
+
+    monkeypatch.setattr("app.services.audit_batch_runner.write_formal_markdown", fail)
+    models = SimpleNamespace(
+        bid_summary=RouteModel(),
+        bid_chat=ReportModel(env.rules["project-1"]),
+        embedding=env.embedding,
+        rerank=object(),
+        evidence_chat=object(),
+    )
+    await run_audit_batch(task, models=models)
+    detail = env.service.detail(task)
+    assert detail["task"]["status"] == "completed_with_report_error"
+    for file in detail["files"]:
+        assert file["status"] == "completed" and file["word_status"] == "unavailable"
+        assert file["outputs"]["md_url"] is None
+        assert env.service.output(task, "json", file["file_id"]).is_file()
+        assert (
+            env.service.report(task, file["file_id"])["document"]["display_markdown"]
+            is None
+        )
+        with pytest.raises(BusinessError) as error:
+            env.service.output(task, "md", file["file_id"])
+        assert error.value.code == "markdown_export_failed"
+
+
+@pytest.mark.asyncio
+async def test_v1_accepted_snapshot_keeps_legacy_parser_and_output(env):
+    task = upload(env).json()["task_id"]
+    path = env.service.snapshot_path(task)
+    frozen = env.service.snapshot(task)
+    frozen.pop("report_format_version")
+    frozen.pop("task_name")
+    frozen["report_template"] = "历史报告模板，不使用重点问题结构。"
+    path.write_text(json.dumps(frozen))
+
+    class LegacyModel(ReportModel):
+        async def ainvoke(self, messages, **kwargs):
+            assert "历史报告模板" in messages[0].content
+            if any(m.type == "tool" for m in messages):
+                return AIMessage(content="已完成")
+            return tool_response(
+                "report_document",
+                {
+                    "action": "write",
+                    "content": filled_report(self.rules),
+                    "edits": None,
+                },
+            )
+
+    models = SimpleNamespace(
+        bid_summary=RouteModel(),
+        bid_chat=LegacyModel(env.rules["project-1"]),
+        embedding=env.embedding,
+        rerank=object(),
+        evidence_chat=object(),
+    )
+    await run_audit_batch(task, models=models)
+    assert env.service.detail(task)["task"]["status"] == "completed"
+    for row in file_rows(task):
+        report = env.service.report(task, row["file_id"])
+        assert report["result"]["report_format_version"] == 1
+        assert report["document"]["display_markdown"] is None
+        assert env.service.output(task, "md", row["file_id"]).parent.name == "drafts"
+        assert "### 分类总结" in report["document"]["markdown"]
+
+
+@pytest.mark.asyncio
+async def test_search_ledger_finding_formal_quote_end_to_end(env):
+    from docx import Document
+
+    from app.llm.rerank_model import RerankResult
+
+    task = upload(env, content="技术响应：实测精度100，保持原始单位。".encode()).json()[
+        "task_id"
+    ]
+
+    class Rerank:
+        async def rerank(self, query, documents, top_n):
+            return [
+                RerankResult(document_id=d.document_id, score=1.0)
+                for d in documents[:top_n]
+            ]
+
+    class ReadingModel(ReportModel):
+        async def ainvoke(self, messages, **kwargs):
+            if any(m.type == "tool" and m.name == "report_document" for m in messages):
+                return AIMessage(content="已完成")
+            searches = [
+                m for m in messages if m.type == "tool" and m.name == "search_documents"
+            ]
+            if not searches:
+                return tool_response(
+                    "search_documents",
+                    {"querylist": [{"queries": ["精度"], "file_ids": None}]},
+                )
+            key = re.search(r"^片段：(.+)$", searches[-1].content, re.MULTILINE)[1]
+            return tool_response(
+                "report_document",
+                {
+                    "action": "write",
+                    "content": filled_report(self.rules, version=2)
+                    + f"\n投标片段：{key}\n",
+                    "edits": None,
+                },
+                "save",
+            )
+
+    models = SimpleNamespace(
+        bid_summary=RouteModel(),
+        bid_chat=ReadingModel(env.rules["project-1"]),
+        embedding=env.embedding,
+        rerank=Rerank(),
+        evidence_chat=object(),
+    )
+    await run_audit_batch(task, models=models)
+    detail = env.service.detail(task)
+    assert detail["task"]["status"] == "completed", detail
+    for file in detail["files"]:
+        report = env.service.report(task, file["file_id"])
+        finding = report["result"]["findings"][0]
+        assert len(finding["bid_chunk_ids"]) == 1
+        source = report["result"]["sources"][finding["bid_chunk_ids"][0]]
+        assert source["file_id"] == file["file_id"] and source["parse_version"]
+        quote = source["quote"]
+        assert "实测精度100" in quote
+        assert quote in report["document"]["display_markdown"]
+        assert finding["bid_chunk_ids"][0] not in report["document"]["display_markdown"]
+        assert len(report["source_links"]) == 1
+        assert (
+            env.client.get(report["source_links"][0]["preview_url"]).status_code == 200
+        )
+        word = Document(env.service.output(task, "word", file["file_id"]))
+        assert quote in "\n".join(p.text for p in word.paragraphs)
 
 
 def test_trace_redacts_typed_reasoning_without_mutating_model_response():
@@ -469,7 +641,7 @@ async def test_concurrent_children_keep_file_session_and_parent_scope(env):
                     "report_document",
                     {
                         "action": "write",
-                        "content": filled_report(self.rules),
+                        "content": filled_report(self.rules, version=2),
                         "edits": None,
                     },
                     "save",

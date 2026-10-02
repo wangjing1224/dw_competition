@@ -9,10 +9,16 @@ from app.audit.local_trace import AuditTrace, bind, safe_value, scope
 from app.core.config import get_settings
 from app.models.documents import ParsedDocument, document_ref_from_record
 from app.models.evidence import EvidenceLibrary
-from app.models.results import AuditBatchFile, AuditBatchResult, AuditResult
+from app.models.results import (
+    AuditBatchFile,
+    AuditBatchResult,
+    AuditResult,
+    ReportContext,
+)
 from app.models.rules import RuleReportItem, RuleSet, present_rule_for_model
 from app.parsers.assets import atomic_write
 from app.parsers.service import prepare_document
+from app.reports.presentation import write_formal_markdown
 from app.reports.word_report import generate_word_reports
 from app.retrieval.index import build_document_index
 from app.retrieval.models import IndexScope
@@ -125,6 +131,14 @@ async def process_file(service, settings, models, executor, frozen, row):
         rule_set=rules,
         evidence_library=library,
         report_template=frozen["report_template"],
+        report_format_version=frozen.get("report_format_version", 1),
+        report_context=ReportContext(
+            task_name=frozen.get("task_name"),
+            rule_library_name=frozen["projects"][row["project_id"]]["name"],
+            evidence_library_name=frozen["bidders"][row["bidder_id"]]["name"],
+        )
+        if frozen.get("report_format_version") == 2
+        else None,
         file_order=[file_id],
         parsed_documents={
             key: ParsedDocument.model_validate(frozen["parsed"][key])
@@ -218,6 +232,11 @@ async def process_file(service, settings, models, executor, frozen, row):
             ]
             if result.rules != expected_rules:
                 raise ValueError("执行器返回的规则不是本次冻结版本")
+            if (
+                result.file_results[0].report_format_version
+                != context.report_format_version
+            ):
+                raise ValueError("执行器返回的报告格式版本与受理快照不一致")
         update_file(task_id, file_id, stage="auditing", stage_status="completed")
     else:
         for phase in ("indexing", "auditing"):
@@ -245,6 +264,32 @@ async def process_file(service, settings, models, executor, frozen, row):
             f"# {result.file_results[0].report_title}\n\n{route.match_reason}\n".encode(),
         )
 
+    file_result = result.file_results[0]
+    if context.report_format_version == 2:
+        file_result.report_format_version = 2
+        finalized_at = (
+            file_result.report_context.finalized_at
+            if file_result.report_context
+            else None
+        ) or utc_now()
+        file_result.report_context = ReportContext.model_validate(
+            {
+                **context.report_context.model_dump(),
+                "finalized_at": finalized_at,
+            }
+        )
+        # 按完整冻结顺序做兼容投影，不根据模型输出顺序改变建议顺序。
+        by_rule = {f.rule_id: f for f in file_result.findings}
+        file_result.suggestions = list(
+            dict.fromkeys(
+                by_rule[r.rule_id].recommendation.strip()
+                for r in result.rules
+                if r.rule_id in by_rule
+                and by_rule[r.rule_id].recommendation
+                and by_rule[r.rule_id].recommendation.strip()
+            )
+        )
+        result = AuditResult.model_validate(result.model_dump())
     json_path = directory / "reports" / f"{file_id}.json"
     md_path = directory / "drafts" / f"{file_id}.md"
     if not md_path.is_file():
@@ -256,11 +301,38 @@ async def process_file(service, settings, models, executor, frozen, row):
         stage="exporting",
         stage_status="running",
         json_path=service.store.relative_to_data_root(json_path),
-        md_path=service.store.relative_to_data_root(md_path),
+        md_path=service.store.relative_to_data_root(md_path)
+        if context.report_format_version == 1
+        else None,
         report_kind="final",
         overall_conclusion=str(result.file_results[0].overall_conclusion),
-        word_status="generating",
+        word_status="unavailable",
     )
+    if context.report_format_version == 2:
+        try:
+            md_path = write_formal_markdown(
+                result, result.file_results[0], service.store
+            )
+            update_file(
+                task_id, file_id, md_path=service.store.relative_to_data_root(md_path)
+            )
+        except Exception:
+            logger.exception("正式 Markdown 导出失败 task=%s file=%s", task_id, file_id)
+            update_file(
+                task_id,
+                file_id,
+                stage="exporting",
+                stage_status="failed",
+                export_error={
+                    "code": "markdown_export_failed",
+                    "message": "正式 Markdown 导出失败，已保留有效 JSON",
+                },
+                status="completed",
+                phase="finished",
+                completed_at=utc_now(),
+            )
+            return
+    update_file(task_id, file_id, word_status="generating")
     try:
         with scope("export", "Word 导出"):
             paths = await asyncio.to_thread(
@@ -286,7 +358,7 @@ async def process_file(service, settings, models, executor, frozen, row):
             stage="exporting",
             stage_status="failed",
             word_status="failed",
-            export_error=error_view(exc),
+            export_error={**error_view(exc), "code": "word_export_failed"},
         )
     update_file(
         task_id, file_id, status="completed", phase="finished", completed_at=utc_now()

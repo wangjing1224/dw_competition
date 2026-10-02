@@ -1,5 +1,6 @@
 .audit-report-summary {
   align-items: start;
+  .audit-report-conclusion { grid-column: 1 / -1; order: -1; }
   > div { min-width: 0; }
   .audit-conclusion {
     margin: 8px 0 14px;
@@ -9,12 +10,34 @@
 }
 // 两张图独立对齐，结论展开不会把环图推向整张卡片的纵向中心。
 .audit-report-charts {
-  grid-column: 1 / 3;
+  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr);
   gap: 26px;
   align-items: center;
   > * { min-width: 0; }
+}
+.audit-report-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  padding: 16px 20px;
+  margin-bottom: 22px;
+  background: #fff;
+  border: 1px solid #e7edf7;
+  border-radius: 10px;
+  color: #60718c;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.audit-highlights {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 24px;
+  h3 { margin: 4px 0; }
+  .audit-highlight-card { cursor: pointer; }
+  .ant-card-head-title { white-space: normal; }
+  .audit-markdown { line-height: 1.85; overflow-wrap: anywhere; }
 }
 .audit-report-donut {
   margin: 0;

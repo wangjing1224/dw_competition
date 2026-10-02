@@ -48,9 +48,31 @@ def rebuild_result(task_id, store):
                     raise ValueError("读取来源与固定解析版本不一致")
                 ledger.sources[source_id] = source
             text = (directory / "drafts" / f"{key}.md").read_text("utf-8")
-            decision, _ = parse_report(text, context.rule_set, ledger, final=True)
+            decision, _ = parse_report(
+                text,
+                context.rule_set,
+                ledger,
+                final=True,
+                version=context.report_format_version,
+            )
+            previous = directory / f"{key}_result.json"
+            report_context = context.report_context
+            if previous.is_file() and report_context:
+                from app.models.results import FileAuditResult
+
+                saved = FileAuditResult.model_validate_json(previous.read_text("utf-8"))
+                if saved.report_context and saved.report_context.finalized_at:
+                    report_context = report_context.model_copy(
+                        update={"finalized_at": saved.report_context.finalized_at}
+                    )
             result = file_result_from_report(
-                document, context.bid_summaries[key], decision, ledger
+                document,
+                context.bid_summaries[key],
+                decision,
+                ledger,
+                version=context.report_format_version,
+                report_context=report_context,
+                rule_order=[r.rule_id for r in context.rule_set.rules],
             )
             results[key] = result
             atomic_write(

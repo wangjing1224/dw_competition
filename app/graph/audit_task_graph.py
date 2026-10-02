@@ -111,7 +111,10 @@ class LangGraphAuditExecutor:
         ledger = SourceLedger(context.parsed_documents)
         directory = self.settings.storage.data_root / "outputs" / context.task_id
         report = ReportDocument(
-            directory / "drafts" / f"{document.file_id}.md", context.rule_set, ledger
+            directory / "drafts" / f"{document.file_id}.md",
+            context.rule_set,
+            ledger,
+            version=context.report_format_version,
         )
         records, stats = [], {}
         trace = get_tracing_context()
@@ -257,7 +260,13 @@ class LangGraphAuditExecutor:
                 checkpoint()
             decision = report.finish()
             result = file_result_from_report(
-                document, context.bid_summaries[document.file_id], decision, ledger
+                document,
+                context.bid_summaries[document.file_id],
+                decision,
+                ledger,
+                version=context.report_format_version,
+                report_context=context.report_context,
+                rule_order=[r.rule_id for r in context.rule_set.rules],
             )
             atomic_write(
                 directory / f"{document.file_id}_result.json",

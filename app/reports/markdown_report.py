@@ -35,19 +35,27 @@ def report_groups(rule_set):
     return groups
 
 
-def skeleton(rule_set):
+def skeleton(rule_set, version=1):
     parts = [f"# {TITLE_PLACEHOLDER}", "## 总体总结", PENDING]
+    if version == 2:
+        parts.extend(["## 重点问题", PENDING])
     for category, ids in report_groups(rule_set).items():
-        parts.extend(
-            [f"## {category_label(category)}（{category}）", "### 分类总结", PENDING]
-        )
+        parts.append(f"## {category_label(category)}（{category}）")
+        if version == 1:
+            parts.extend(["### 分类总结", PENDING])
         for rule_id in ids:
             parts.extend([f"### {rule_id}", PENDING])
     return "\n\n".join(parts) + "\n"
 
 
-def parse_report(text, rule_set, ledger, *, final=False):
-    """只解析本模板，不猜测自由文章；草稿保留未填块，已填块完整校验。"""
+def parse_report(text, rule_set, ledger, *, final=False, version=1):
+    """只解析冻结模板契约；草稿保留未填块，已填块完整校验。"""
+    if version == 2:
+        from app.reports.report_parser_v2 import parse_v2
+
+        return parse_v2(text, rule_set, ledger, final=final)
+    if version != 1:
+        raise ValueError("不支持的报告格式版本")
     expected = skeleton(rule_set)
     heading = re.compile(r"^#{1,6} .+$", re.MULTILINE)
     actual_headers = heading.findall(text)
@@ -174,8 +182,9 @@ def parse_report(text, rule_set, ledger, *, final=False):
 class ReportDocument:
     """一个文件一份稿。保存先验证候选，成功原子发布；错误不污染旧稿。"""
 
-    def __init__(self, path: Path, rule_set, ledger):
+    def __init__(self, path: Path, rule_set, ledger, *, version=1):
         self.path, self.rule_set, self.ledger = path, rule_set, ledger
+        self.version = version
         self.lock = asyncio.Lock()
         self.receipts = {}
         self.batch_key = 0
@@ -183,7 +192,7 @@ class ReportDocument:
         # 新审核不偷偷复用另一轮的草稿；恢复只由显式文件会话负责。
         if path.exists():
             raise ValueError(f"审核草稿已存在，不覆盖：{path}")
-        atomic_write(path, skeleton(rule_set).encode("utf-8"))
+        atomic_write(path, skeleton(rule_set, version).encode("utf-8"))
 
     def read(self):
         return self.path.read_text("utf-8")
@@ -193,7 +202,9 @@ class ReportDocument:
         self.batch_key = number
 
     def missing(self):
-        return parse_report(self.read(), self.rule_set, self.ledger)[1]
+        return parse_report(
+            self.read(), self.rule_set, self.ledger, version=self.version
+        )[1]
 
     async def apply(self, action, content, edits, call_id):
         async with self.lock:
@@ -218,7 +229,9 @@ class ReportDocument:
                             "old_text 未唯一命中，整批未保存；请先 read 再精确修改"
                         )
                     candidate = candidate.replace(edit.old_text, edit.new_text, 1)
-                _, missing = parse_report(candidate, self.rule_set, self.ledger)
+                _, missing = parse_report(
+                    candidate, self.rule_set, self.ledger, version=self.version
+                )
                 atomic_write(self.path, candidate.encode("utf-8"))
                 result = "已保存。" + (f"完成{len(edits)}处替换。" if edits else "")
                 result += "\n报告缺项：" + ("、".join(missing) or "无")
@@ -232,4 +245,6 @@ class ReportDocument:
     def finish(self):
         if self.write_error:
             raise ValueError("报告存在未解决的保存错误：" + self.write_error)
-        return parse_report(self.read(), self.rule_set, self.ledger, final=True)[0]
+        return parse_report(
+            self.read(), self.rule_set, self.ledger, final=True, version=self.version
+        )[0]

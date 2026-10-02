@@ -4,6 +4,7 @@ import logging
 
 from app.models.results import AuditResult
 from app.reports.json_report import write_json_result
+from app.reports.presentation import write_formal_reports
 from app.reports.word_report import generate_word_reports
 from app.services.audit_task_service import OutputFinalizer
 from app.storage.file_store import FileStore
@@ -30,6 +31,7 @@ class ReportService(OutputFinalizer):
             word_paths = []
             report_error = ""
             try:
+                write_formal_reports(result, self.file_store)
                 word_paths = generate_word_reports(json_path, self.file_store)
             except Exception as exc:
                 logger.exception("部分成果 Word 导出失败 task_id=%s", task_id)
@@ -52,6 +54,7 @@ class ReportService(OutputFinalizer):
             )
             return
         try:
+            write_formal_reports(result, self.file_store)
             word_paths = generate_word_reports(json_path, self.file_store)
             self.task_repository.mark_completed(
                 task_id,
@@ -77,6 +80,11 @@ class ReportService(OutputFinalizer):
         task = self.task_repository.require(task_id)
         if task.status != "completed_with_report_error" or not task.json_path:
             raise ValueError("任务没有可用于 Word 重渲染的已校验 JSON")
+        from app.reports.json_report import read_json_result
+
+        write_formal_reports(
+            read_json_result(task.json_path, self.file_store), self.file_store
+        )
         word_paths = generate_word_reports(task.json_path, self.file_store)
         self.task_repository.recover_report_outputs(
             task_id,
@@ -100,6 +108,7 @@ class ReportService(OutputFinalizer):
         status = "failed" if result.file_errors else "completed"
         code = "audit_files_failed" if result.file_errors else ""
         try:
+            write_formal_reports(result, self.file_store)
             paths = generate_word_reports(json_path, self.file_store)
         except Exception as exc:
             logger.exception("修复报告后 Word 导出失败 task_id=%s", task_id)

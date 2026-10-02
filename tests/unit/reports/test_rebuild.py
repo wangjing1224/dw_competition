@@ -74,3 +74,22 @@ def test_rebuild_refuses_running_task():
     )
     with pytest.raises(ValueError, match="运行中的任务"):
         ReportService(repository, object()).rebuild_from_markdown("audit-1")
+
+
+def test_v2_rebuild_keeps_first_finalization_and_frozen_names(monkeypatch, temp_settings):
+    from app.models.results import ReportContext
+    from app.reports.presentation import report_markdown
+
+    monkeypatch.setattr("app.storage.file_store.get_settings", lambda: temp_settings)
+    store = FileStore()
+    context, directory = save_snapshot(store)
+    context.report_format_version = 2
+    context.report_context = ReportContext(task_name="受理时名称", rule_library_name="原规则库", evidence_library_name="原资料库")
+    atomic_write(directory / "audit_context.json", context.model_dump_json().encode())
+    atomic_write(directory / "drafts" / "bid-1.md", filled_report(context.rule_set, version=2).encode())
+    first = rebuild_result("audit-1", store)
+    second = rebuild_result("audit-1", store)
+    assert not first.file_errors and not second.file_errors
+    assert first.file_results[0].report_context.finalized_at
+    assert first.file_results[0].report_context == second.file_results[0].report_context
+    assert report_markdown(first, first.file_results[0]) == report_markdown(second, second.file_results[0])

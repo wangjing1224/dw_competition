@@ -1,5 +1,6 @@
 """单文件审核结果和任务级 AuditResult 根模型。"""
 
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -12,7 +13,7 @@ from app.models.common import (
 )
 from app.models.documents import DocumentRef
 from app.models.evidence import EvidenceLibrary
-from app.models.findings import Finding
+from app.models.findings import Finding, ReportHighlight
 from app.models.rules import RuleReportItem, RuleSet, present_rule_for_model
 
 
@@ -36,10 +37,20 @@ class ProjectMatch(StrictModel):
     conflicting_fields: list[str] = Field(default_factory=list)
 
 
+class ReportContext(StrictModel):
+    task_name: str | None = None
+    rule_library_name: str | None = None
+    evidence_library_name: str | None = None
+    finalized_at: datetime | None = None
+
+
 class FileAuditResult(StrictModel):
     file: DocumentRef
     # 从模型成功保存的 Markdown 一级标题提取；旧结果可没有此字段。
     report_title: str | None = Field(default=None, min_length=1)
+    report_format_version: Literal[1, 2] = 1
+    report_context: ReportContext | None = None
+    highlights: list[ReportHighlight] = Field(default_factory=list)
     is_applicable: bool
     project_match: ProjectMatch
     exclusion_reason: str | None = None
@@ -63,6 +74,26 @@ class FileAuditResult(StrictModel):
 
     @model_validator(mode="after")
     def validate_applicability(self) -> "FileAuditResult":
+        if (
+            self.report_format_version == 2
+            and self.is_applicable
+            and any(
+                not (f.observation or "").strip() or not f.summary.strip()
+                for f in self.findings
+            )
+        ):
+            raise ValueError("新版规则结果必须有实际发现和判断说明")
+        findings = {f.rule_id: f for f in self.findings}
+        for highlight in self.highlights:
+            if (
+                not highlight.title.strip()
+                or not highlight.summary.strip()
+                or len(set(highlight.rule_ids)) != len(highlight.rule_ids)
+                or any(key not in findings for key in highlight.rule_ids)
+            ):
+                raise ValueError("重点问题的内容或关联规则非法")
+            if all(findings[key].result == "compliant" for key in highlight.rule_ids):
+                raise ValueError("重点问题须关联至少一项非符合结论")
         if self.is_applicable:
             if self.project_match.status != "matched":
                 raise ValueError("只有 matched 文件能进入审核")
@@ -80,7 +111,7 @@ class FileAuditResult(StrictModel):
             )
             if self.overall_conclusion != expected:
                 raise ValueError("文件总体结论与路由状态不一致")
-            if self.findings:
+            if self.findings or self.highlights:
                 raise ValueError("不适用文件不能包含普通审核 Finding")
         return self
 

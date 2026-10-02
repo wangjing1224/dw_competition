@@ -3,6 +3,7 @@
 from pydantic import Field
 
 from app.models.common import FindingResult, RuleCategory, StrictModel
+from app.models.findings import ReportHighlight
 
 
 class TaskError(StrictModel):
@@ -16,6 +17,8 @@ class TaskError(StrictModel):
 
 class RuleAuditSummary(StrictModel):
     reason: str = Field(min_length=1)
+    observation: str | None = None
+    recommendation: str | None = None
     tender_chunk_ids: list[str] = Field(default_factory=list)
     bid_chunk_ids: list[str] = Field(default_factory=list)
     evidence_chunk_ids: list[str] = Field(default_factory=list)
@@ -30,7 +33,7 @@ class RuleAuditDecision(StrictModel):
 
 class CategoryAuditDecision(StrictModel):
     category: RuleCategory
-    summary: str = Field(min_length=1)
+    summary: str = ""
     rules: list[RuleAuditDecision] = Field(default_factory=list)
 
 
@@ -38,6 +41,7 @@ class AgentAuditDecision(StrictModel):
     report_title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
     categories: list[CategoryAuditDecision] = Field(default_factory=list)
+    highlights: list[ReportHighlight] = Field(default_factory=list)
 
 
 BidAgentDecision = AgentAuditDecision

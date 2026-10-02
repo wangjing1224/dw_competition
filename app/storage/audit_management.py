@@ -85,7 +85,7 @@ def aggregate_status(files):
         return "partially_failed"
     return (
         "completed_with_report_error"
-        if any(f["word_status"] == "failed" for f in files)
+        if any(f["word_status"] == "failed" or f.get("export_error") for f in files)
         else "completed"
     )
 

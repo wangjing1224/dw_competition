@@ -12,7 +12,6 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
-
 CATEGORY_LABELS = {
     "format": "格式与文件完整性",
     "qualification": "资格条件",
@@ -216,14 +215,15 @@ def apply_document_styles(document: WordDocument) -> None:
     normal.font.color.rgb = RGBColor.from_string(DARK)
     normal.paragraph_format.space_before = Pt(0)
     normal.paragraph_format.space_after = Pt(6)
-    normal.paragraph_format.line_spacing = 1.25
+    normal.paragraph_format.line_spacing = 1.35
 
     title = document.styles["Title"]
-    _set_style_font(title, "黑体", "Arial", 24)
+    _set_style_font(title, "黑体", "Arial", 21)
     title.font.bold = True
     title.font.color.rgb = RGBColor.from_string(DARK)
     title.paragraph_format.space_before = Pt(6)
     title.paragraph_format.space_after = Pt(8)
+    title.paragraph_format.keep_with_next = True
 
     heading_tokens = {
         "Heading 1": (16, 16, 8),
@@ -274,7 +274,7 @@ def apply_document_styles(document: WordDocument) -> None:
 
     header = section.header
     header_paragraph = header.paragraphs[0]
-    header_paragraph.text = "电力智能招标审核系统｜审核报告"
+    header_paragraph.text = "招投标智能审核 · 辅助审核报告"
     header_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     for run in header_paragraph.runs:
         run.font.name = "Arial"

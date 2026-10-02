@@ -157,6 +157,7 @@ class AuditManagementService:
                 key: value.model_dump(mode="json") for key, value in parsed.items()
             },
             "report_template": load_prompt("audit_report_template"),
+            "report_format_version": 2,
         }
 
     def receive(self, uploads, name, request_id, assignments):
@@ -239,6 +240,7 @@ class AuditManagementService:
                             "duplicate_name", "审核任务名称已存在", http_status=409
                         )
             frozen = self.freeze(assignments)
+            frozen["task_name"] = name
             task_id, now = next_id("audit"), utc_now()
             with open_db() as db:
                 db.execute(
@@ -551,6 +553,27 @@ class AuditManagementService:
                     frozen["bidders"][row["bidder_id"]]["library"]
                 ):
                     raise ValueError("报告依据与本次冻结版本不一致")
+                if value.report_format_version != frozen.get(
+                    "report_format_version", 1
+                ):
+                    raise ValueError("报告格式与受理快照不一致")
+                if value.report_format_version == 2:
+                    context = value.report_context
+                    if (
+                        not context
+                        or not context.finalized_at
+                        or (
+                            context.task_name,
+                            context.rule_library_name,
+                            context.evidence_library_name,
+                        )
+                        != (
+                            frozen.get("task_name"),
+                            frozen["projects"][row["project_id"]]["name"],
+                            frozen["bidders"][row["bidder_id"]]["name"],
+                        )
+                    ):
+                        raise ValueError("报告上下文与受理快照不一致")
                 result = value.model_dump(mode="json")
                 if value.is_applicable:
                     counts = {
@@ -575,10 +598,19 @@ class AuditManagementService:
                     "report_unavailable", "正式报告不可读取", http_status=500
                 ) from exc
         path = self.store.task_output_dir(task_id) / "drafts" / f"{file_id}.md"
+        display_markdown = None
         try:
             markdown = (
                 path.read_text("utf-8") if view["report_kind"] != "none" else None
             )
+            if (
+                result
+                and result.get("report_format_version") == 2
+                and row["payload"].get("md_path")
+            ):
+                display_markdown = self.store.resolve_relative(
+                    row["payload"]["md_path"]
+                ).read_text("utf-8")
         except OSError as exc:
             raise BusinessError(
                 "report_unavailable", "已登记报告正文不可读取", http_status=500
@@ -588,6 +620,7 @@ class AuditManagementService:
             "document": {
                 "kind": view["report_kind"],
                 "markdown": markdown,
+                "display_markdown": display_markdown,
                 "revision": view["report_revision"],
                 "updated_at": view["updated_at"] if markdown else None,
             },
@@ -705,6 +738,14 @@ class AuditManagementService:
                 )
             path = task.json_path
         if not path:
+            if file_id:
+                error = row["payload"].get("export_error") or {}
+                expected = {
+                    "md": "markdown_export_failed",
+                    "word": "word_export_failed",
+                }.get(format)
+                if expected and error.get("code") == expected:
+                    raise BusinessError(expected, error["message"], http_status=409)
             raise BusinessError("output_not_ready", "该报告尚未生成", http_status=409)
         value = self.store.resolve_relative(path)
         if not value.is_file():

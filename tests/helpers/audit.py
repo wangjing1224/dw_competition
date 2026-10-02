@@ -121,8 +121,13 @@ def filled_report(
     reason="分辨率满足要求",
     conclusion="符合",
     title="设备采购投标文件审核报告",
+    version=1,
 ):
-    text = skeleton(rule_set).replace(f"# {TITLE_PLACEHOLDER}", f"# {title}", 1)
+    text = skeleton(rule_set, version).replace(
+        f"# {TITLE_PLACEHOLDER}", f"# {title}", 1
+    )
+    if version == 2:
+        text = text.replace("## 重点问题\n\n待填写。", "## 重点问题\n\n无重点问题。")
     text = text.replace(
         "## 总体总结\n\n待填写。", "## 总体总结\n\n文件审核完成，详见分类结论。"
     )
@@ -131,7 +136,12 @@ def filled_report(
     )
     return re.sub(
         r"(### rule-[^\n]+\n\n)待填写。",
-        lambda m: m[1] + f"结论：{conclusion}\n审核说明：{reason}",
+        lambda m: (
+            m[1]
+            + f"结论：{conclusion}\n"
+            + ("实际发现：技术响应表载明参数。\n" if version == 2 else "")
+            + f"审核说明：{reason}"
+        ),
         text,
     )
 

@@ -252,6 +252,12 @@ def _render_report(
     rules = {rule.rule_id: rule for rule in result.rules}
     document = Document()
     apply_document_styles(document)
+    if file_result.report_format_version == 2:
+        from app.reports.presentation import report_markdown
+        from app.reports.word_markdown import render_markdown
+
+        render_markdown(document, report_markdown(result, file_result))
+        return document
     _add_title_block(document, result, file_result)
     document.add_heading("一、项目匹配情况", level=1)
     _add_label_value(

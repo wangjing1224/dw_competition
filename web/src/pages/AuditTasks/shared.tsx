@@ -95,8 +95,12 @@ export function FileErrors({ file }: { file: AuditFile }) {
       {file.export_error && (
         <Alert
           type="warning"
-          title={`Word 导出失败：${file.export_error.message}`}
-          description="已保存的正式结果与 Markdown 不受影响。"
+          title={`${file.export_error.code === 'markdown_export_failed' ? 'Markdown' : 'Word'} 导出失败：${file.export_error.message}`}
+          description={
+            file.export_error.code === 'markdown_export_failed'
+              ? '正式 JSON 已保存；Markdown 未生成，Word 尚未导出。'
+              : '已保存的正式结果与 Markdown 不受影响。'
+          }
         />
       )}
     </>

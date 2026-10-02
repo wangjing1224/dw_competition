@@ -44,6 +44,7 @@ import ApplicabilityReport, {
   ExplanationDownloads,
 } from './ApplicabilityReport';
 import './report.less';
+import { highlightDetails } from './presentation';
 
 function Charts({ data }: { data: ReportData }) {
   if (!data.counts || !data.result) return null;
@@ -138,11 +139,13 @@ function ReportFile({
   taskId,
   fileId,
   files,
+  taskName,
   onFile,
 }: {
   taskId: string;
   fileId: string;
   files: TaskDetail['files'];
+  taskName: string;
   onFile: (id: string) => void;
 }) {
   const [params, setParams] = useSearchParams();
@@ -150,6 +153,7 @@ function ReportFile({
   const category = params.get('category') || 'all';
   const conclusion = params.get('result') || 'issues';
   const selected = params.get('rule');
+  const highlightIndex = params.get('highlight');
   const { data, error, reload } = useRemote(
     (s) => api<ReportData>(`/${taskId}/files/${fileId}`, { signal: s }),
     [taskId, fileId],
@@ -180,8 +184,12 @@ function ReportFile({
   const findings = data
     ? orderedFindings(data.result?.findings || [], data.rules)
     : [];
+  const activeHighlight = data?.result?.highlights?.find(
+    (_, i) => String(i) === highlightIndex,
+  );
   const filtered = findings.filter(
     (f) =>
+      (!activeHighlight || activeHighlight.rule_ids.includes(f.rule_id)) &&
       (category === 'all' || map.get(f.rule_id)?.category === category) &&
       (conclusion === 'all' ||
         (conclusion === 'issues' && f.result !== 'compliant') ||
@@ -216,9 +224,19 @@ function ReportFile({
       <Button>查看处理过程</Button>
     </Link>
   );
+  const heading = (
+    <PageHeading
+      title={data?.result?.report_title || fileLabel(fileId, files)}
+      description={`${data?.result?.report_context?.task_name || taskName} · ${fileLabel(fileId, files)}`}
+      backTo="/audit-tasks"
+      backLabel="返回审核任务"
+      actions={data && <Status value={data.file.status} />}
+    />
+  );
   if (!data)
     return (
       <>
+        {heading}
         <div className="audit-toolbar">
           {fileSelector}
           {processLink}
@@ -229,6 +247,7 @@ function ReportFile({
   if (data.file.file_id !== fileId)
     return (
       <>
+        {heading}
         <div className="audit-toolbar">
           {fileSelector}
           {processLink}
@@ -240,6 +259,7 @@ function ReportFile({
   const explanation = branch === 'not_matched' || branch === 'uncertain';
   return (
     <>
+      {heading}
       {error && <Failure error={error} retry={reload} />}
       <div className="audit-toolbar">
         {fileSelector}
@@ -257,12 +277,12 @@ function ReportFile({
               />
               <Download
                 url={data.file.outputs.md_url}
-                name={`${fileId}-审核报告.md`}
+                name={`${data.file.file_name}-审核报告.md`}
                 label="导出 Markdown"
               />
               <Download
                 url={data.file.outputs.json_url}
-                name={`${fileId}-审核报告.json`}
+                name={`${data.file.file_name}-审核报告.json`}
                 label="导出 JSON"
               />
             </>
@@ -274,6 +294,33 @@ function ReportFile({
           <Binding file={data.file} />
         </div>
       )}
+      {data.result?.report_format_version === 2 &&
+        data.result.report_context && (
+          <section className="audit-report-context" aria-label="审核概况">
+            <span>审核文件：{data.file.file_name}</span>
+            {!!data.rules.some((r) => r.sources.length) && (
+              <span>
+                招标依据文件：
+                {[
+                  ...new Set(
+                    data.rules.flatMap((r) =>
+                      r.sources.map((s) => s.file_name),
+                    ),
+                  ),
+                ].join('、')}
+              </span>
+            )}
+            {data.result.report_context.finalized_at && (
+              <span>
+                报告形成时间：
+                {new Date(
+                  data.result.report_context.finalized_at,
+                ).toLocaleString('zh-CN', { hour12: false })}
+              </span>
+            )}
+            <span>审核范围：本次提交文件及所选规则库、资料库的固定版本</span>
+          </section>
+        )}
       <FileErrors file={data.file} />
       {data.document.kind !== 'final' ? (
         <Card title="已保存内容">
@@ -313,213 +360,354 @@ function ReportFile({
             <span className="audit-muted">仅使用本次审核固定的规则快照</span>
           </div>
           {view === 'overview' && data.counts && <Charts data={data} />}
-          <div className="audit-toolbar">
-            <Space wrap>
-              <Select
-                aria-label="规则类别筛选"
-                value={category}
-                style={{ width: 190 }}
-                onChange={(v) => update('category', v)}
-                options={[
-                  { value: 'all', label: '全部类别' },
-                  ...Object.entries(categories).map(([value, label]) => ({
-                    value,
-                    label,
-                  })),
-                ]}
-              />
-              <Select
-                aria-label="规则结论筛选"
-                value={conclusion}
-                style={{ width: 160 }}
-                onChange={(v) => update('result', v)}
-                options={[
-                  { value: 'issues', label: '问题规则' },
-                  { value: 'all', label: '全部规则' },
-                  ...Object.entries(resultLabels)
-                    .filter(([k]) => k !== 'not_applicable')
-                    .map(([value, label]) => ({ value, label })),
-                ]}
-              />
-              <span>{filtered.length} 条规则</span>
-            </Space>
-          </div>
-          <div className="audit-report-body">
-            <Card
-              title={conclusion === 'issues' ? '问题规则清单' : '规则结论清单'}
+          {view === 'overview' && data.result.report_format_version === 2 && (
+            <section
+              className="audit-highlights"
+              aria-label="重点问题与处理建议"
             >
-              <Table<Finding>
-                rowKey="rule_id"
-                size="small"
-                dataSource={filtered}
-                rowClassName={(r) =>
-                  r.rule_id === chosen?.rule_id ? 'audit-selected-row' : ''
-                }
-                onRow={(r) => ({ onClick: () => update('rule', r.rule_id) })}
-                scroll={{ y: 460, x: 430 }}
-                pagination={{ pageSize: 10, showSizeChanger: false }}
-                locale={{
-                  emptyText: findings.every((f) => f.result === 'compliant')
-                    ? '所有规则均为符合，可切换查看全部规则'
-                    : '没有符合筛选条件的规则',
-                }}
-                columns={[
-                  {
-                    title: '规则 / 核验说明',
-                    render: (_, r) => (
-                      <>
-                        <Button
-                          type="link"
-                          style={{ padding: 0 }}
-                          onClick={() => update('rule', r.rule_id)}
-                        >
-                          <EntityLabel id={r.rule_id}>
-                            {labels.get(r.rule_id) || '规则'}
-                          </EntityLabel>
-                        </Button>
-                        <div className="audit-finding-preview">
-                          <Markdown text={r.summary} />
-                        </div>
-                      </>
-                    ),
-                  },
-                  {
-                    title: '重要程度',
-                    width: 85,
-                    render: (_, r) =>
-                      priorities[map.get(r.rule_id)?.priority || ''] || '—',
-                  },
-                  {
-                    title: '结论',
-                    width: 98,
-                    render: (_, r) => (
-                      <Tag color={resultColors[r.result]}>
-                        {resultLabels[r.result]}
-                      </Tag>
-                    ),
-                  },
-                ]}
-              />
-            </Card>
-            <Card
-              title={
-                rule ? (
-                  <EntityLabel id={rule.rule_id}>
-                    {labels.get(rule.rule_id)} · {categories[rule.category]}
-                  </EntityLabel>
-                ) : (
-                  '规则详情'
-                )
-              }
-            >
-              <div className="audit-rule-inspector" key={chosen?.rule_id}>
-                {rule && chosen ? (
-                  <>
-                    <Space wrap>
-                      <Tag>{priorities[rule.priority]}</Tag>
-                      <Tag color="blue">{verifications[rule.verification]}</Tag>
-                      <Tag color={resultColors[chosen.result]}>
-                        {resultLabels[chosen.result]}
-                      </Tag>
-                    </Space>
-                    <section className="audit-report-section audit-rule-requirement">
-                      <h4>规则要求</h4>
-                      <ExpandableContent
-                        text={rule.requirement}
-                        label="规则要求"
-                      >
-                        <Markdown text={rule.requirement} />
-                      </ExpandableContent>
-                    </section>
-                    <section className="audit-report-section">
-                      <h4>依据说明</h4>
-                      <ExpandableContent
-                        text={rule.reason || ''}
-                        label="依据说明"
-                        previewHeight={100}
-                      >
-                        <Markdown text={rule.reason || '未补充依据说明'} />
-                      </ExpandableContent>
-                    </section>
-                    <section className="audit-report-section audit-finding-explanation">
-                      <h4>审核说明</h4>
-                      <ExpandableContent
-                        text={chosen.summary}
-                        label="审核说明"
-                        previewHeight={180}
-                      >
-                        <Markdown text={chosen.summary} />
-                      </ExpandableContent>
-                    </section>
-                    <section className="audit-report-section audit-report-sources">
-                      <h4>招标来源</h4>
+              <h3>重点问题与处理建议</h3>
+              {data.result.highlights?.length ? (
+                data.result.highlights.map((highlight, index) => {
+                  const details = highlightDetails(data, highlight);
+                  const open = () => {
+                    const p = new URLSearchParams(params);
+                    p.set('view', 'rules');
+                    p.set('highlight', String(index));
+                    p.set('category', 'all');
+                    p.set('result', 'all');
+                    p.delete('rule');
+                    setParams(p, { replace: true });
+                  };
+                  return (
+                    <Card
+                      key={`${index}/${highlight.title}`}
+                      className="audit-highlight-card"
+                      onClick={(event) => {
+                        if (
+                          !window.getSelection()?.toString() &&
+                          !(event.target as HTMLElement).closest(
+                            'button,a,input',
+                          )
+                        )
+                          open();
+                      }}
+                      title={
+                        <span>
+                          {String(index + 1).padStart(2, '0')} ·{' '}
+                          {highlight.title}
+                        </span>
+                      }
+                      extra={<Button onClick={open}>查看关联明细</Button>}
+                    >
                       <Space wrap>
-                        {rule.sources.map((s) => (
-                          <Button
-                            key={s.file_id}
-                            type="link"
-                            onClick={() => setSource(s.file_id)}
-                          >
-                            <EntityLabel id={s.file_id}>
-                              {fileLabel(s.file_id, rule.sources)}
-                            </EntityLabel>
-                          </Button>
+                        {details.conclusions.map((value) => (
+                          <Tag key={value} color={resultColors[value]}>
+                            {resultLabels[value]}
+                          </Tag>
                         ))}
                       </Space>
-                      <h4>已记录核验来源</h4>
-                      {keys.length ? (
-                        keys.map((key) => {
-                          const src = data.result?.sources[key];
-                          return src ? (
-                            <div key={key}>
-                              <Tag>{key}</Tag>
-                              <p>
-                                {src.section || '文件级来源'}
-                                {src.page_numbers.length
-                                  ? ` · 页 ${src.page_numbers.join('、')}`
-                                  : ''}
-                              </p>
-                              {src.quote && (
-                                <blockquote>{src.quote}</blockquote>
-                              )}
-                              <Button
-                                type="link"
-                                onClick={() => setSource(src.file_id)}
+                      <ExpandableContent
+                        text={highlight.summary}
+                        label="问题概述"
+                      >
+                        <Markdown text={highlight.summary} />
+                      </ExpandableContent>
+                      {details.suggestions.length > 0 && (
+                        <section className="audit-report-section">
+                          <h4>处理建议</h4>
+                          {details.suggestions.map((suggestion) => (
+                            <div key={suggestion.text}>
+                              <div className="audit-muted">
+                                {suggestion.ruleIds
+                                  .map((id) => labels.get(id))
+                                  .join('、')}
+                              </div>
+                              <ExpandableContent
+                                text={suggestion.text}
+                                label="处理建议"
                               >
-                                查看解析原文 · {src.file_name}
-                              </Button>
+                                <Markdown text={suggestion.text} />
+                              </ExpandableContent>
                             </div>
-                          ) : (
-                            <p key={key}>{key} · 未登记可查看来源</p>
-                          );
-                        })
-                      ) : (
-                        <p className="audit-muted">
-                          此项未记录引用；不从审核说明推测原文位置。
-                        </p>
+                          ))}
+                        </section>
                       )}
-                    </section>
-                  </>
-                ) : (
-                  <Empty description="选择一条规则查看核验内容" />
-                )}
-              </div>
-            </Card>
-          </div>
+                    </Card>
+                  );
+                })
+              ) : (
+                <Card>无重点问题，完整结果可在规则明细中查看。</Card>
+              )}
+            </section>
+          )}
           {view === 'rules' && (
-            <Card className="section-gap" title="完整审核报告">
-              <Markdown text={data.document.markdown || ''} />
-            </Card>
+            <>
+              <div className="audit-toolbar">
+                <Space wrap>
+                  <Select
+                    aria-label="规则类别筛选"
+                    value={category}
+                    style={{ width: 190 }}
+                    onChange={(v) => update('category', v)}
+                    options={[
+                      { value: 'all', label: '全部类别' },
+                      ...Object.entries(categories).map(([value, label]) => ({
+                        value,
+                        label,
+                      })),
+                    ]}
+                  />
+                  <Select
+                    aria-label="规则结论筛选"
+                    value={conclusion}
+                    style={{ width: 160 }}
+                    onChange={(v) => update('result', v)}
+                    options={[
+                      { value: 'issues', label: '问题规则' },
+                      { value: 'all', label: '全部规则' },
+                      ...Object.entries(resultLabels)
+                        .filter(([k]) => k !== 'not_applicable')
+                        .map(([value, label]) => ({ value, label })),
+                    ]}
+                  />
+                  <span>{filtered.length} 条规则</span>
+                  {activeHighlight && (
+                    <Tag
+                      closable
+                      onClose={() => {
+                        const p = new URLSearchParams(params);
+                        p.delete('highlight');
+                        p.delete('rule');
+                        setParams(p, { replace: true });
+                      }}
+                    >
+                      来自重点问题：{activeHighlight.title}
+                    </Tag>
+                  )}
+                </Space>
+              </div>
+              <div className="audit-report-body">
+                <Card
+                  title={
+                    conclusion === 'issues' ? '问题规则清单' : '规则结论清单'
+                  }
+                >
+                  <Table<Finding>
+                    rowKey="rule_id"
+                    size="small"
+                    dataSource={filtered}
+                    rowClassName={(r) =>
+                      r.rule_id === chosen?.rule_id ? 'audit-selected-row' : ''
+                    }
+                    onRow={(r) => ({
+                      onClick: () => update('rule', r.rule_id),
+                      tabIndex: 0,
+                      onKeyDown: (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          update('rule', r.rule_id);
+                        }
+                      },
+                    })}
+                    scroll={{ y: 460, x: 430 }}
+                    pagination={{ pageSize: 10, showSizeChanger: false }}
+                    locale={{
+                      emptyText: findings.every((f) => f.result === 'compliant')
+                        ? '所有规则均为符合，可切换查看全部规则'
+                        : '没有符合筛选条件的规则',
+                    }}
+                    columns={[
+                      {
+                        title: '规则 / 核验说明',
+                        render: (_, r) => (
+                          <>
+                            <Button
+                              type="link"
+                              style={{ padding: 0 }}
+                              onClick={() => update('rule', r.rule_id)}
+                            >
+                              <EntityLabel id={r.rule_id}>
+                                {labels.get(r.rule_id) || '规则'}
+                              </EntityLabel>
+                            </Button>
+                            <div className="audit-finding-preview">
+                              <Markdown text={r.summary} />
+                            </div>
+                          </>
+                        ),
+                      },
+                      {
+                        title: '重要程度',
+                        width: 85,
+                        render: (_, r) =>
+                          priorities[map.get(r.rule_id)?.priority || ''] || '—',
+                      },
+                      {
+                        title: '结论',
+                        width: 98,
+                        render: (_, r) => (
+                          <Tag color={resultColors[r.result]}>
+                            {resultLabels[r.result]}
+                          </Tag>
+                        ),
+                      },
+                    ]}
+                  />
+                </Card>
+                <Card
+                  title={
+                    rule ? (
+                      <EntityLabel id={rule.rule_id}>
+                        {labels.get(rule.rule_id)} · {categories[rule.category]}
+                      </EntityLabel>
+                    ) : (
+                      '规则详情'
+                    )
+                  }
+                >
+                  <div className="audit-rule-inspector" key={chosen?.rule_id}>
+                    {rule && chosen ? (
+                      <>
+                        <Space wrap>
+                          <Tag>{priorities[rule.priority]}</Tag>
+                          <Tag color="blue">
+                            {verifications[rule.verification]}
+                          </Tag>
+                          <Tag color={resultColors[chosen.result]}>
+                            {resultLabels[chosen.result]}
+                          </Tag>
+                        </Space>
+                        <section className="audit-report-section audit-rule-requirement">
+                          <h4>规则要求</h4>
+                          <ExpandableContent
+                            text={rule.requirement}
+                            label="规则要求"
+                          >
+                            <Markdown text={rule.requirement} />
+                          </ExpandableContent>
+                        </section>
+                        {chosen.observation && (
+                          <section className="audit-report-section audit-rule-requirement">
+                            <h4>实际发现</h4>
+                            <ExpandableContent
+                              text={chosen.observation}
+                              label="实际发现"
+                            >
+                              <Markdown text={chosen.observation} />
+                            </ExpandableContent>
+                          </section>
+                        )}
+                        <section className="audit-report-section audit-finding-explanation">
+                          <h4>
+                            {data.result.report_format_version === 2
+                              ? '判断说明'
+                              : '审核说明'}
+                          </h4>
+                          <ExpandableContent
+                            text={chosen.summary}
+                            label="审核说明"
+                            previewHeight={180}
+                          >
+                            <Markdown text={chosen.summary} />
+                          </ExpandableContent>
+                        </section>
+                        {chosen.recommendation && (
+                          <section className="audit-report-section">
+                            <h4>复核建议</h4>
+                            <ExpandableContent
+                              text={chosen.recommendation}
+                              label="复核建议"
+                            >
+                              <Markdown text={chosen.recommendation} />
+                            </ExpandableContent>
+                          </section>
+                        )}
+                        {!!(rule.sources.length || keys.length) && (
+                          <section className="audit-report-section audit-report-sources">
+                            {!!rule.sources.length && (
+                              <>
+                                <h4>规则依据文件</h4>
+                                <Space wrap>
+                                  {rule.sources.map((s) => (
+                                    <Button
+                                      key={s.file_id}
+                                      type="link"
+                                      onClick={() => setSource(s.file_id)}
+                                    >
+                                      <EntityLabel id={s.file_id}>
+                                        {fileLabel(s.file_id, rule.sources)}
+                                      </EntityLabel>
+                                    </Button>
+                                  ))}
+                                </Space>
+                              </>
+                            )}
+                            {!!keys.length &&
+                              keys.map((key) => {
+                                const src = data.result?.sources[key];
+                                return src ? (
+                                  <div key={key}>
+                                    <p>
+                                      {
+                                        (
+                                          {
+                                            rule_source: '招标',
+                                            bid_document: '投标',
+                                            evidence_material: '资料',
+                                          } as Record<string, string>
+                                        )[src.data_role]
+                                      }
+                                      {src.quote
+                                        ? '解析原文摘录'
+                                        : chosen.image_paths.includes(key)
+                                          ? '图片依据'
+                                          : '核验依据'}{' '}
+                                      · {src.file_name}
+                                      {src.section ? ` · ${src.section}` : ''}
+                                      {src.page_numbers.length
+                                        ? ` · 页 ${src.page_numbers.join('、')}`
+                                        : ''}
+                                    </p>
+                                    {src.quote && (
+                                      <ExpandableContent
+                                        text={src.quote}
+                                        label="原文摘录"
+                                      >
+                                        <blockquote>
+                                          <Markdown text={src.quote} />
+                                        </blockquote>
+                                      </ExpandableContent>
+                                    )}
+                                    <Button
+                                      type="link"
+                                      onClick={() => setSource(src.file_id)}
+                                    >
+                                      查看解析原文 · {src.file_name}
+                                    </Button>
+                                  </div>
+                                ) : null;
+                              })}
+                          </section>
+                        )}
+                      </>
+                    ) : (
+                      <Empty description="选择一条规则查看核验内容" />
+                    )}
+                  </div>
+                </Card>
+              </div>
+            </>
           )}
-          {!!data.result.suggestions.length && (
-            <Card className="section-gap" title="后续处理建议">
-              {[...new Set(data.result.suggestions)].map((s, i) => (
-                <p key={s}>
-                  {i + 1}. {s}
-                </p>
-              ))}
-            </Card>
-          )}
+          {data.result.report_format_version !== 2 &&
+            !!data.result.suggestions.length && (
+              <Card className="section-gap" title="历史建议">
+                {[...new Set(data.result.suggestions)].map((s, i) => (
+                  <p key={s}>
+                    {i + 1}. {s}
+                  </p>
+                ))}
+              </Card>
+            )}
         </>
       )}
       <SourcePreview
@@ -545,28 +733,18 @@ export default function AuditReport() {
     data?.files.find((f) => f.file_id === params.get('file')) || data?.files[0];
   return (
     <div className="business-page audit-page">
-      <PageHeading
-        title={
-          file &&
-          ['not_matched', 'uncertain'].includes(
-            file.route?.match_status || '',
-          ) ? (
-            '项目适用性说明'
-          ) : file ? (
-            <EntityLabel id={file.file_id}>{file.file_name}</EntityLabel>
-          ) : (
-            '审核报告'
-          )
-        }
-        description={
-          data ? (
-            <EntityLabel id={taskId}>{data.task.display_name}</EntityLabel>
-          ) : undefined
-        }
-        backTo="/audit-tasks"
-        backLabel="返回审核任务"
-        actions={<Space>{file && <Status value={file.status} />}</Space>}
-      />
+      {!file && (
+        <PageHeading
+          title="审核报告"
+          description={
+            data ? (
+              <EntityLabel id={taskId}>{data.task.display_name}</EntityLabel>
+            ) : undefined
+          }
+          backTo="/audit-tasks"
+          backLabel="返回审核任务"
+        />
+      )}
       {error && <Failure error={error} retry={reload} />}
       {file ? (
         <ReportFile
@@ -574,6 +752,7 @@ export default function AuditReport() {
           taskId={taskId}
           fileId={file.file_id}
           files={data?.files || []}
+          taskName={data?.task.display_name || ''}
           onFile={(id) => setParams({ file: id })}
         />
       ) : !data && !error ? (

@@ -27,6 +27,7 @@ import Create from './Create';
 import List from './List';
 import Progress from './Progress';
 import Report from './Report';
+import { highlightDetails } from './Report/presentation';
 import { StageMatrix } from './shared';
 
 vi.mock('@umijs/max', () => ({
@@ -258,6 +259,116 @@ function progressData(
   };
 }
 describe('审核工作区', () => {
+  it('新版重点建议精确去重并保留冻结顺序，不因关联数组逆序而重新编号', () => {
+    const data: ReportData = {
+      ...report,
+      result: {
+        ...report.result!,
+        findings: [
+          {
+            ...finding('rule-2', 'manual_review'),
+            recommendation: ' 核对原件。 ',
+          },
+          { ...finding('rule-1', 'risk'), recommendation: '核对原件。' },
+        ],
+      },
+    };
+    const details = highlightDetails(data, {
+      title: '材料待核对',
+      summary: '有待补充事实。',
+      rule_ids: ['rule-2', 'rule-1'],
+    });
+    expect(details.findings.map((f) => f.rule_id)).toEqual([
+      'rule-1',
+      'rule-2',
+    ]);
+    expect(details.conclusions).toEqual(['risk', 'manual_review']);
+    expect(details.suggestions).toEqual([
+      { text: '核对原件。', ruleIds: ['rule-1', 'rule-2'] },
+    ]);
+  });
+  it('新版重点可跳关联明细，展示发现、判断、建议和真实摘录，不铺内部草稿', async () => {
+    const quote = '投标响应表载明：精度100，单位与试验条件待核验。';
+    mockApi((url) =>
+      url.endsWith('/files/file-1')
+        ? {
+            ...report,
+            document: {
+              ...report.document,
+              markdown: '# 内部报告\n### rule-147\n内部草稿不可铺出',
+            },
+            result: {
+              ...report.result!,
+              report_format_version: 2,
+              report_title: '设备采购审核报告',
+              report_context: {
+                task_name: '受理时任务名',
+                finalized_at: '2026-10-01T04:30:00Z',
+              },
+              highlights: [
+                {
+                  title: '精度条件待核验',
+                  summary: '结论以试验条件为前提。',
+                  rule_ids: ['rule-1'],
+                },
+              ],
+              findings: [
+                {
+                  ...finding('rule-1', 'risk'),
+                  summary: '**判断说明正文**',
+                  observation: '已载明参数，缺少试验条件。',
+                  recommendation: '核对原始测试记录。',
+                  bid_chunk_ids: ['chunk-real'],
+                },
+                finding('rule-2', 'compliant'),
+              ],
+              sources: {
+                'chunk-real': {
+                  file_id: 'file-1',
+                  file_name: '标书一.md',
+                  source_path: '甲/标书一.md',
+                  data_role: 'bid_document',
+                  parse_version: 'v1',
+                  quote,
+                  section: '响应表',
+                  page_numbers: [],
+                },
+              },
+            },
+          }
+        : undefined,
+    );
+    render(
+      <App>
+        <Report />
+      </App>,
+    );
+    expect(
+      await screen.findByRole('heading', { name: '设备采购审核报告' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('重点问题与处理建议')).toBeInTheDocument();
+    expect(screen.queryByText('内部草稿不可铺出')).not.toBeInTheDocument();
+    expect(screen.getByText('核对原始测试记录。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '查看关联明细' }));
+    expect(
+      await screen.findByText('来自重点问题：精度条件待核验'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: '实际发现' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('判断说明正文', {
+        selector: '.audit-finding-explanation strong',
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(quote)).toBeInTheDocument();
+    expect(screen.queryByText('chunk-real')).not.toBeInTheDocument();
+    expect(screen.queryByText('此项未记录引用')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '规则 02' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('核对原始测试记录。')).toBeInTheDocument();
+  });
   it('报告编号来自冻结规则快照，按结论筛选不会重编号，也不读取当前规则库', async () => {
     const frozenRules = rules.map((r, i) => ({
       ...r,
@@ -283,6 +394,7 @@ describe('审核工作区', () => {
         <Report />
       </App>,
     );
+    fireEvent.click(await screen.findByText('规则明细'));
     await screen.findByRole('button', { name: '规则 02' });
     expect(
       screen.queryByRole('button', { name: '规则 01' }),
@@ -488,6 +600,7 @@ describe('审核工作区', () => {
     expect(
       screen.queryByRole('button', { name: '查看全部规则' }),
     ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('规则明细'));
     fireEvent.mouseDown(screen.getByRole('combobox', { name: '规则结论筛选' }));
     fireEvent.click(
       await screen.findByText('全部规则', {
@@ -495,6 +608,7 @@ describe('审核工作区', () => {
       }),
     );
     expect(await screen.findByText('rule-2的核验说明')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('结果总览'));
     expect(
       screen.getByRole('img', {
         name: '符合 1 条，不符合 0 条，风险 1 条，人工复核 0 条',
@@ -553,6 +667,7 @@ describe('审核工作区', () => {
       overflowY: 'auto',
       maxHeight: '360px',
     });
+    fireEvent.click(screen.getByText('规则明细'));
     expect(
       container.querySelector('.audit-finding-explanation strong'),
     ).toHaveTextContent('需要复核');

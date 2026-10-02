@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import BinaryIO, Protocol
+from datetime import UTC
+from typing import BinaryIO, Literal, Protocol
 
 from pydantic import Field
 
@@ -26,7 +27,7 @@ from app.models.documents import (
     document_ref_from_record,
 )
 from app.models.evidence import EvidenceLibrary
-from app.models.results import AuditResult, FileAuditResult, ProjectMatch
+from app.models.results import AuditResult, FileAuditResult, ProjectMatch, ReportContext
 from app.models.rules import RuleSet
 from app.parsers.assets import atomic_write
 from app.parsers.service import prepare_document
@@ -60,6 +61,8 @@ class AuditTaskContext(StrictModel):
     file_order: list[str] = Field(default_factory=list)
     file_errors: dict[str, str] = Field(default_factory=dict)
     report_template: str
+    report_format_version: Literal[1, 2] = 1
+    report_context: ReportContext | None = None
     index_scope_overrides: dict[str, str] = Field(default_factory=dict)
 
 
@@ -166,6 +169,8 @@ class AuditTaskService:
                 parsed_documents=parsed,
                 file_order=[record.file_id for record in records],
                 report_template=load_prompt("audit_report_template"),
+                report_format_version=2,
+                report_context=ReportContext(),
             )
             self._save_context(context)
         except Exception as exc:
@@ -251,7 +256,12 @@ class AuditTaskService:
                     context.parsed_documents[file_id] = parsed
                 else:
                     context.routed_file_results.append(
-                        _routed_file_result(parsed.document, value)
+                        _routed_file_result(
+                            parsed.document,
+                            value,
+                            version=context.report_format_version,
+                            report_context=context.report_context,
+                        )
                     )
                 self.event_repository.append(
                     task_id,
@@ -416,10 +426,21 @@ def query_audit_task(
 def _routed_file_result(
     document: DocumentRef,
     summary: BidDocumentSummary,
+    *,
+    version=1,
+    report_context=None,
 ) -> FileAuditResult:
+    from datetime import datetime
+
     not_matched = summary.match_status == "not_matched"
     result = FileAuditResult(
         file=document,
+        report_format_version=version,
+        report_context=report_context.model_copy(
+            update={"finalized_at": report_context.finalized_at or datetime.now(UTC)}
+        )
+        if report_context
+        else None,
         is_applicable=False,
         project_match=ProjectMatch(
             status=summary.match_status,
