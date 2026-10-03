@@ -1,20 +1,38 @@
-# 电力智能招标审核系统
+# 招投标智能审核系统
 
-本项目面向电力招投标材料，按招标规则逐项审核投标文件，并按需核验投标方支撑资料，最终生成可追溯的 JSON 审核结果和 Word 报告。
+本项目面向招投标材料，提供规则库、投标方资料库和审核任务工作台。系统按招标规则逐项审核投标文件，按需核验支撑资料，并生成结构化 JSON、正式 Markdown 阅读稿和 Word 报告。
+
+当前为单进程、本地文件存储的辅助审阅系统，不提供登录鉴权，也不以模型结论替代人工审阅。以下说明对应当前实现；待验证方案不代表已上线能力。
+
+## 当前功能
+
+| 模块 | 已实现能力 |
+| --- | --- |
+| 规则库 | 文件/文件夹导入、后台抽取、六类规则审阅、人工新增与修订、解析原文及图片预览、JSON/Markdown 导出 |
+| 投标方资料库 | 独立批次导入、逐文件简洁/详细摘要、文件间直接关系、人工修正、按 AI 整理/人工修正筛选及导出 |
+| 审核任务 | 每份投标文件分别绑定规则库和资料库、任务队列、文件处理矩阵、独立路由与审核、批次 JSON 和逐文件结果导出 |
+| 执行工作区 | 当前文件进度、流程图、固定能力节点的 Agent 图、默认展开的轨迹树、节点详情、执行记录及 Agent 历史回放 |
+| 报告 | 草稿查看、正式结果总览与规则明细、已登记原文摘录、JSON/Markdown/Word 导出；未进入审核时单独展示项目适用性说明 |
+
+规则库名称、资料库名称、审核任务名称各自在本类型内唯一，不同类型之间可同名；已有历史重名数据不会被自动改名。
 
 系统业务 ID 使用按类型独立递增的短格式，例如 `project-1`、`bidder-1`、
 `audit-1` 和 `file-1`；索引片段使用 `chunk-文件号-章节号-单元号-切片号`，
 有序解析结果的片段另带短版本后缀，避免重建索引后旧片段 ID 指向不同内容。
+业务页面优先展示名称、文件名和当前规则集内的序号，技术 ID 仍用于接口、路由、结构化 JSON 和诊断，不能因展示调整而更换关联键。
 
 ## 主流程
 
 ```text
 招标文件夹 -> 文档解析 -> 招标依据索引 -> 逐文件规则 Agent -> RuleSet
 投标方资料 -> 整批文档解析 -> Evidence Index -> 逐文件资料入库 Agent -> 双摘要与文件关联
-投标测试集 -> 文档解析 -> 项目路由 -> 匹配文件统一建索引 -> 逐文件主/子 Agent -> Markdown报告 -> JSON -> Word
+投标文件   -> 逐文件解析与项目适用性判断
+             ├─ 匹配：独立建索引 -> 主审核/资料核验 Agent -> 增量草稿 -> 最终校验
+             │                                                   -> 正式 JSON -> Markdown/Word
+             └─ 不匹配或不确定：不进入审核 Agent -> 项目适用性说明
 ```
 
-LangGraph 承载规则抽取 Agent、资料入库 Agent、主审核 Agent 和资料核验子 Agent。文件上传、解析和索引构建在图外完成；JSON 校验和 Word 渲染也在图外完成。
+LangGraph 承载规则抽取 Agent、资料入库 Agent、主审核 Agent 和资料核验子 Agent。上传、解析和索引构建由业务代码编排；报告的结构校验、正式阅读稿组装和 Word 渲染由代码完成，不再调用一个报告生成模型。
 
 资料库按 bidder_id 独立入库，不绑定招标项目。一次审核任务可上传多份投标文件，每份文件分别选择唯一的已就绪规则库和资料库；每份文件独立路由和审核，一份文件输出一份报告。不匹配或不确定文件也输出理由，但不进入主 Agent；执行错误单独记录，不伪造成“人工复核”结论。
 
@@ -23,6 +41,7 @@ LangGraph 承载规则抽取 Agent、资料入库 Agent、主审核 Agent 和资
 ```text
 app/api          HTTP 接口
 app/services     普通业务流程编排
+app/audit        审核路由、会话及输入装载
 app/storage      SQLite 元数据和本地文件
 app/models       共享 Pydantic Schema
 app/parsers      DOC/DOCX/XLSX/TXT/Markdown/PDF/图片解析及可选视觉辅助
@@ -33,8 +52,8 @@ app/evidence     逐文件资料理解、双摘要持久化及关联查询
 app/tools        规则/审核工具及 CommonTool 通用工具
 app/agents       规则抽取、主审核和资料核验 Agent
 app/graph        LangGraph State、路由和更新
-app/reports      JSON 和 Word 输出
-web              Ant Design Pro 规则库与投标方资料库工作台
+app/reports      草稿维护、完整性校验、正式 Markdown 和 Word 输出
+web              Ant Design Pro 规则库、资料库与审核工作台
 configs          模型、检索和存储配置
 data             运行时上传、解析、索引和输出
 schemas          导出的 JSON Schema
@@ -43,17 +62,29 @@ tests            单元、契约、集成和端到端测试
 
 ## 环境和启动
 
-项目使用 Python 3.11 和 uv：
+### 后端
+
+使用 Python 3.11 和 uv。在项目根目录安装依赖，首次使用时复制配置；已有 `.env` 不要覆盖：
 
 ```bash
 uv sync
-cp .env.example .env
+cp -n .env.example .env
+```
+
+在 `.env` 填好所需模型地址和 Key，再按下面的模型配置说明核对平台、型号与检索配置。启动开发后端：
+
+```bash
 uv run uvicorn app.main:app --reload
 ```
 
-健康检查地址：`http://127.0.0.1:8000/health`
+- 健康检查：`http://127.0.0.1:8000/health`
+- 接口文档：`http://127.0.0.1:8000/docs`
 
-管理工作台（Node.js 22 或以上；后端保持在 8000 端口）：
+服务启动只检查本地目录和 SQLite，不会主动请求模型。上传解析、规则抽取、资料整理和审核会按配置使用模型或检索服务，可能产生费用。
+
+### 前端
+
+使用 Node.js 22 或以上；从项目根目录打开另一个终端，后端保持在 8000 端口：
 
 ```bash
 cd web
@@ -61,29 +92,32 @@ npm ci
 npm run dev
 ```
 
-打开 `http://localhost:3000`。首页进入规则库，支持文件/文件夹导入、后台进度、
-本地 Agent 执行轨迹、六类规则审阅、人工修订、来源原文/图片预览及 JSON/Markdown 导出。
-投标方资料库支持独立批次导入、后台轨迹、逐文件双摘要和直接关系、人工修订及导出。
-审核任务支持逐文件库配置、任务处理矩阵、主/子 Agent 执行轨迹、报告草稿、正式结果分析和逐文件导出。
-没有登录系统，也不会请求模板的演示服务。
+打开 `http://localhost:3000`，首页为工作台，可进入规则库、投标方资料库和审核任务。
+正式路由在 `web/config/routes.application.ts`；不使用模板登录页或演示服务。
 开发代理默认把 `/api/` 转到 `http://127.0.0.1:8000`，可通过启动环境变量
 `API_PROXY_TARGET` 修改。生产部署使用 `npm run build` 的 `web/dist`，Web 服务器需配置
 SPA 回退到 `index.html`，并将 `/api/` 反向代理到后端；开发代理不适用于生产静态文件。
 
-规则库、资料库上传保存文件后即返回 202，随后在单进程后台解析和整理。重启会将未完成任务
+### 部署与更新边界
+
+规则库、资料库和审核任务保存上传文件后即返回 202，随后在单进程后台处理。重启会将未完成任务
 标记为中断并保留已保存成果，不自动重复调用模型。当前不支持多进程任务调度，
 部署时不要增加 Uvicorn workers；本地展示轨迹不依赖 LangSmith 开启。
-人工编辑使用版本校验防止覆盖新修改。系统尚无鉴权，仅用于可信环境。
+人工编辑使用版本校验防止覆盖新修改。系统尚无鉴权，仅用于可信环境，不能直接开放到不可信网络。
 
 `app/web/` 是保留的早期静态演示，不适配当前审核接口；请使用上面的 `web/` 管理工作台。
-更新后需重启后端加载新路由。数据库会迁移上一版审核绑定结构，保留已有规则库、资料库和原件，不需要删除 data。
+后端代码、配置或 Prompt 更新后需要重启服务刷新缓存；先确认没有需要继续执行的任务。
+已创建的审核任务保留自己的冻结快照，不因后续改库或改模板而重写。生产前端更新后需重新构建和部署静态文件。
 
-服务启动只检查本地目录和 SQLite，不会主动请求模型。调用项目上传、
-投标方资料上传或审核接口前，需要在 `.env` 中填写对应模型 URL 和 Key。
+常规更新不要删除 `data/`。数据库支持上一版审核绑定结构的定向迁移，但不是任意旧版本的通用迁移器。
+若启动明确提示早期 `bidders/files` 仍绑定项目，则会停止且不自动改写旧数据；试跑新版需在
+`configs/storage.yaml` 将 `data_root` 和 `database_path` 一起改为独立目录，例如
+`data/ingestion-v23` 与 `data/ingestion-v23/app.db`，保留旧目录。不要只换数据库却复用旧解析/索引目录。
+备份应在停止写入后同时保留数据库、原件、解析版本、索引和任务产物；当前没有内置备份恢复或跨进程任务恢复服务。
 
 ## 模型配置
 
-- `.env`：保存各职责 Chat、Embedding 和 Rerank 的连接地址、Key，不提交 Git。
+- `.env`：保存各职责 Chat、Embedding 和 Rerank 的连接地址、Key，以及审核主/子 Agent 轮次配置，不提交 Git。
 - `configs/model.yaml`：保存 Chat 平台、模型名、思考开关、温度、超时、重试、维度和批大小。
 - `configs/retrieval.yaml`：保存分段、候选数量和混合召回权重。
 - `configs/storage.yaml`：保存数据目录、SQLite 路径和上传安全限制。
@@ -136,7 +170,7 @@ Rerank切换不改变向量索引。正文切片默认1024个本地近似Token�
 
 ## 规则抽取与增量维护
 
-上传接口不变。解析和索引完成后，规则 Agent 串行处理每份招标文件，使用独立消息历史：
+解析和索引完成后，规则 Agent 串行处理每份招标文件，使用独立消息历史：
 System 放稳定要求和启动时的完整规则视图，Human 放当前文件的有序正文、表格及图片路径。
 提交结果以 ToolMessage 更新上下文，不反复改写 System；下一份文件使用最新规则库启动。
 
@@ -145,7 +179,8 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 - `submit_rule_delta`：一批 `add/merge/replace` 或项目简介更新；三个参数显式全为 `null` 时只读查看。
 
 每条规则保存 `rule_id/provenance/category/requirement/priority/verification/reason/sources`。
-`rule_id` 和 `provenance=ai_generated` 由系统赋值；来源只保存文件 ID、名称和路径。
+模型抽取时，`rule_id` 和 `provenance=ai_generated` 由系统赋值；人工新增、修订分别标记为
+`human_added`、`human_modified`。来源只保存文件 ID、名称和路径。
 `merge` 追加要求并合并来源，`replace` 完整替换且校验来源，二者保留目标 ID；`reason` 始终覆盖为最新依据说明。
 暂不设置 30 条上限，不自动将同类规则拼接压缩，数量和粒度通过后续人工标注验证。
 
@@ -176,12 +211,14 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 截断/无效工具调用使用 WARNING；未获得响应时记录 `agent_model_call_failed`。这些诊断不改变重试、轮数或提交策略。
 规则库工作台支持人工新增、修订和版本校验；审核侧已复用输入控制器。
 
-### 投标方资料入库
+## 投标方资料入库
 
 一次上传一批资料，先统一解析并构建原文索引，再串行运行资料入库 Agent；不支持同一投标方完成后追加上传。
 每份文件保存 `bid_summary`、`evidence_summary`、`relations`。关系为 `[自由文本描述, 历史file_id]`，不设类型枚举，
 仅关联本批已完成的前序文件；代码可以按目标文件反查，不把有关联当作核验通过。
 详细摘要按需保留真实图片路径，简洁摘要不放路径；历史详情和图片可以按需读取，不强制遍历全部资料。
+资料的 `provenance` 只有 `ai_generated`（AI 整理）和 `human_modified`（人工修正），
+没有人工新增资料条目的模式。人工修正只表示内容被修改，不代表材料已核验真实有效。
 
 三个工具为 `search_documents`、`view_image`、`save_evidence_material`。
 保存工具的 `material`、`file_ids` 必须显式填写且恰好一项为 null：写入当前文件完整结果，或查看指定历史文件/`"all"`。
@@ -193,18 +230,14 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 `evidence_ingestion_max_steps` 按阅读批次计数；压缩续跑不清零，倒数第二轮提醒保存、最后一轮不绑定工具。
 原文检索和看图与规则 Agent 共用 CommonTool，业务代码注入各自授权范围、默认范围和解析版本。
 
-旧版 SQLite 的 bidders/files 仍绑定项目，启动时会提示旧结构并停止，不自动迁移或删除旧数据。
-试跑新版前，请在 `configs/storage.yaml` 将 **data_root 和 database_path 一起**改为独立目录，例如
-`data/ingestion-v23` 与 `data/ingestion-v23/app.db`；旧目录保留作参考。不要仅更换数据库却复用旧解析/索引目录。
-
-### 投标审核与报告
+## 投标审核与报告
 
 一次任务可上传多份投标文件，每份文件独立绑定规则库和投标方资料库，也可批量应用同一组库。
 创建时校验库状态、revision、解析快照与索引版本；缺少索引或索引过期不能直接放行。
 提交后冻结所选规则、资料、解析版本和报告模板，后续编辑库不会改变正在执行任务的依据。
 
 - 路由逐文件独立、有界并发，仅输出匹配状态与理由，不生成投标摘要。能放下时读全文，超长时只读连续完整结构前缀，并明确未读范围。
-- `not_matched`、`uncertain` 不进入审核或投标索引，但仍进入 JSON 并生成“未进入审核”的 Word；模型报错不是 `uncertain`。
+- `not_matched`、`uncertain` 不进入审核或投标索引，但仍保存正式 JSON，并生成项目适用性说明的 Markdown/Word；模型报错不是 `uncertain`。
 - 匹配文件独立建立 `bid-{task_id}-{file_id}` 原文索引并运行主 Agent，不等待其他文件。System 放完整规则和报告模板，Human 放当前文件原文/结构批次、简洁资料目录及已保存报告。
 - 主 Agent 使用公共检索、看图、资料委派和报告工具。资料核验子 Agent 只看到核验要求、所选文件及一层关联文件的详细摘要，使用公共检索/看图，直接返回核验正文。
 - 每份文件一份 Markdown 报告，通过 `report_document` 的 `read/write/edit` 维护；路径由代码绑定，模板单独放在 `configs/prompts/templates/audit_report_template.md`，不是工具参数。
@@ -217,22 +250,74 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 `EVIDENCE_AGENT_MAX_STEPS` 控制。路由、主 Agent、子 Agent 分别使用自己的模型连接配置，
 审核不需要规则抽取/资料入库的 Key。
 
+### 草稿、工具反馈与正式报告
+
+主 Agent 只维护一份内部 Markdown 草稿，使用 `report_document` 的 `read/write/edit`：
+
+- `read` 返回当前草稿；`write/edit` 返回保存回执，不支持 `all/changed` 返回模式。
+- 成功读取或保存后，在工具返回的 `content` 首部附上当前草稿状态，包括已填写数量、缺项或校验问题。这是 `ToolMessage`，不是每轮额外插入的 System/Human 消息，也不会写入报告正文。
+- 草稿内容或来源校验有问题时，可以先保存文本并反馈错误，后续继续修订；工具参数错误、精确替换不唯一或写盘失败不算成功保存。只有一份草稿，不额外维护“待修版本”和“有效版本”。
+- 最终仍须完成全部冻结规则、必填内容和来源校验。轮次耗尽、模型或工具异常时保留已有草稿与错误，不将不完整报告发布为正式结果，也不补造“人工复核”来凑齐规则。
+
+普通工具轮保持 `AI → Tool` 循环；仅在最后工具轮和无工具收尾轮使用现有 Human 提醒。
+当前 Prompt 要求边核验边保存已确认内容，不等最后一次性生成整稿；这不保证模型每次都按预期执行。
+
+正式报告与内部草稿分开：
+
+| 内容 | 来源与处理方式 |
+| --- | --- |
+| 报告标题、总体总结、重点问题归纳、逐条实际发现/判断说明/复核建议 | 模型填写并落入草稿，代码按契约解析和校验 |
+| 审核概况、规则要求、章节编号、结论统计 | 代码依据任务和冻结快照组装，不让模型重抄 |
+| 重点问题中的处理建议 | 按重点关联的规则复用逐条建议，不再维护一份重复建议清单 |
+| 原文摘录与位置 | 只使用实际读取并登记的来源；没有记录时不推测页码或编造引文 |
+| 正文中的内部 ID | 已知规则 ID 转为明细节号，文件/库/任务 ID 转为冻结名称；结构化关联键保留，真实文件名、业务编号和登记引文不改写 |
+
+进入规则审核的正式阅读稿固定为四部分：**审核概况 → 结果总览 → 重点问题与处理建议 → 审核明细及原文摘录**。
+未进入规则审核的文件只输出概况和项目适用性说明，不生成普通规则结论或统计。
+内部草稿和 JSON 可以保留关联 ID；正式 Markdown/Word 不以 `rule-xxx` 等技术编号作为阅读标签。
+字段约定见 [报告模板](configs/prompts/templates/audit_report_template.md)，消息与工具边界见 [Prompt 配置说明](configs/prompts/README.md)。
+
+### 执行可视化
+
+- 流程图展示文件的解析、适用性判断、索引、审核和报告输出路径；未走分支与实际执行分开显示。
+- Agent 图使用固定能力节点，依据已加载轨迹更新状态、高亮和调用次数，不为每次工具调用新增一个能力节点。
+- 轨迹树展示逐次真实调用，默认展开，可全部收起；长参数、可见输出和技术信息支持折叠及内部滚动。
+- 历史回放依据已结束会话的调用时间重现节点状态与累计次数，不重新执行模型。节点详情仍是最新已保存记录，不是任意历史时刻的内部内容快照。
+- 页面先显示可读的失败原因；原始异常和技术 ID 收在技术详情中。执行失败、未进入审核与业务结论“不符合”是不同状态。
+
+### 产物与导出
+
 任务产物位于 `data/outputs/{task_id}/`：
 
 - `batch_context.json`：本批次选中库、解析版本和模板快照，不含 Key。
 - `contexts/{file_id}.json`、`parsed/{file_id}.json`：单文件执行上下文和实际解析快照。
 - `drafts/{file_id}.md`：唯一报告草稿；同目录 `.state.json` 记录阅读位置、实际读取来源和子核验记录。
 - `reports/{file_id}.json`：正式单文件结果与依据快照，schema_version=2.0。
+- `reports/{file_id}.md`：由正式结果组装的阅读稿，不是 `drafts/` 下的内部草稿。
 - `audit_batch.json`：批次汇总，schema_version=3.0，逐文件保存绑定、结果和执行/导出错误。
 - 逐文件 Word：由正式 JSON 确定性生成，不增加报告 LLM 或图节点；下载以接口登记 URL 为准。
 
 来源只接受实际展示过的片段或实际打开的图片；没有来源不伪造引用。Word 只展示本文件结论及对应依据，不堆整库摘要。
-单文件 JSON/Markdown 校验通过即发布；Word 失败保留正式结果。部分文件失败时批次为 partially_failed，
-所有文件均有结果但 Word 失败为 completed_with_report_error，审核“不符合”不等于执行异常。
+最终校验通过后先保存正式 JSON，再生成 Markdown 和 Word；导出失败保留已生成的有效结果。
+Markdown 生成失败时不继续生成 Word。部分文件执行失败时批次为 `partially_failed`，
+所有文件均有结果但存在导出失败时为 `completed_with_report_error`，审核“不符合”不等于执行异常。
 来源预览使用本次冻结解析版本，不承诺精确句子定位。所有 GET 只读，不触发模型、解析、建索引或报告重建。
 新工作台暂不提供重跑、取消、人工编辑报告或重导出；`python -m app.reports` 只面向早期 audit_context.json 格式，不适用于新批次。
 
 ### Agent 收尾判定
+
+当前默认预算如下；实际运行以生效配置为准：
+
+| Agent | 配置项 | 默认模型轮数 |
+| --- | --- | --- |
+| 规则抽取 | `configs/model.yaml` 的 `rule_agent_max_steps` | 8 |
+| 资料入库 | `configs/model.yaml` 的 `evidence_ingestion_max_steps` | 8 |
+| 主审核 | `.env` 的 `BID_AGENT_MAX_STEPS` | 8 |
+| 资料核验子 Agent | `.env` 的 `EVIDENCE_AGENT_MAX_STEPS` | 3 |
+
+轮数指一个阅读批次/会话的模型调用预算，不是工具调用次数。主审核 8 轮中前 7 轮可调用工具，
+第 8 轮只作无工具回复；模型可以提前结束，不要求跑满。一轮可以发出多个工具调用，子 Agent 的模型调用不逐次扣减主 Agent 轮数。
+同批压缩续跑不清零；上下文容量、单次输出额度和模型轮数是不同限制。
 
 规则、资料入库和主审核 Agent 用简短普通文本说明本批处理情况，不要求固定结束语，也不增加完成工具或收尾 JSON。
 模型正常停止、无待执行或无法解析的工具调用，并返回非空文本后，才结束本次会话；输出截断和未解决的写入错误仍阻断推进。
@@ -275,7 +360,7 @@ unzip -n /tmp/deepseek_v4_tokenizer.zip 'deepseek_v4_tokenizer/tokenizer*.json' 
 规则、资料入库及审核 Agent 均已接入有序解析结构、通用检索/看图工具和输入预算控制器。
 三条业务解析路径统一调用异步 `prepare_document()`：先做原生解析，再按配置进行视觉辅助。
 原同步公开入口 `parse_document()` 已删除；各格式解析器内部的 `.parse()` 仍保留。
-迁移只改解析入口，文件之间仍按原顺序串行处理。
+统一解析入口不改变各业务的文件调度策略；审核仍按上述文件流水线并发配置运行。
 
 解析 JSON 增加有序 `sections[].blocks`，保留正文、表格、图片、页面来源和读取限制。
 旧 `content/tables` 字段由新结构派生以兼容现有调用；早期无图片引用的旧 JSON 可以读取，但无法恢复
@@ -377,10 +462,11 @@ curl http://127.0.0.1:8000/api/bidders/{bidder_id}/progress
 创建审核任务（revision 先从所选库详情读取；每份文件一个 assignments 条目）：
 
 ```bash
+request_id="$(uuidgen)"
 curl -X POST \
   http://127.0.0.1:8000/api/audit-tasks \
   -F 'display_name=设备采购审核' \
-  -F 'client_request_id=00000000-0000-4000-8000-000000000001' \
+  -F "client_request_id=$request_id" \
   -F 'assignments=[{"upload_index":0,"project_id":"project-1","bidder_id":"bidder-1","project_revision":"替换为规则库revision","bidder_revision":"替换为资料库revision"}]' \
   -F 'files=@/path/to/投标文件.docx' \
   -F 'relative_paths=投标文件测试集/投标文件.docx'
@@ -399,14 +485,31 @@ curl http://127.0.0.1:8000/api/audit-tasks/{task_id}
 审核详情返回 task/files；进度、轨迹、逐文件报告及导出分别使用 `/progress`、`/trace/{span_id}`、
 `/files/{file_id}`、`/outputs?format=json|md|word&file_id=...`。省略 file_id 只能下载批次 JSON。
 
-测试与 Schema 导出：
+完整接口以运行服务的 `/docs` 和 `app/api/` 为准；读取、预览和下载接口不会触发重新审核。
+
+## 测试与验证
+
+后端离线测试（项目根目录；不启用真实模型 E2E）：
 
 ```bash
-uv run pytest
+RUN_MODEL_E2E=0 uv run pytest
+```
+
+普通测试使用临时数据和 Mock 模型，不请求外部服务。前端测试与类型检查不需要启动项目：
+
+```bash
+cd web
+npm test
+npm run tsc
+```
+
+需要同步共享 Schema 时，在项目根目录执行（会更新 `schemas/`）：
+
+```bash
 uv run python -m app.models.schema_export
 ```
 
-普通测试全部使用临时数据和 Mock 模型，不请求外部服务。真实比赛数据 E2E：
+使用本地比赛材料的 Mock 全链路测试：
 
 ```bash
 uv run pytest tests/e2e/test_mock_dataset.py -v -s
@@ -432,6 +535,3 @@ uv run pytest tests/e2e/test_competition_dataset.py -v
 投标方资料/
 投标文件测试集/
 ```
-
-运行时文件保存在 `data/`，包括 SQLite、上传文件、解析 JSON、NumPy 索引和
-最终报告。当前 SQLite 仅用于本地比赛演示，不设计长期数据迁移和备份。
