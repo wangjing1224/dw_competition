@@ -76,6 +76,65 @@ def test_settings_load_yaml_and_environment(monkeypatch):
     assert config.AppSettings.model_fields["rule_limit"].default == 10_000
 
 
+@pytest.mark.parametrize(
+    "bid_steps,evidence_steps,legacy_value",
+    [(8, 3, "99"), (12, 5, "not-an-integer")],
+)
+def test_audit_steps_read_yaml_not_legacy_environment(
+    monkeypatch, bid_steps, evidence_steps, legacy_value
+):
+    monkeypatch.setenv("BID_AGENT_MAX_STEPS", legacy_value)
+    monkeypatch.setenv("EVIDENCE_AGENT_MAX_STEPS", legacy_value)
+    original_load = config._load_yaml
+
+    def load_yaml(path):
+        value = original_load(path)
+        if path.name == "model.yaml":
+            value["audit"].update(
+                bid_agent_max_steps=bid_steps,
+                evidence_agent_max_steps=evidence_steps,
+                file_concurrency=4,
+                model_concurrency=6,
+            )
+        return value
+
+    monkeypatch.setattr(config, "_load_yaml", load_yaml)
+    audit = get_settings().audit
+    assert audit.bid_agent_max_steps == bid_steps
+    assert audit.evidence_agent_max_steps == evidence_steps
+    assert audit.file_concurrency == 4
+    assert audit.model_concurrency == 6
+
+
+@pytest.mark.parametrize("omit_audit", [False, True])
+def test_audit_steps_keep_defaults_when_yaml_omits_them(monkeypatch, omit_audit):
+    monkeypatch.setenv("BID_AGENT_MAX_STEPS", "99")
+    monkeypatch.setenv("EVIDENCE_AGENT_MAX_STEPS", "99")
+    original_load = config._load_yaml
+
+    def load_yaml(path):
+        value = original_load(path)
+        if path.name == "model.yaml":
+            if omit_audit:
+                value.pop("audit")
+            else:
+                value["audit"].pop("bid_agent_max_steps")
+                value["audit"].pop("evidence_agent_max_steps")
+        return value
+
+    monkeypatch.setattr(config, "_load_yaml", load_yaml)
+    audit = get_settings().audit
+    assert audit.bid_agent_max_steps == 8
+    assert audit.evidence_agent_max_steps == 3
+
+
+@pytest.mark.parametrize("field", ["bid_agent_max_steps", "evidence_agent_max_steps"])
+@pytest.mark.parametrize("value", [0, -1, 1.5, "invalid"])
+def test_audit_steps_require_positive_integers(field, value):
+    with pytest.raises(ValidationError, match=field):
+        config.AuditSettings.model_validate({field: value})
+
+
 @pytest.mark.parametrize("limit", [30, 10_000, 100_000])
 def test_rule_limit_reads_yaml(monkeypatch, limit):
     original_load = config._load_yaml

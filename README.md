@@ -117,8 +117,8 @@ SPA 回退到 `index.html`，并将 `/api/` 反向代理到后端；开发代理
 
 ## 模型配置
 
-- `.env`：保存各职责 Chat、Embedding 和 Rerank 的连接地址、Key，以及审核主/子 Agent 轮次配置，不提交 Git。
-- `configs/model.yaml`：保存 Chat 平台、模型名、思考开关、温度、超时、重试、维度和批大小。
+- `.env`：保存各职责 Chat、Embedding 和 Rerank 的连接地址、Key，以及可选运行设置，不提交 Git。
+- `configs/model.yaml`：保存 Chat 平台、模型名、思考开关、温度、超时、重试、维度、批大小及 Agent 轮次和审核并发配置。
 - `configs/retrieval.yaml`：保存分段、候选数量和混合召回权重。
 - `configs/storage.yaml`：保存数据目录、SQLite 路径和上传安全限制。
 - `configs/prompts/`：保存各流程的 Prompt 模板和工具说明。
@@ -246,8 +246,8 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 
 `configs/model.yaml` 的 `audit.file_concurrency` 默认 2，控制同进程各任务共用的文件流水线并发；
 `audit.model_concurrency` 默认 3，限制同一进程、相同配置下审核链路实际模型请求。
-父 Agent 等待工具或子 Agent 时不占模型名额。轮次仍由 `.env` 的 `BID_AGENT_MAX_STEPS`、
-`EVIDENCE_AGENT_MAX_STEPS` 控制。路由、主 Agent、子 Agent 分别使用自己的模型连接配置，
+父 Agent 等待工具或子 Agent 时不占模型名额。主/子 Agent 轮次分别由同文件中的
+`audit.bid_agent_max_steps`、`audit.evidence_agent_max_steps` 控制。路由、主 Agent、子 Agent 分别使用自己的模型连接配置，
 审核不需要规则抽取/资料入库的 Key。
 
 ### 草稿、工具反馈与正式报告
@@ -312,8 +312,11 @@ Markdown 生成失败时不继续生成 Word。部分文件执行失败时批次
 | --- | --- | --- |
 | 规则抽取 | `configs/model.yaml` 的 `rule_agent_max_steps` | 8 |
 | 资料入库 | `configs/model.yaml` 的 `evidence_ingestion_max_steps` | 8 |
-| 主审核 | `.env` 的 `BID_AGENT_MAX_STEPS` | 8 |
-| 资料核验子 Agent | `.env` 的 `EVIDENCE_AGENT_MAX_STEPS` | 3 |
+| 主审核 | `configs/model.yaml` 的 `audit.bid_agent_max_steps` | 8 |
+| 资料核验子 Agent | `configs/model.yaml` 的 `audit.evidence_agent_max_steps` | 3 |
+
+修改 YAML 后重启后端生效。旧 `.env` 或系统环境中的 `BID_AGENT_MAX_STEPS`、
+`EVIDENCE_AGENT_MAX_STEPS` 不再读取，可删除；如曾自定义轮次，请将值迁入上述 YAML 字段。
 
 轮数指一个阅读批次/会话的模型调用预算，不是工具调用次数。主审核 8 轮中前 7 轮可调用工具，
 第 8 轮只作无工具回复；模型可以提前结束，不要求跑满。一轮可以发出多个工具调用，子 Agent 的模型调用不逐次扣减主 Agent 轮数。

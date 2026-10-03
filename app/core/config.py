@@ -275,13 +275,6 @@ def get_settings() -> AppSettings:
                 "langsmith_api_key": os.getenv("LANGSMITH_API_KEY") or None,
                 "langsmith_project": os.getenv("LANGSMITH_PROJECT", "dw-competition"),
             },
-            "audit": {
-                **model_config.get("audit", {}),
-                "bid_agent_max_steps": int(os.getenv("BID_AGENT_MAX_STEPS", "8")),
-                "evidence_agent_max_steps": int(
-                    os.getenv("EVIDENCE_AGENT_MAX_STEPS", "3")
-                ),
-            },
         }
     )
     # 数据路径统一转为绝对路径，后端从任意工作目录启动时行为一致。
