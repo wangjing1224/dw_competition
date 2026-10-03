@@ -69,7 +69,11 @@ export function outputText(file: AuditFile) {
 }
 export function overviewText(file: AuditFile) {
   if (file.error || file.status === 'failed')
-    return file.error?.message || '处理失败，请查看失败阶段';
+    return file.report_kind === 'draft'
+      ? '处理未完成，已保存草稿可供查看'
+      : file.report_kind === 'final'
+        ? '处理出现异常，已保存的正式结果仍可查看'
+        : '处理未完成，尚未生成报告';
   if (!['completed', 'completed_with_report_error'].includes(file.status)) {
     return file.status === 'queued'
       ? '文件已接收，等待处理'

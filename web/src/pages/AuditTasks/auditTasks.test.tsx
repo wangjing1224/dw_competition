@@ -28,7 +28,7 @@ import List from './List';
 import Progress from './Progress';
 import Report from './Report';
 import { highlightDetails } from './Report/presentation';
-import { StageMatrix } from './shared';
+import { FileErrors, StageMatrix } from './shared';
 
 vi.mock('@umijs/max', () => ({
   Link: ({ to, children, ...props }: { to: string; children: ReactNode }) => (
@@ -259,6 +259,135 @@ function progressData(
   };
 }
 describe('审核工作区', () => {
+  it('未完成报告用缺项数量提示，原始异常默认收起且切换文件后重新收起', () => {
+    const error = {
+      code: 'RuntimeError',
+      message: `ValueError: 报告未完成：${Array.from({ length: 22 }, (_, i) => `rule-${167 + i}`).join('、')}`,
+    };
+    const failed: AuditFile = {
+      ...file,
+      status: 'failed',
+      report_kind: 'draft',
+      error,
+    };
+    const { container, rerender } = render(<FileErrors file={failed} />);
+    expect(screen.getByText('审核报告未完成')).toBeVisible();
+    expect(screen.getByText(/还有 22 条规则未形成完整结论/)).toHaveTextContent(
+      '未生成正式报告。已保存草稿可供查看。',
+    );
+    const details = container.querySelector('details');
+    expect(details).not.toHaveAttribute('open');
+    expect(container.querySelector('pre')).not.toBeVisible();
+    fireEvent.click(screen.getByText('技术详情'));
+    expect(details).toHaveAttribute('open');
+    expect(container.querySelector('pre')).toBeVisible();
+    expect(container.querySelector('pre')?.textContent).toBe(
+      `错误代码：${error.code}\n${error.message}`,
+    );
+    fireEvent.click(screen.getByText('技术详情'));
+    expect(details).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByText('技术详情'));
+    rerender(<FileErrors file={{ ...failed, file_id: 'file-2' }} />);
+    expect(container.querySelector('details')).not.toHaveAttribute('open');
+  });
+  it.each([
+    ['报告未完成：总体总结、重点问题', '报告内容尚未补齐'],
+    [
+      'ValueError: 报告未完成: rule-1、rule-1，rule-2\n总体总结',
+      '还有 2 条规则未形成完整结论',
+    ],
+  ])('缺项文案兼容历史文本且不把标题缺项算成规则：%s', (message, expected) => {
+    render(
+      <FileErrors
+        file={{
+          ...file,
+          report_kind: 'none',
+          error: { code: 'ValueError', message },
+        }}
+      />,
+    );
+    expect(screen.getByText(new RegExp(expected))).toBeVisible();
+    expect(screen.queryByText(/已保存草稿可供查看/)).not.toBeInTheDocument();
+  });
+  it('未知异常按失败阶段提示，不推测缺项、轮次或业务结论', () => {
+    const { container } = render(
+      <FileErrors
+        file={{
+          ...file,
+          report_kind: 'none',
+          phase: 'finished',
+          stages: [{ phase: 'parsing', status: 'failed', reason: null }],
+          error: {
+            code: 'RuntimeError',
+            message: 'ParseError: file-37 无法读取',
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText('解析未完成')).toBeVisible();
+    expect(container.querySelector('pre')).not.toBeVisible();
+    expect(screen.queryByText(/条规则未形成完整结论/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/轮次|不符合|人工复核/)).not.toBeInTheDocument();
+  });
+  it.each([
+    'word_export_failed',
+    'markdown_export_failed',
+  ])('导出异常保留产物说明，技术错误默认收起：%s', (code) => {
+    const { container } = render(
+      <FileErrors
+        file={{
+          ...file,
+          export_error: { code, message: 'OSError: 导出路径不可写' },
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(
+        code.startsWith('markdown') ? 'Markdown 导出失败' : 'Word 导出失败',
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        code.startsWith('markdown')
+          ? /正式 JSON 已保存/
+          : /正式结果与 Markdown 不受影响/,
+      ),
+    ).toBeVisible();
+    expect(container.querySelector('pre')).not.toBeVisible();
+  });
+  it('成功文件不显示失败提示', () => {
+    const { container } = render(<FileErrors file={file} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+  it('失败进度摘要不重复暴露原始异常或内部规则 ID', async () => {
+    const failed: AuditFile = {
+      ...file,
+      status: 'failed',
+      report_kind: 'draft',
+      error: {
+        code: 'RuntimeError',
+        message: 'ValueError: 报告未完成：rule-167、rule-168',
+      },
+    };
+    mockApi((url) =>
+      url.includes('/progress') ? progressData([], failed) : undefined,
+    );
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    await screen.findByText('审核报告未完成');
+    const overview = screen.getByRole('region', { name: '当前文件进度' });
+    expect(overview).toHaveTextContent('处理未完成，已保存草稿可供查看');
+    expect(overview).not.toHaveTextContent(/ValueError|RuntimeError|rule-/);
+    expect(
+      overview.querySelector('.audit-overview-summary'),
+    ).not.toHaveAttribute('title', failed.error?.message);
+    expect(
+      within(overview).getByRole('button', { name: '查看草稿' }),
+    ).toBeEnabled();
+  });
   it('新版重点建议精确去重并保留冻结顺序，不因关联数组逆序而重新编号', () => {
     const data: ReportData = {
       ...report,

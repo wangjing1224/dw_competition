@@ -4,7 +4,7 @@ import type { DependencyList } from 'react';
 import { useEffect, useState } from 'react';
 import EntityLabel from '@/components/EntityLabel';
 import { safeMarkdown } from '@/components/SourcePreview';
-import type { AuditFile } from '@/services/auditTasks';
+import type { AuditFile, Problem } from '@/services/auditTasks';
 import {
   downloadFile,
   stageLabels,
@@ -88,18 +88,77 @@ export function Download({
     </Button>
   );
 }
+function fileFailureText(file: AuditFile) {
+  // 兼容已保存的错误文本，只概括明确的缺项，不推测是否耗尽轮次。
+  const missing = file.error?.message.match(
+    /(?:^|[:：]\s*)报告未完成[:：]\s*([\s\S]*)$/u,
+  )?.[1];
+  if (missing !== undefined) {
+    const count = new Set(
+      missing.split(/[、,，\s]+/u).filter((item) => /^rule-\d+$/u.test(item)),
+    ).size;
+    return {
+      title: '审核报告未完成',
+      description: count
+        ? `还有 ${count} 条规则未形成完整结论，未生成正式报告。`
+        : '报告内容尚未补齐，未生成正式报告。',
+    };
+  }
+  const phase =
+    file.stages.find((s) => s.status === 'failed')?.phase || file.phase;
+  return {
+    title: `${stageLabels[phase] || '文件处理'}未完成`,
+    description: '处理过程中出现异常，可展开技术详情查看具体原因。',
+  };
+}
+function ErrorDetails({ error }: { error: NonNullable<Problem> }) {
+  return (
+    <details className="audit-error-details">
+      <summary>技术详情</summary>
+      <pre>{`错误代码：${error.code}\n${error.message}`}</pre>
+    </details>
+  );
+}
 export function FileErrors({ file }: { file: AuditFile }) {
+  const summary = file.error ? fileFailureText(file) : null;
   return (
     <>
-      {file.error && <Alert type="error" title={file.error.message} />}
+      {file.error && summary && (
+        <Alert
+          showIcon
+          type="error"
+          title={summary.title}
+          description={
+            <>
+              <div>
+                {summary.description}
+                {file.report_kind === 'draft' && '已保存草稿可供查看。'}
+              </div>
+              <ErrorDetails
+                key={`${file.file_id}/${file.error.code}/${file.error.message}`}
+                error={file.error}
+              />
+            </>
+          }
+        />
+      )}
       {file.export_error && (
         <Alert
+          showIcon
           type="warning"
-          title={`${file.export_error.code === 'markdown_export_failed' ? 'Markdown' : 'Word'} 导出失败：${file.export_error.message}`}
+          title={`${file.export_error.code === 'markdown_export_failed' ? 'Markdown' : 'Word'} 导出失败`}
           description={
-            file.export_error.code === 'markdown_export_failed'
-              ? '正式 JSON 已保存；Markdown 未生成，Word 尚未导出。'
-              : '已保存的正式结果与 Markdown 不受影响。'
+            <>
+              <div>
+                {file.export_error.code === 'markdown_export_failed'
+                  ? '正式 JSON 已保存；Markdown 未生成，Word 尚未导出。'
+                  : '已保存的正式结果与 Markdown 不受影响。'}
+              </div>
+              <ErrorDetails
+                key={`${file.file_id}/${file.export_error.code}/${file.export_error.message}`}
+                error={file.export_error}
+              />
+            </>
           }
         />
       )}
