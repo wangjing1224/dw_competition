@@ -48,12 +48,16 @@ def skeleton(rule_set, version=1):
     return "\n\n".join(parts) + "\n"
 
 
-def parse_report(text, rule_set, ledger, *, final=False, version=1):
+def parse_report(
+    text, rule_set, ledger, *, final=False, version=1, report_context=None
+):
     """只解析冻结模板契约；草稿保留未填块，已填块完整校验。"""
     if version == 2:
         from app.reports.report_parser_v2 import parse_v2
 
-        return parse_v2(text, rule_set, ledger, final=final)
+        return parse_v2(
+            text, rule_set, ledger, final=final, report_context=report_context
+        )
     if version != 1:
         raise ValueError("不支持的报告格式版本")
     expected = skeleton(rule_set)
@@ -180,11 +184,12 @@ def parse_report(text, rule_set, ledger, *, final=False, version=1):
 
 
 class ReportDocument:
-    """一个文件一份稿。保存先验证候选，成功原子发布；错误不污染旧稿。"""
+    """一个文件一份可修订草稿；保存与定稿校验分离，不维护双版本。"""
 
-    def __init__(self, path: Path, rule_set, ledger, *, version=1):
+    def __init__(self, path: Path, rule_set, ledger, *, version=1, report_context=None):
         self.path, self.rule_set, self.ledger = path, rule_set, ledger
         self.version = version
+        self.report_context = report_context
         self.lock = asyncio.Lock()
         self.receipts = {}
         self.batch_key = 0
@@ -202,9 +207,40 @@ class ReportDocument:
         self.batch_key = number
 
     def missing(self):
+        # 无效草稿仍可进入下一模型轮，不能在构造请求时抛错而失去 edit 机会。
+        try:
+            return self.check_draft()[1]
+        except ValueError as exc:
+            return [f"草稿校验未通过：{exc}"]
+
+    def check_draft(self, *, final=False):
+        if self.write_error:
+            raise ValueError("报告存在未解决的保存错误：" + self.write_error)
         return parse_report(
-            self.read(), self.rule_set, self.ledger, version=self.version
-        )[1]
+            self.read(),
+            self.rule_set,
+            self.ledger,
+            final=final,
+            version=self.version,
+            report_context=self.report_context,
+        )
+
+    def progress(self):
+        try:
+            _, missing = self.check_draft()
+        except ValueError as exc:
+            return (
+                f"草稿校验未通过：{exc}\n"
+                "当前草稿仍可 read/edit；请修正具体问题。尚不能生成正式报告。"
+            )
+        pending = set(missing)
+        total = len(self.rule_set.rules)
+        filled = sum(r.rule_id not in pending for r in self.rule_set.rules)
+        return (
+            f"已填写规则 {filled}/{total} 条（格式与引用校验通过，不代表结论已经人工核实）。\n"
+            + "报告缺项："
+            + ("、".join(missing) or "无；仍须完成全部阅读范围并通过定稿校验")
+        )
 
     async def apply(self, action, content, edits, call_id):
         async with self.lock:
@@ -219,9 +255,14 @@ class ReportDocument:
                 return receipt
             if action == "read":
                 return (
-                    self.read() + "\n\n报告缺项：" + ("、".join(self.missing()) or "无")
+                    "## 当前草稿状态\n"
+                    + self.progress()
+                    + "\n\n--- 以下为当前草稿正文 ---\n\n"
+                    + self.read()
                 )
             try:
+                if action not in {"write", "edit"}:
+                    raise ValueError("未知报告操作")
                 candidate = content if action == "write" else self.read()
                 for edit in edits or []:
                     if candidate.count(edit.old_text) != 1:
@@ -229,22 +270,29 @@ class ReportDocument:
                             "old_text 未唯一命中，整批未保存；请先 read 再精确修改"
                         )
                     candidate = candidate.replace(edit.old_text, edit.new_text, 1)
-                _, missing = parse_report(
-                    candidate, self.rule_set, self.ledger, version=self.version
-                )
+                restored = []
+                if self.version == 2:
+                    from app.reports.report_parser_v2 import restore_category_headings
+
+                    candidate, restored = restore_category_headings(
+                        candidate, self.rule_set
+                    )
                 atomic_write(self.path, candidate.encode("utf-8"))
-                result = "已保存。" + (f"完成{len(edits)}处替换。" if edits else "")
-                result += "\n报告缺项：" + ("、".join(missing) or "无")
-                self.receipts[key] = (payload, result)
                 self.write_error = None
+                result = "草稿已保存。" + (f"完成{len(edits)}处替换。" if edits else "")
+                if restored:
+                    result += "\n已按冻结规则补齐固定分类标题：" + "、".join(restored)
+                result = (
+                    "## 当前草稿状态\n"
+                    + self.progress()
+                    + "\n\n## 本次操作\n"
+                    + result
+                )
+                self.receipts[key] = (payload, result)
                 return result
             except Exception as exc:
                 self.write_error = str(exc)
                 raise
 
     def finish(self):
-        if self.write_error:
-            raise ValueError("报告存在未解决的保存错误：" + self.write_error)
-        return parse_report(
-            self.read(), self.rule_set, self.ledger, final=True, version=self.version
-        )[0]
+        return self.check_draft(final=True)[0]

@@ -108,3 +108,26 @@ def test_audit_system_uses_template_once_and_child_has_no_json_schema():
     child = render_prompt("evidence_subagent")
     assert "EvidenceReviewDecision" not in child
     assert "JSON" in child
+
+
+def test_incremental_report_guidance_preserves_dependencies_and_fixed_round_limit():
+    prompt = render_prompt(
+        "bid_agent", rule_view="规则", report_markdown_contract="模板"
+    )
+    assert "同轮 tool_calls" in prompt and "不要等全部规则查完" in prompt
+    assert "不能预测工具返回" in prompt
+    reminder = render_prompt(
+        "bid_agent_last_tool_round",
+        current_step=7,
+        max_steps=8,
+        missing="rule-2",
+    )
+    assert "最后一个工具轮" in reminder and "rule-2" in reminder
+    assert "下一轮不绑定任何工具" in reminder
+    with pytest.raises(FileNotFoundError):
+        render_prompt("bid_agent_progress")
+    description = load_tool_description("report_document")
+    assert "仍保存草稿" in description and "未命中/不唯一时整批不保存" in description
+    assert "先返回“当前草稿状态”" in description
+    assert "状态首部与分隔文字不属于草稿" in description
+    assert "不返回变更正文" in description

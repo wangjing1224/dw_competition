@@ -137,4 +137,4 @@ async def test_completion_does_not_hide_failed_report_write(monkeypatch, temp_se
     assert not (root / "bid-1_result.json").exists()
     state = json.loads((root / "drafts/bid-1.state.json").read_text())
     assert state["next_unit_index"] == 0
-    assert (root / "drafts/bid-1.md").read_text() == filled_report(context.rule_set)
+    assert (root / "drafts/bid-1.md").read_text() == "缺失规定章节的报告"

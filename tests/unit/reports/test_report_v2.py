@@ -14,6 +14,7 @@ from app.models.rules import RuleReportItem, present_rule_for_model
 from app.reports.markdown_report import ReportDocument, parse_report, skeleton
 from app.reports.presentation import report_markdown
 from app.reports.word_report import _render_report
+from app.tools.report_tools import ReportEdit
 from tests.helpers.audit import audit_context, filled_report
 
 
@@ -168,8 +169,6 @@ def test_v2_complete_projection_quotes_and_native_word(tmp_path):
         lambda t: t.replace("实际发现：技术响应表载明参数。", "实际发现：待填写。"),
         lambda t: t.replace("问题概述：", "问题概述：重复\n问题概述："),
         lambda t: t + "\n投标片段：chunk-invented\n",
-        lambda t: t.replace("技术响应表载明参数。", "参见 rule-147。"),
-        lambda t: t.replace("技术响应表载明参数。", "参见rule-147的要求。"),
         lambda t: t.replace("问题 1：技术指标需复核", "问题 1："),
         lambda t: t.replace("### rule-147", "### rule-999"),
     ],
@@ -181,7 +180,9 @@ def test_invalid_v2_draft_rejected(change):
 
 
 @pytest.mark.asyncio
-async def test_v2_pending_and_invalid_write_keep_last_success(tmp_path):
+async def test_v2_invalid_draft_is_readable_and_editable_without_second_version(
+    tmp_path,
+):
     context, ledger, text = sample(1)
     document = ReportDocument(
         tmp_path / "draft.md", context.rule_set, ledger, version=2
@@ -193,13 +194,20 @@ async def test_v2_pending_and_invalid_write_keep_last_success(tmp_path):
     with pytest.raises(ValueError):
         document.finish()
     await document.apply("write", text, None, "save")
-    with pytest.raises(ValueError):
-        await document.apply("write", text + "\n资料片段：fake\n", None, "invalid")
-    assert document.read() == text
-    with pytest.raises(ValueError, match="未解决的保存错误"):
+    invalid = text + "\n资料片段：fake\n"
+    receipt = await document.apply("write", invalid, None, "invalid")
+    assert "草稿已保存" in receipt and "校验未通过" in receipt
+    assert "rule-147的资料片段" in receipt
+    assert document.read() == invalid
+    assert "资料片段：fake" in await document.apply("read", None, None, "read")
+    assert document.missing()  # 构造下一轮请求不能因内容校验中断。
+    with pytest.raises(ValueError, match="未实际读取"):
         document.finish()
-    await document.apply("write", text, None, "repair")
+    await document.apply(
+        "edit", None, [ReportEdit(old_text="\n资料片段：fake\n", new_text="")], "repair"
+    )
     assert document.finish().highlights[0].rule_ids == ["rule-147"]
+    assert list(tmp_path.iterdir()) == [document.path]
 
 
 def test_56_rules_complete_no_forced_highlights_or_truncation():
@@ -213,6 +221,115 @@ def test_56_rules_complete_no_forced_highlights_or_truncation():
     assert "无重点问题。" in md and "### 4.56 技术响应｜符合" in md
     assert context.rule_set.rules[-1].requirement in md
     assert "| 56项 | 56项 | 0项 | 0项 | 0项 |" in md
+
+
+@pytest.mark.asyncio
+async def test_missing_fixed_category_is_restored_before_saving(tmp_path):
+    context, ledger, _ = sample(3)
+    context.rule_set.rules[0].category = "format"
+    text = filled_report(context.rule_set, version=2)
+    incomplete = text.replace("## 技术响应（technical）\n\n", "")
+    report = ReportDocument(tmp_path / "draft.md", context.rule_set, ledger, version=2)
+    receipt = await report.apply("write", incomplete, None, "save")
+    assert "已按冻结规则补齐" in receipt
+    assert report.read() == text
+    assert len(report.finish().categories) == 2
+    # 显式重导出同样可恢复确定的固定标题，不依赖模型或数据库。
+    decision, _ = parse_report(
+        incomplete, context.rule_set, ledger, final=True, version=2
+    )
+    assert len(decision.categories) == 2
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda t: t.replace("### rule-148", "### rule-999"),
+        lambda t: t.replace("### rule-148", "### rule-147"),
+        lambda t: (
+            t.replace("### rule-147", "### temp")
+            .replace("### rule-148", "### rule-147")
+            .replace("### temp", "### rule-148")
+        ),
+        lambda t: t[: t.index("### rule-148")],
+    ],
+)
+def test_category_repair_does_not_guess_unknown_missing_repeated_or_reordered_rules(
+    change,
+):
+    from app.reports.report_parser_v2 import restore_category_headings
+
+    context, ledger, _ = sample(2)
+    text = change(
+        filled_report(context.rule_set, version=2).replace(
+            "## 技术响应（technical）\n\n", ""
+        )
+    )
+    assert restore_category_headings(text, context.rule_set) == (text, [])
+    with pytest.raises(ValueError, match="类别或规则集合"):
+        parse_report(text, context.rule_set, ledger, version=2, final=True)
+
+
+def test_known_ids_convert_only_prose_using_frozen_names_and_rule_order():
+    context, ledger, text = sample(2)
+    names = ReportContext(
+        task_name="十月审核",
+        rule_library_name="设备要求",
+        evidence_library_name="证明材料库",
+    )
+    text = text.replace(
+        "技术响应表载明参数。",
+        "bid-1载明参数；参见rule-148，按project-1核对bidder-1，任务audit-1；合同号audit-2026、rule-1480。",
+    )
+    decision, _ = parse_report(
+        text, context.rule_set, ledger, version=2, final=True, report_context=names
+    )
+    observation = decision.categories[0].rules[0].summary.observation
+    assert (
+        observation
+        == "投标响应.md载明参数；参见第4.2节，按设备要求核对证明材料库，任务十月审核；合同号audit-2026、rule-1480。"
+    )
+    assert decision.categories[0].rules[0].rule_id == "rule-147"
+    assert decision.highlights[0].rule_ids == ["rule-148", "rule-147"]
+    assert "bid-1" in text  # 内部原稿不被名称转换修改。
+
+
+def test_known_source_references_convert_without_rewriting_actual_quotes_or_file_names():
+    context, ledger, text = sample(1)
+    quote = "合同号为rule-147，实际设备编号为bid-1。"
+    ledger.chunk_read(
+        SimpleNamespace(
+            source=SimpleNamespace(file_id="tender-1", section="技术要求"),
+            parse_version=context.parsed_documents["tender-1"].markdown_path,
+            page_numbers=[3],
+            content=quote,
+            chunk_id="chunk-real",
+        )
+    )
+    ledger.documents["bid-1"].document.file_name = "bid-1投标.md"
+    text = text.replace(
+        "技术响应表载明参数。",
+        f"摘自chunk-real：{quote}参见bid-1投标.md。另见rule-147。",
+    )
+    decision, _ = parse_report(text, context.rule_set, ledger, final=True, version=2)
+    observation = decision.categories[0].rules[0].summary.observation
+    assert (
+        observation
+        == f"摘自招标依据.md · 技术要求 · 页 3：{quote}参见bid-1投标.md。另见第4.1节。"
+    )
+    assert ledger.sources["chunk-real"].quote == quote
+
+
+def test_ambiguous_known_file_reference_is_not_guessed():
+    context, ledger, text = sample(1)
+    context.rule_set.source_files[0].file_name = "另一名称.md"
+    with pytest.raises(ValueError, match="存在歧义"):
+        parse_report(
+            text.replace("技术响应表载明参数。", "参见tender-1。"),
+            context.rule_set,
+            ledger,
+            version=2,
+        )
 
 
 def test_markdown_native_lists_links_and_no_remote_images():

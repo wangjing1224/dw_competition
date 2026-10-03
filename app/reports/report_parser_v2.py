@@ -18,6 +18,92 @@ from app.reports.markdown_report import (
 )
 
 
+def _prose_resolver(rule_set, ledger, context=None):
+    """仅转换冻结快照内的已知正文引用，保留关联键、完整文件名与登记引文。"""
+    names = {}
+
+    def register(key, label):
+        if key:
+            names.setdefault(key, set()).add(label)
+
+    for index, rule in enumerate(rule_set.rules, 1):
+        register(rule.rule_id, f"第4.{index}节")
+    for source in rule_set.source_files:
+        register(source.file_id, source.file_name)
+    rule_name = getattr(context, "rule_library_name", None) or "所选规则库"
+    evidence_name = getattr(context, "evidence_library_name", None) or "所选资料库"
+    task_name = getattr(context, "task_name", None) or "当前审核任务"
+    register(rule_set.project_id, rule_name)
+    protected = {source.file_name for source in rule_set.source_files}
+    for parsed in ledger.documents.values():
+        doc = parsed.document
+        register(doc.file_id, doc.file_name)
+        register(doc.project_id, rule_name)
+        register(doc.bidder_id, evidence_name)
+        register(doc.task_id, task_name)
+        protected.add(doc.file_name)
+    for key, source in ledger.sources.items():
+        register(
+            key,
+            " · ".join(
+                v
+                for v in (
+                    source.file_name,
+                    source.section,
+                    "页 " + "、".join(map(str, source.page_numbers))
+                    if source.page_numbers
+                    else None,
+                )
+                if v
+            ),
+        )
+        if source.quote:
+            protected.add(source.quote)
+    # 优先保护完整文件名/实际登记的引文，避免同形业务编号被替换。
+    protected.discard("")
+    safe = "|".join(re.escape(v) for v in sorted(protected, key=len, reverse=True))
+    ids = "|".join(re.escape(v) for v in sorted(names, key=len, reverse=True))
+    pattern = re.compile(
+        (f"(?P<original>{safe})|" if safe else "")
+        + rf"(?<![A-Za-z0-9_-])(?P<key>{ids})(?![A-Za-z0-9_-])"
+    )
+
+    def replace(match):
+        key = match.group("key")
+        if key is None:
+            return match[0]
+        values = names[key]
+        if len(values) != 1:
+            raise ValueError(f"内部引用 {key} 在冻结快照中存在歧义，请改用具体名称")
+        return next(iter(values))
+
+    return lambda value: pattern.sub(replace, value)
+
+
+def restore_category_headings(text, rule_set):
+    """仅补可唯一定位的固定分类标题；缺规则、重复、乱序或未知标题不猜。"""
+    headings = list(re.finditer(r"^#{1,6} .+$", text, re.MULTILINE))
+    ordinary = [m[0] for m in headings if not re.match(r"^### 问题 \d+：", m[0])]
+    expected = re.findall(r"^#{1,6} .+$", skeleton(rule_set, 2), re.MULTILINE)
+    categories = {h for h in expected[3:] if h.startswith("## ")}
+    absent = categories - set(ordinary)
+    if (
+        not absent
+        or not ordinary
+        or not ordinary[0].startswith("# ")
+        or ordinary[1:] != [h for h in expected[1:] if h not in absent]
+    ):
+        return text, []
+    before = {expected[i + 1]: h for i, h in enumerate(expected) if h in absent}
+    restored = []
+    for match in reversed(headings):
+        if match[0] in before:
+            header = before[match[0]]
+            text = text[: match.start()] + header + "\n\n" + text[match.start() :]
+            restored.append(header[3:])
+    return text, list(reversed(restored))
+
+
 def fields(body, allowed, required):
     matches = list(re.finditer(r"^(" + "|".join(allowed) + r")：", body, re.MULTILINE))
     labels = [m[1] for m in matches]
@@ -39,7 +125,8 @@ def fields(body, allowed, required):
     return values
 
 
-def parse_v2(text, rule_set, ledger, *, final=False):
+def parse_v2(text, rule_set, ledger, *, final=False, report_context=None):
+    text, _ = restore_category_headings(text, rule_set)
     headings = list(re.finditer(r"^#{1,6} .+$", text, re.MULTILINE))
     headers = [m[0] for m in headings]
     ordinary = [h for h in headers if not re.match(r"^### 问题 \d+：", h)]
@@ -52,7 +139,22 @@ def parse_v2(text, rule_set, ledger, *, final=False):
         or headers[1:] != expected[1:3] + issue_headers + expected[3:]
         or text[: headings[0].start()].strip()
     ):
-        raise ValueError("报告须有一个一级标题，类别或规则集合/顺序须与当前骨架一致")
+        mismatch = next(
+            (
+                (want, got)
+                for want, got in zip(expected[1:], ordinary[1:])
+                if want != got
+            ),
+            None,
+        )
+        hint = (
+            f"；首个差异：应为 {mismatch[0]}，实际为 {mismatch[1]}"
+            if mismatch
+            else "；检查缺失/多余标题及重点问题的位置"
+        )
+        raise ValueError(
+            "报告须有一个一级标题，类别或规则集合/顺序须与当前骨架一致" + hint
+        )
     sections = [
         (
             m[0],
@@ -126,11 +228,14 @@ def parse_v2(text, rule_set, ledger, *, final=False):
             position += 1
             if not body:
                 continue
-            values = fields(
-                body,
-                ["结论", "实际发现", "审核说明", "复核建议", *SOURCE_FIELDS],
-                ["结论", "实际发现", "审核说明"],
-            )
+            try:
+                values = fields(
+                    body,
+                    ["结论", "实际发现", "审核说明", "复核建议", *SOURCE_FIELDS],
+                    ["结论", "实际发现", "审核说明"],
+                )
+            except ValueError as exc:
+                raise ValueError(f"{key}：{exc}") from exc
             if values["结论"] not in RESULTS:
                 raise ValueError(f"{key}结论非法")
             data = {
@@ -149,7 +254,10 @@ def parse_v2(text, rule_set, ledger, *, final=False):
                 for source in keys:
                     if (field == "image_paths") != ("/" in source):
                         raise ValueError("图片路径与片段 ID 类型不符")
-                    ledger.validate(source, role)
+                    try:
+                        ledger.validate(source, role)
+                    except ValueError as exc:
+                        raise ValueError(f"{key}的{label}：{exc}") from exc
                 data[field] = keys
             rule = RuleAuditDecision(
                 rule_id=key, result=RESULTS[values["结论"]], summary=data
@@ -162,49 +270,17 @@ def parse_v2(text, rule_set, ledger, *, final=False):
             decisions[key].result == "compliant" for key in h.rule_ids
         ):
             raise ValueError("重点问题须关联至少一项非符合结论")
-    # 自由撰写文字不能裸写内部标识；来源原文不在此校验范围，不删除证据内容。
-    prose = [title, summary, *[v for h in highlights for v in (h.title, h.summary)]]
-    prose += [
-        v
-        for r in decisions.values()
-        for v in (r.summary.reason, r.summary.observation, r.summary.recommendation)
-        if v
-    ]
-    internal_ids = (
-        {r.rule_id for r in rule_set.rules}
-        | {rule_set.project_id}
-        | set(ledger.documents)
-        | set(ledger.sources)
-    )
-    for parsed in ledger.documents.values():
-        internal_ids.update(
-            v
-            for v in (
-                parsed.document.project_id,
-                parsed.document.bidder_id,
-                parsed.document.task_id,
-            )
-            if v
-        )
-    pattern = (
-        r"(?<![A-Za-z0-9_-])(?:"
-        + "|".join(re.escape(key) for key in internal_ids)
-        + r")(?![A-Za-z0-9_-])"
-    )
-    # 名称恰好含技术编号时，仍允许按真实文件名引用；不修改输出文字。
-    names = sorted(
-        {p.document.file_name for p in ledger.documents.values()}, key=len, reverse=True
-    )
-
-    def has_internal_id(value):
-        for name in names:
-            value = value.replace(name, "")
-        return re.search(pattern, value)
-
-    if any(has_internal_id(value) for value in prose):
-        raise ValueError(
-            "正文请使用文件名称和可读表述，内部 ID 仅放关联规则或来源行；不要改写真实业务编号或引文"
-        )
+    # 原稿和关联键保留内部标识；正式结果中的自由文字按冻结快照确定性转换。
+    resolve = _prose_resolver(rule_set, ledger, report_context)
+    title, summary = resolve(title), resolve(summary)
+    for highlight in highlights:
+        highlight.title = resolve(highlight.title)
+        highlight.summary = resolve(highlight.summary)
+    for rule in decisions.values():
+        rule.summary.reason = resolve(rule.summary.reason)
+        rule.summary.observation = resolve(rule.summary.observation)
+        if rule.summary.recommendation:
+            rule.summary.recommendation = resolve(rule.summary.recommendation)
     if final and missing:
         raise ValueError("报告未完成：" + "、".join(missing))
     return (

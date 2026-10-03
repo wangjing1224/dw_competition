@@ -15,7 +15,7 @@ class ReportEdit(StrictModel):
         description="当前稿中恰好出现一次的完整原文；必要时带相邻标题消歧。",
     )
     new_text: str = Field(
-        description="替换后的文本，空字符串表示删除，但仍需通过草稿校验。"
+        description="替换后的文本，空字符串表示删除。保存后返回校验反馈，定稿须校验通过。"
     )
 
 

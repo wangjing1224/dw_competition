@@ -282,6 +282,70 @@ class ReportModel:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("repair", [False, True])
+async def test_single_invalid_draft_is_visible_but_only_repaired_result_exports(
+    env, repair
+):
+    class DraftModel(ReportModel):
+        async def ainvoke(self, messages, **kwargs):
+            feedback = [m for m in messages if m.type == "tool"]
+            if not feedback:
+                return tool_response(
+                    "report_document",
+                    {
+                        "action": "write",
+                        "content": filled_report(self.rules, version=2)
+                        + "\n投标片段：fake\n",
+                        "edits": None,
+                    },
+                    "draft",
+                )
+            assert "草稿已保存" in feedback[0].content
+            assert "校验未通过" in feedback[0].content
+            if repair and len(feedback) == 1:
+                return tool_response(
+                    "report_document",
+                    {
+                        "action": "edit",
+                        "content": None,
+                        "edits": [{"old_text": "\n投标片段：fake\n", "new_text": ""}],
+                    },
+                    "repair",
+                )
+            return AIMessage(content="已结束本批处理。")
+
+    task = upload(env).json()["task_id"]
+    await run_audit_batch(
+        task,
+        models=SimpleNamespace(
+            bid_summary=RouteModel(),
+            bid_chat=DraftModel(env.rules["project-1"]),
+            embedding=env.embedding,
+            rerank=object(),
+            evidence_chat=object(),
+        ),
+    )
+    for row in file_rows(task):
+        file_id = row["file_id"]
+        response = env.client.get(f"/api/audit-tasks/{task}/files/{file_id}")
+        assert response.status_code == 200
+        report = response.json()
+        if repair:
+            assert report["document"]["kind"] == "final"
+            assert "投标片段：fake" not in report["document"]["markdown"]
+            assert report["result"] and report["counts"]["total"] == 1
+        else:
+            assert report["document"]["kind"] == "draft"
+            assert "投标片段：fake" in report["document"]["markdown"]
+            assert report["result"] is None and report["counts"] is None
+            assert report["document"]["display_markdown"] is None
+        for format in ("md", "word", "json"):
+            assert env.client.get(
+                f"/api/audit-tasks/{task}/outputs?format={format}&file_id={file_id}"
+            ).status_code == (200 if repair else 409)
+
+
+@pytest.mark.asyncio
 async def test_real_pipeline_per_file_results_traces_and_word_error(env, monkeypatch):
     creation = upload(env).json()
     task = creation["task_id"]

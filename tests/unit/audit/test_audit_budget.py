@@ -161,6 +161,9 @@ async def test_compaction_reinvokes_same_batch_without_resetting_limit(
     assert len(model.calls) == 3 and len(model.bindings) == 1
     final = model.calls[-1][0]
     assert all(m.type in {"system", "human"} for m in final)
+    assert len(final) == 3  # System、同批Human和既有末轮Human，无额外进度消息。
+    assert "已无工具" in final[-1].content
+    assert "## 当前草稿状态" not in final[1].content
     assert "当前原文不变" in final[1].content and "分辨率满足要求" in final[1].content
     assert "核验和报告已保存" in final[1].content
 

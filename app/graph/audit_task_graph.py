@@ -115,6 +115,7 @@ class LangGraphAuditExecutor:
             context.rule_set,
             ledger,
             version=context.report_format_version,
+            report_context=context.report_context,
         )
         records, stats = [], {}
         trace = get_tracing_context()
@@ -254,8 +255,7 @@ class LangGraphAuditExecutor:
                     events=event("main_agent"),
                 )
                 # 会话已校验正常收尾；不用固定结束语判成功，写入和完整性仍检查真实报告。
-                if report.write_error:
-                    raise RuntimeError(report.write_error)
+                report.check_draft()
                 cursor = batch.end
                 checkpoint()
             decision = report.finish()

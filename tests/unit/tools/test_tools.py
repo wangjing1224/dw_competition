@@ -214,19 +214,22 @@ async def test_report_tool_atomic_edit_idempotency_and_source_validation(tmp_pat
         call(tool.name, {"action": "write", "content": before, "edits": None}, "fix")
     )
     assert report.finish()
-    with pytest.raises(ValueError, match="未实际读取"):
-        await tool.ainvoke(
-            call(
-                tool.name,
-                {
-                    "action": "write",
-                    "content": before + "图片来源：e-1/images/1.png\n",
-                    "edits": None,
-                },
-                "image-fake",
-            )
+    invalid = before + "图片来源：e-1/images/1.png\n"
+    receipt = await tool.ainvoke(
+        call(
+            tool.name,
+            {
+                "action": "write",
+                "content": invalid,
+                "edits": None,
+            },
+            "image-fake",
         )
-    assert report.read() == before
+    )
+    assert "草稿已保存" in receipt.content and "未实际读取" in receipt.content
+    assert report.read() == invalid
+    with pytest.raises(ValueError, match="未实际读取"):
+        report.finish()
 
 
 @pytest.mark.asyncio

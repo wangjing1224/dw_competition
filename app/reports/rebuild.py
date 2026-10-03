@@ -54,6 +54,7 @@ def rebuild_result(task_id, store):
                 ledger,
                 final=True,
                 version=context.report_format_version,
+                report_context=context.report_context,
             )
             previous = directory / f"{key}_result.json"
             report_context = context.report_context
