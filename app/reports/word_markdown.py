@@ -1,4 +1,4 @@
-"""Markdown AST 到原生 Word；不执行 HTML，也不请求任何外部图片。"""
+"""Markdown 和解析摘录表格到原生 Word；不执行 HTML 或请求外部图片。"""
 
 import re
 from urllib.parse import unquote, urlsplit
@@ -7,6 +7,7 @@ from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
+from lxml import etree
 from markdown_it import MarkdownIt
 from markdown_it.tree import SyntaxTreeNode
 
@@ -18,6 +19,117 @@ from app.reports.styles import (
     format_table_header,
     set_table_geometry,
 )
+
+
+def _excerpt_table_block(state, start, end, silent):
+    """仅识别完整的 HTML 表格块；其余 HTML 与代码仍按字面处理。"""
+    pos = state.bMarks[start] + state.tShift[start]
+    if state.is_code_block(start) or not re.match(
+        r"<table(?:\s|>)", state.src[pos:state.eMarks[start]], re.I
+    ):
+        return False
+    for line in range(start, end):
+        if state.sCount[line] < state.blkIndent:
+            break
+        value = state.src[state.bMarks[line] + state.tShift[line]:state.eMarks[line]]
+        if re.search(r"</table\s*>", value, re.I):
+            if not silent:
+                state.line = line + 1
+                token = state.push("excerpt_table", "", 0)
+                token.map = [start, state.line]
+                token.content = state.getLines(start, state.line, state.blkIndent, True)
+            return True
+    return False
+
+
+def _html_cell(paragraph, element, *, bold=False, italic=False):
+    """只投影文字、换行和强调；忽略样式、脚本及图片地址。"""
+    def add(text):
+        if text:
+            run = paragraph.add_run(text)
+            run.bold, run.italic = bold, italic
+
+    add(element.text)
+    for child in element:
+        if child.tag == "br":
+            add("\n")
+        elif child.tag == "img":
+            add(child.get("alt", ""))
+        elif isinstance(child.tag, str) and child.tag not in {"script", "style"}:
+            if child.tag in {"p", "div", "tr", "td", "th"} and paragraph.text:
+                add("\n")
+            _html_cell(
+                paragraph, child,
+                bold=bold or child.tag in {"b", "strong"},
+                italic=italic or child.tag in {"i", "em"},
+            )
+        add(child.tail)
+
+
+def _render_excerpt_table(container, html):
+    # lxml 已由 python-docx 使用；仅在内存中解析，不加载 URL 或外部资源。
+    root = etree.HTML(html, parser=etree.HTMLParser(no_network=True))
+    rows = root.xpath(
+        "./body/table/tr | ./body/table/thead/tr | "
+        "./body/table/tbody/tr | ./body/table/tfoot/tr"
+    )
+    placements, occupied = [], set()
+    try:
+        for r, row in enumerate(rows):
+            c = 0
+            for cell in row.xpath("./td | ./th"):
+                while (r, c) in occupied:
+                    c += 1
+                rs, cs = int(cell.get("rowspan", 1)), int(cell.get("colspan", 1))
+                # Word 表格最多 63 列；异常跨度不扩张成巨大的内存网格。
+                if not (1 <= rs <= len(rows) - r and 1 <= cs <= 63 - c):
+                    raise ValueError("无效表格跨度")
+                area = {(y, x) for y in range(r, r + rs) for x in range(c, c + cs)}
+                if occupied & area:
+                    raise ValueError("表格单元格重叠")
+                occupied.update(area)
+                placements.append((r, c, rs, cs, cell))
+                c += cs
+        columns = max(c for _, c in occupied) + 1
+    except ValueError:
+        # 非规范摘录仍保留可读内容，不伪造合并关系或令整份报告导出失败。
+        container.add_paragraph("原文表格结构无法还原，以下按文字列出：")
+        _html_cell(container.add_paragraph(), root)
+        return
+
+    table = container.add_table(rows=len(rows), cols=columns)
+    table.style = "Table Grid"
+    # 为序号、数量等短列少分宽度，给要求/响应正文留空间；总宽保持报告版心。
+    weights = [4] * columns
+    for _, c, _, cs, cell in placements:
+        weight = min(40, max((len(t) for t in cell.itertext()), default=0) / cs)
+        for index in range(c, c + cs):
+            weights[index] = max(weights[index], weight)
+    minimum = min(720, TABLE_WIDTH_DXA // columns)
+    spare = TABLE_WIDTH_DXA - minimum * columns
+    widths = [minimum + int(spare * w / sum(weights)) for w in weights]
+    widths[-1] += TABLE_WIDTH_DXA - sum(widths)
+    set_table_geometry(table, widths)  # 先设置网格宽度，再合并，保留合并后的总宽。
+    for r, c, rs, cs, source in placements:
+        cell = table.cell(r, c)
+        if rs > 1 or cs > 1:
+            cell = cell.merge(table.cell(r + rs - 1, c + cs - 1))
+        p = cell.paragraphs[0]
+        _html_cell(p, source)
+        p.paragraph_format.space_after = Pt(4)
+        p.paragraph_format.line_spacing = 1.15
+        for run in p.runs:
+            run.font.size = Pt(9 if columns >= 6 else 10)
+    # 合并表头跨行时，重复整个表头区域，避免跨页时拆断纵向合并。
+    header_end = 1
+    for r, _, rs, _, _ in placements:
+        if r < header_end:
+            header_end = max(header_end, r + rs)
+    for row in table.rows[:header_end]:
+        format_table_header(row)
+    for row in table.rows:
+        # 普通行尽量整行跨页，避免续页只剩某个长单元格的两行尾句。
+        row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
 
 
 def _numbering(document, ordered, start=1):
@@ -104,9 +216,12 @@ def _inline(paragraph, tokens, *, bold=False, italic=False, link=None, anchors=N
 
 
 def render_markdown(document, text):
-    root = SyntaxTreeNode(
-        MarkdownIt("commonmark", {"html": False}).enable("table").parse(text)
+    parser = MarkdownIt("commonmark", {"html": False}).enable("table")
+    parser.block.ruler.before(
+        "html_block", "excerpt_table", _excerpt_table_block,
+        {"alt": ["paragraph", "reference", "blockquote"]},
     )
+    root = SyntaxTreeNode(parser.parse(text))
     bookmark_count = len(document.element.findall(".//" + qn("w:bookmarkStart")))
     anchors = {}
     for title in re.findall(r"^### (4\.\d+ .+)$", text, re.MULTILINE):
@@ -162,7 +277,18 @@ def render_markdown(document, text):
         return p
 
     def render(node, container, quote=False, depth=0):
-        if node.type in {"paragraph", "heading", "code_block", "fence"}:
+        if node.type == "excerpt_table":
+            # 表后同一行的文字或相邻表格也保留，不交给 HTML 吞掉 Markdown。
+            parts = re.split(
+                r"(<table\b[^>]*>.*?</table\s*>)", node.content, flags=re.I | re.S
+            )
+            for part in parts:
+                if re.match(r"<table(?:\s|>)", part, re.I):
+                    _render_excerpt_table(container, part)
+                elif part.strip():
+                    for child in SyntaxTreeNode(parser.parse(part)).children:
+                        render(child, container, quote, depth)
+        elif node.type in {"paragraph", "heading", "code_block", "fence"}:
             paragraph(container, node, quote, depth=depth)
         elif node.type in {"ordered_list", "bullet_list"}:
             numbering = _numbering(

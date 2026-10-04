@@ -365,6 +365,88 @@ def test_markdown_native_lists_links_and_no_remote_images():
     )
 
 
+@pytest.mark.parametrize(
+    "file_id,label", [("tender-1", "招标片段"), ("bid-1", "投标片段"), ("e-1", "资料片段")]
+)
+def test_registered_html_excerpt_renders_native_word_table(tmp_path, file_id, label):
+    context, ledger, text = sample(1)
+    quote = (
+        "摘录前文。\n\n<table>\n"
+        '<tr><th colspan="2">技术参数</th><th>响应</th></tr>\n'
+        '<tr><td rowspan="2">成像</td><td>分辨率</td>'
+        '<td><strong>640×480</strong><br>满足 &amp; 优于</td></tr>\n'
+        '<tr><td>防护等级</td><td><em>IP67</em></td></tr>\n'
+        "</table>\n摘录后文 **仍需复核**。"
+    )
+    ledger.chunk_read(SimpleNamespace(
+        source=SimpleNamespace(file_id=file_id, section="技术要求"),
+        parse_version=context.parsed_documents[file_id].markdown_path,
+        page_numbers=[], content=quote, chunk_id="chunk-table",
+    ))
+    result = assemble(context, ledger, text + f"\n{label}：chunk-table\n")
+    f = result.file_results[0]
+    assert f.sources["chunk-table"].quote == quote  # 只改 Word 投影，不改登记原文。
+    assert "> <table>" in report_markdown(result, f)
+    path = tmp_path / "html-excerpt.docx"
+    _render_report(result, f).save(path)
+    document = Document(path)
+    assert len(document.tables) == 3
+    table = document.tables[-1]
+    assert len(table.columns) == 3
+    assert table.cell(0, 0)._tc is table.cell(0, 1)._tc
+    assert table.cell(1, 0)._tc is table.cell(2, 0)._tc
+    assert table.cell(1, 2).text == "640×480\n满足 & 优于"
+    assert any(r.bold and r.text == "640×480" for r in table.cell(1, 2).paragraphs[0].runs)
+    assert any(r.italic and r.text == "IP67" for r in table.cell(2, 2).paragraphs[0].runs)
+    assert table.rows[0]._tr.trPr.find(qn("w:tblHeader")) is not None
+    assert all(row._tr.trPr.find(qn("w:cantSplit")) is not None for row in table.rows)
+    assert sum(int(c.get(qn("w:w"))) for c in table._tbl.tblGrid) == 9360
+    assert int(table.cell(0, 0)._tc.tcPr.tcW.w) == sum(
+        int(c.get(qn("w:w"))) for c in list(table._tbl.tblGrid)[:2]
+    )
+    assert not any(raw in document.element.xml for raw in ("&lt;table", "&lt;td", "&lt;br", "&lt;strong"))
+    assert any(p.text == "摘录后文 仍需复核。" for p in document.paragraphs)
+
+
+def test_html_tables_keep_surrounding_markdown_and_code_literal():
+    from app.reports.word_markdown import render_markdown
+
+    document = Document()
+    render_markdown(document, (
+        '> 前文\n> <table><tr><td>第一张<br/>第二行</td></tr></table>\n'
+        '> 中间 **文字**\n> <table><tr><td>第二张</td></tr></table>\n> 后文\n\n'
+        '```html\n<table><tr><td>示例代码</td></tr></table>\n```\n\n'
+        '<script>alert(1)</script>\n\n'
+        '<table><tr><td><img src="https://example.org/private.png" alt="登记图名">'
+        '只有文字，不抓取图片</td></tr></table>'
+    ))
+    assert len(document.tables) == 3
+    assert document.tables[0].cell(0, 0).text == "第一张\n第二行"
+    assert document.tables[1].cell(0, 0).text == "第二张"
+    text = "\n".join(p.text for p in document.paragraphs)
+    assert "中间 文字" in text and "后文" in text
+    assert "<table><tr><td>示例代码</td></tr></table>" in text
+    assert "<script>alert(1)</script>" in text
+    assert document.tables[2].cell(0, 0).text == "登记图名只有文字，不抓取图片"
+    assert not document.inline_shapes
+    assert not any(r.is_external for r in document.part.rels.values())
+
+
+def test_excerpt_table_with_blank_lines_and_invalid_span_keeps_text():
+    from app.reports.word_markdown import render_markdown
+
+    document = Document()
+    render_markdown(document, (
+        '> <table>\n> \n> <tr><td>要求</td></tr>\n> \n'
+        '> <tr><td>正文</td></tr>\n> </table>\n\n'
+        '<table><tr><td colspan="999999">无效跨度但内容保留</td></tr></table>'
+    ))
+    assert len(document.tables) == 1
+    assert document.tables[0].cell(1, 0).text == "正文"
+    assert "无效跨度但内容保留" in "\n".join(p.text for p in document.paragraphs)
+    assert "&lt;table" not in document.element.xml
+
+
 def test_image_reference_without_quote_does_not_invent_ocr_or_page():
     from app.models.documents import ParsedImage
 
