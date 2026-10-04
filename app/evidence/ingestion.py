@@ -409,11 +409,12 @@ async def _ingest_locked(
             current=parsed,
             history=dict(history),
             settings=settings,
+            # Task32 D2：暂时停用历史摘要工具返回专用预算。
             counter=counter,
-            detail_budget_tokens=int(
-                model_settings.context_window_tokens
-                * model_settings.compaction_trigger_ratio
-            ),
+            # detail_budget_tokens=int(
+            #     model_settings.context_window_tokens
+            #     * model_settings.compaction_trigger_ratio
+            # ),
             file_model_calls=progress.file_model_calls,
             unresolved_write_error=progress.unresolved_write_error,
         )

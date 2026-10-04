@@ -163,7 +163,6 @@ def session(settings, current, history=(), library=None):
         history={p.document.file_id: p for p in history},
         settings=settings,
         counter=get_token_counter("utf8"),
-        detail_budget_tokens=100000,
     )
 
 
@@ -214,10 +213,13 @@ async def test_serial_sessions_keep_current_body_and_free_relations(settings):
 
 
 @pytest.mark.asyncio
-async def test_save_snapshot_read_budget_and_relation_removal(settings):
+async def test_save_snapshot_full_history_and_relation_removal(settings):
     first, second = parsed(1), parsed(2)
     library = library_for(first, second)
-    library.materials = [EvidenceMaterial(file_id="file-1", **material())]
+    long_summary = "合同HT-001，设备20台。" * 12000 + "历史完整结束"
+    library.materials = [
+        EvidenceMaterial(file_id="file-1", **material(summary=long_summary))
+    ]
     s = session(settings, second, [first], library)
     tool = build_evidence_ingestion_tools(s)[0]
     assert set(tool.tool_call_schema.model_json_schema()["properties"]) == {
@@ -244,11 +246,11 @@ async def test_save_snapshot_read_budget_and_relation_removal(settings):
     )
     assert "file-1" in read.content and "file-2" not in read.content
     assert s.unresolved_write_error and load_library("bidder-1", settings) == before
-    s.detail_budget_tokens = 1
+    assert long_summary in read.content
     read = await tool.ainvoke(
-        call(tool.name, {"material": None, "file_ids": "all"}, "limited")
+        call(tool.name, {"material": None, "file_ids": ["file-1"]}, "selected")
     )
-    assert "未展示：file-1" in read.content
+    assert long_summary in read.content and "未展示" not in read.content
     await tool.ainvoke(
         call(
             tool.name,
@@ -278,6 +280,56 @@ async def test_invalid_relation_does_not_modify_library(settings, target):
     assert (
         s.library.model_dump() == before and load_library("bidder-1", settings) is None
     )
+
+
+@pytest.mark.asyncio
+async def test_multiple_history_summaries_return_fully_without_separate_budget(
+    settings,
+):
+    docs = [parsed(i) for i in range(1, 5)]
+    library = library_for(*docs)
+    for i in range(1, 4):
+        library.materials.append(
+            EvidenceMaterial(
+                file_id=f"file-{i}",
+                **material(
+                    summary=f"历史{i}" * 10000 + f"完整末尾{i}",
+                    relations=[["合同补充", "file-1"]] if i > 1 else [],
+                ),
+            )
+        )
+    s = session(settings, docs[-1], docs[:-1], library)
+    # 工具不再自行计算剩余预算；统一控制器的计数器仍保留在会话中。
+    s.counter = SimpleNamespace(
+        count_text=lambda _: pytest.fail("不应单独裁剪历史摘要")
+    )
+    full = await s.apply(
+        SaveEvidenceMaterialInput(material=None, file_ids="all"), "all"
+    )
+    assert "未展示" not in full and "file-4" not in full
+    for item in library.materials:
+        assert item.bid_summary in full and item.evidence_summary in full
+    assert "合同补充" in full
+    selected = await s.apply(
+        SaveEvidenceMaterialInput(material=None, file_ids=["file-3", "file-1"]),
+        "selected",
+    )
+    assert (
+        "完整末尾3" in selected
+        and "完整末尾1" in selected
+        and "完整末尾2" not in selected
+    )
+    for unavailable in ["file-4", "file-99", "other-bidder-file"]:
+        with pytest.raises(ValueError):
+            await s.apply(
+                SaveEvidenceMaterialInput(material=None, file_ids=[unavailable]),
+                unavailable,
+            )
+    s.library.materials.pop()
+    with pytest.raises(ValueError, match="缺少已保存摘要"):
+        await s.apply(
+            SaveEvidenceMaterialInput(material=None, file_ids="all"), "missing"
+        )
 
 
 @pytest.mark.asyncio
@@ -383,12 +435,6 @@ async def test_completion_uses_saved_material_not_exact_phrase(
         AIMessage(content="已保存", response_metadata={"finish_reason": "tool_calls"}),
         AIMessage(content=""),
         AIMessage(content=" \n\t"),
-        AIMessage(
-            content="已保存",
-            invalid_tool_calls=[
-                {"name": "save_evidence_material", "id": "bad", "args": "{"}
-            ],
-        ),
     ],
 )
 async def test_saved_material_does_not_hide_abnormal_or_empty_reply(settings, response):
@@ -407,6 +453,63 @@ async def test_saved_material_does_not_hide_abnormal_or_empty_reply(settings, re
 async def test_no_saved_file_cannot_complete(settings, content):
     with pytest.raises(RuntimeError, match="没有已保存结果"):
         await ingest(settings, Model([AIMessage(content=content)]), [parsed(1)])
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_can_be_corrected_without_extra_messages(settings):
+    model = Model(
+        [
+            AIMessage(
+                content="",
+                invalid_tool_calls=[
+                    {"name": "save_evidence_material", "id": "bad", "args": "{"}
+                ],
+            ),
+            save(key="fixed"),
+            AIMessage(content="处理完毕"),
+        ]
+    )
+    result = await ingest(settings, model, [parsed(1)])
+    assert len(result.materials) == 1 and len(model.calls) == 3
+    feedback = next(m for m in model.calls[1][0] if m.type == "tool")
+    assert feedback.status == "error" and feedback.tool_call_id == "bad"
+    assert "JSON 解析失败" in feedback.content and "未执行" in feedback.content
+
+
+@pytest.mark.asyncio
+async def test_history_read_runtime_error_is_feedback_not_session_abort(
+    settings, monkeypatch
+):
+    from app.tools.evidence_ingestion_tools import EvidenceSession
+
+    original = EvidenceSession.apply
+
+    async def fail_read(self, request, call_id):
+        if request.material is None:
+            raise OSError("read unavailable")
+        return await original(self, request, call_id)
+
+    monkeypatch.setattr(EvidenceSession, "apply", fail_read)
+    model = Model(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    call(
+                        "save_evidence_material",
+                        {"material": None, "file_ids": "all"},
+                        "read",
+                    )
+                ],
+            ),
+            save(),
+            AIMessage(content="处理完毕"),
+        ]
+    )
+    result = await ingest(settings, model, [parsed(1)])
+    assert len(result.materials) == 1
+    feedback = next(m for m in model.calls[1][0] if m.type == "tool")
+    assert feedback.status == "error" and "read unavailable" in feedback.content
 
 
 def test_prepared_round_reminder_is_not_duplicated(settings):

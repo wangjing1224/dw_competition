@@ -4,11 +4,18 @@ from functools import partial
 from typing import TypedDict
 
 from langchain_core.messages import BaseMessage, ToolMessage
+from langgraph.errors import NodeCancelledError
 from langgraph.graph import END, StateGraph
 
 from app.agents.evidence_ingestion_agent import evidence_ingestion_node
 from app.evidence.local_trace import close_scope, observe_tool_result, trace_scope
-from app.llm.agent_tracing import invoke_agent_tool
+from app.llm.agent_tracing import (
+    check_tool_arguments,
+    invoke_agent_tool,
+    pending_tool_calls,
+    tool_error_text,
+)
+from app.llm.context_compaction import NeedsCompaction
 
 
 class EvidenceIngestionState(TypedDict):
@@ -27,10 +34,8 @@ def build_evidence_ingestion_graph(
         if state["model_calls"] >= max_steps:
             raise RuntimeError("模型在未绑定工具的最终轮仍发出工具调用")
         # 顺序执行同一轮的调用，避免保存和查看发生竞态；每个 ID 都补齐结果。
-        for call in messages[-1].tool_calls:
+        for call in pending_tool_calls(messages[-1]):
             name, call_id = call["name"], call["id"]
-            if not call_id:
-                raise ValueError("工具调用缺少 tool_call_id")
             try:
                 before = next(
                     (
@@ -43,7 +48,8 @@ def build_evidence_ingestion_graph(
                 title = (
                     (
                         "查看历史摘要"
-                        if call.get("args", {}).get("material") is None
+                        if isinstance(call.get("args"), dict)
+                        and call["args"].get("material") is None
                         else "保存当前资料"
                     )
                     if name == "save_evidence_material"
@@ -53,21 +59,25 @@ def build_evidence_ingestion_graph(
                     session,
                     "tool",
                     title,
-                    input=call.get("args"),
+                    input=call.get("args")
+                    if call.get("type") != "invalid_tool_call"
+                    else "[参数无法解析]",
                     name=name,
                     tool_call_id=call_id,
                 ) as observation:
+                    check_tool_arguments(call)
                     if name not in by_name:
                         raise ValueError(f"未知工具 {name}")
                     result = await invoke_agent_tool(by_name[name], call, trace_context)
                     if (
-                        not isinstance(result, ToolMessage)
-                        or result.tool_call_id != call_id
+                        isinstance(result, ToolMessage)
+                        and result.tool_call_id == call_id
                     ):
-                        raise ValueError("工具未返回匹配的 ToolMessage")
-                    observe_tool_result(observation, session, call, result, before)
+                        observe_tool_result(observation, session, call, result, before)
+            except (NeedsCompaction, NodeCancelledError):
+                raise
             except Exception as exc:  # noqa: BLE001 - 每个失败调用也必须补齐对应的 ToolMessage。
-                detail = f"{type(exc).__name__}: {exc}"
+                detail = tool_error_text(exc)
                 if name == "save_evidence_material":
                     args = call.get("args")
                     reading = (
@@ -82,7 +92,7 @@ def build_evidence_ingestion_graph(
                     else:
                         session.unresolved_write_error = detail
                         detail = (
-                            "保存失败，候选内容未生效；纠正后重新提交完整结果。\n"
+                            "保存未正常完成，执行中失败不能保证没有落盘；核对当前结果后纠正并提交完整结果。\n"
                             + detail
                         )
                 else:
@@ -90,6 +100,8 @@ def build_evidence_ingestion_graph(
                 result = ToolMessage(
                     content=detail, name=name, tool_call_id=call_id, status="error"
                 )
+            if not isinstance(result, ToolMessage) or result.tool_call_id != call_id:
+                raise RuntimeError("工具未返回匹配的 ToolMessage")
             messages.append(result)
         close_scope(session, "turn")
         return {"messages": messages}
@@ -111,9 +123,7 @@ def build_evidence_ingestion_graph(
     graph.set_entry_point("agent")
     graph.add_conditional_edges(
         "agent",
-        lambda state: (
-            "tools" if getattr(state["messages"][-1], "tool_calls", None) else END
-        ),
+        lambda state: "tools" if pending_tool_calls(state["messages"][-1]) else END,
         {"tools": "tools", END: END},
     )
     graph.add_edge("tools", "agent")

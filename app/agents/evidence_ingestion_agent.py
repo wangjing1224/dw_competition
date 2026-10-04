@@ -108,24 +108,22 @@ async def evidence_ingestion_node(
                 "tool_calls": response.tool_calls,
                 "diagnostics": diagnostics,
             },
-            summary="本轮返回工具调用" if response.tool_calls else "本轮返回正文",
+            summary="本轮返回工具调用"
+            if response.tool_calls or response.invalid_tool_calls
+            else "本轮返回正文",
         )
     controller.observe(context, response)
-    # 只读详情按剩余预算整份返回；不裁剪单份摘要或伪装成已返回全量。
-    session.detail_budget_tokens = max(
-        0,
-        controller.budget.threshold
-        - decision.estimate.total
-        - controller.counter.count_text(
-            str(response.content) + str(response.tool_calls)
-        )
-        - 128,
-    )
-    if getattr(response, "invalid_tool_calls", None):
-        raise RuntimeError("模型返回无法解析的工具调用，当前文件未完成")
+    # Task32 D2：暂时停用工具历史详情预算；统一输入控制器保持不变。
+    # session.detail_budget_tokens = max(
+    #     0,
+    #     controller.budget.threshold
+    #     - decision.estimate.total
+    #     - controller.counter.count_text(str(response.content) + str(response.tool_calls))
+    #     - 128,
+    # )
     if response.response_metadata.get("finish_reason") == "length":
         raise RuntimeError("模型输出被截断，当前文件未完成")
-    if not response.tool_calls:
+    if not (response.tool_calls or response.invalid_tool_calls):
         close_scope(session, "turn")
     return {
         "messages": [*context.messages, response],

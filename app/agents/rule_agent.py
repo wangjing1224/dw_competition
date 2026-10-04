@@ -112,11 +112,9 @@ async def rule_agent_node(
             "finish_reason": response.response_metadata.get("finish_reason"),
             "diagnostics": diagnostics,
         }
-    if not response.tool_calls and current_trace.get():
+    if not (response.tool_calls or response.invalid_tool_calls) and current_trace.get():
         current_trace.get().close_scope(session, "turn")
     controller.observe(context, response)
-    if getattr(response, "invalid_tool_calls", None):
-        raise RuntimeError("模型返回无法解析的工具调用，当前文件未完成")
     if response.response_metadata.get("finish_reason") == "length":
         raise RuntimeError("模型输出被截断，当前文件未完成")
     return {

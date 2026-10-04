@@ -113,7 +113,11 @@ class ScriptModel:
             else:
                 assert not pending
                 pending.update(
-                    call["id"] for call in getattr(message, "tool_calls", [])
+                    call["id"]
+                    for call in [
+                        *getattr(message, "tool_calls", []),
+                        *getattr(message, "invalid_tool_calls", []),
+                    ]
                 )
         assert not pending
         self.calls.append((list(messages), tools))
@@ -139,6 +143,40 @@ async def extract(env, model, files, callback=None):
         settings=env,
         progress_callback=callback,
     )
+
+
+@pytest.mark.asyncio
+async def test_invalid_rule_json_then_corrected_submit(env):
+    model = ScriptModel(
+        [
+            AIMessage(
+                content="",
+                invalid_tool_calls=[
+                    {
+                        "name": "submit_rule_delta",
+                        "id": "bad-json",
+                        "args": '{"operations":',
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    tool_call(
+                        "submit_rule_delta",
+                        "fixed",
+                        submit_args([add_operation()], view="all"),
+                    )
+                ],
+            ),
+            AIMessage(content="当前范围已保存"),
+        ]
+    )
+    result = await extract(env, model, [parsed_file(1)])
+    assert len(result.rules) == 1 and len(model.calls) == 3
+    feedback = next(m for m in model.calls[1][0] if m.type == "tool")
+    assert feedback.status == "error" and feedback.tool_call_id == "bad-json"
+    assert "JSON 解析失败" in feedback.content
 
 
 @pytest.mark.asyncio
@@ -337,7 +375,7 @@ async def test_tool_validation_error_is_closed_and_can_be_corrected(env):
     result = await extract(env, model, [parsed_file(1)])
     assert len(result.rules) == 1
     error = next(m for m in model.calls[1][0] if isinstance(m, ToolMessage))
-    assert error.status == "error" and "未修改" in error.content
+    assert error.status == "error" and "提交未正常完成" in error.content
 
 
 @pytest.mark.asyncio
@@ -499,25 +537,19 @@ async def test_group_search_enforces_history_scope_and_version(env):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first_fits", [True, False])
-async def test_group_search_hides_chunk_ids_when_content_not_displayed(env, first_fits):
+async def test_group_search_returns_full_hits_without_character_budget(env, first_fits):
     current = parsed_file(1)
-    settings = env.model_copy(
-        update={
-            "retrieval": env.retrieval.model_copy(update={"max_source_chars": 20})
-        }
-    )
+    settings = env
     first = SearchResult(
         chunk_id="chunk-first",
         score=1,
         project_id="project-1",
-        content="已展示的原文" if first_fits else "超长表格" * 20,
-        source=SourceRef(
-            file_id="file-1", file_name="1.md", source_path="目录/1.md"
-        ),
+        content="已展示的原文" if first_fits else "超长表格" * 2000,
+        source=SourceRef(file_id="file-1", file_name="1.md", source_path="目录/1.md"),
         parse_version=current.markdown_path,
     )
     second = first.model_copy(
-        update={"chunk_id": "chunk-second", "content": "后续长表格" * 20}
+        update={"chunk_id": "chunk-second", "content": "后续长表格" * 2000}
     )
     retrieval = SimpleNamespace(
         settings=settings, search=AsyncMock(return_value=[first, second])
@@ -537,18 +569,12 @@ async def test_group_search_hides_chunk_ids_when_content_not_displayed(env, firs
             {"querylist": [{"queries": ["参数"], "file_ids": ["file-1"]}]},
         )
     )
-    assert "chunk-second" not in response.content
-    assert second.content not in response.content
-    assert "返回达到本组长度预算" in response.content
-    if first_fits:
-        assert "片段：chunk-first" in response.content
-        assert first.content in response.content
-        assert session.accessed_history == {"file-1"}
-    else:
-        assert "chunk-first" not in response.content
-        assert first.content not in response.content
-        assert "原文未展示，不截断表格" in response.content
-        assert not session.accessed_history
+    assert "片段：chunk-second" in response.content
+    assert second.content in response.content
+    assert "片段：chunk-first" in response.content
+    assert first.content in response.content
+    assert "长度预算" not in response.content and "原文未展示" not in response.content
+    assert session.accessed_history == {"file-1"}
 
 
 @pytest.mark.asyncio
@@ -671,7 +697,7 @@ async def test_abnormal_or_empty_reply_cannot_finish(env, response):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("finish_reason", ["length", "tool_calls"])
-async def test_diagnostics_log_invalid_arguments_without_retry_or_partial_write(
+async def test_diagnostics_log_invalid_arguments_without_partial_write(
     env, caplog, monkeypatch, finish_reason
 ):
     caplog.set_level("INFO", logger="app.llm.agent_tracing")
@@ -706,17 +732,18 @@ async def test_diagnostics_log_invalid_arguments_without_retry_or_partial_write(
                 ],
             ),
             response,
+            AIMessage(content="未能完成"),
         ]
     )
     trace = LocalTrace("project-1")
     monkeypatch.setattr(trace, "write", lambda node, detail: None)
     token = current_trace.set(trace)
     try:
-        with pytest.raises(RuntimeError, match="无法解析的工具调用"):
+        with pytest.raises(RuntimeError, match="被截断|提交尚未成功"):
             await extract(env, model, [parsed_file(1)])
     finally:
         current_trace.reset(token)
-    assert len(model.calls) == 2  # 只加诊断，不产生任何自动重试。
+    assert len(model.calls) == (2 if finish_reason == "length" else 3)
     logs = [r for r in caplog.records if r.name == "app.llm.agent_tracing"]
     requests = [
         json.loads(r.getMessage().split(" ", 1)[1])
@@ -724,11 +751,11 @@ async def test_diagnostics_log_invalid_arguments_without_retry_or_partial_write(
         if r.getMessage().startswith("agent_model_request ")
     ]
     responses = [r for r in logs if r.getMessage().startswith("agent_model_response ")]
-    request = requests[-1]
-    result = json.loads(responses[-1].getMessage().split(" ", 1)[1])
+    request = requests[1]
+    result = json.loads(responses[1].getMessage().split(" ", 1)[1])
     assert request["generation_limits"] == {
         k: v
-        for k, v in model.options[-1].items()
+        for k, v in model.options[1].items()
         if k in {"max_tokens", "max_completion_tokens"}
     }
     assert request["estimated_input_tokens"] > 0
@@ -736,7 +763,7 @@ async def test_diagnostics_log_invalid_arguments_without_retry_or_partial_write(
     assert result["batch_index"] == 1 and result["turn_index"] == 2
     assert result["finish_reason"] == finish_reason and result["output_tokens"] == 8192
     assert result["invalid_tool_calls"][0]["arguments_chars"] == len(raw)
-    assert responses[-1].levelname == "WARNING"
+    assert responses[1].levelname == "WARNING"
     assert all("不应泄漏" not in r.getMessage() for r in logs)
     model_span = next(
         sid

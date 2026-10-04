@@ -4,12 +4,18 @@ from typing import TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from langgraph.errors import NodeCancelledError
 from langgraph.graph import END, StateGraph
 from langsmith import tracing_context
-from pydantic import ValidationError
 
 from app.audit.local_trace import finish_turn, observed_session, observed_turn, turn
-from app.llm.agent_tracing import invoke_agent_model, invoke_agent_tool
+from app.llm.agent_tracing import (
+    check_tool_arguments,
+    invoke_agent_model,
+    invoke_agent_tool,
+    pending_tool_calls,
+    tool_error_text,
+)
 from app.llm.context_compaction import (
     InputBudgetError,
     InputController,
@@ -121,8 +127,6 @@ async def audit_agent_node(
     controller.observe(context, response)
     if stats is not None:
         stats["model_calls"] = stats.get("model_calls", 0) + 1
-    if getattr(response, "invalid_tool_calls", None):
-        raise RuntimeError("模型工具参数无法解析，不能认为审核完成")
     if response.response_metadata.get("finish_reason") not in (
         None,
         "stop",
@@ -158,32 +162,39 @@ def build_session_graph(
         messages = list(state["messages"])
         if state["model_calls"] >= max_steps:
             raise RuntimeError("模型在无工具末轮仍发出 tool_calls")
-        for call in messages[-1].tool_calls:
+        for call in pending_tool_calls(messages[-1]):
             try:
+                check_tool_arguments(call)
                 if call["name"] not in by_name:
-                    raise ValueError("未知工具")
+                    raise ValueError("未知工具，请使用当前绑定的工具名称")
                 result = await invoke_agent_tool(
                     by_name[call["name"]], call, trace_context
                 )
-                if (
-                    not isinstance(result, ToolMessage)
-                    or result.tool_call_id != call["id"]
-                ):
-                    raise RuntimeError("工具未返回对应 tool_call_id")
-            except (ValueError, ValidationError) as exc:
-                # 仅参数/业务校验可反馈纠正；网络、计费、执行失败不伪装成证据不足。
+            except (NeedsCompaction, NodeCancelledError):
+                raise  # 压缩信号、子图取消不是普通工具错误。
+            except Exception as exc:  # noqa: BLE001 - 普通工具异常反馈模型，取消/协议故障另行终止。
+                detail = tool_error_text(exc)
                 if (
                     report
                     and call["name"] == "report_document"
-                    and call.get("args", {}).get("action") != "read"
+                    and (
+                        not isinstance(call.get("args"), dict)
+                        or call["args"].get("action") != "read"
+                    )
                 ):
-                    report.write_error = str(exc)
+                    report.write_error = detail
                 result = ToolMessage(
-                    content=f"工具执行失败，不能作为业务结论：{exc}",
+                    content=(
+                        f"工具调用失败，不能作为业务结论：{detail}\n"
+                        "请根据错误修正参数或检查当前结果后再调用；执行中失败不代表写入一定未生效。"
+                    ),
                     name=call["name"],
                     tool_call_id=call["id"],
                     status="error",
                 )
+            # 无法关联的返回属于协议异常，不能当成可纠正的参数错误吞掉。
+            if not isinstance(result, ToolMessage) or result.tool_call_id != call["id"]:
+                raise RuntimeError("工具未返回对应 tool_call_id")
             messages.append(result)
         return {"messages": messages}
 
@@ -213,9 +224,7 @@ def build_session_graph(
     graph.set_entry_point("agent")
     graph.add_conditional_edges(
         "agent",
-        lambda state: (
-            "tools" if getattr(state["messages"][-1], "tool_calls", None) else END
-        ),
+        lambda state: "tools" if pending_tool_calls(state["messages"][-1]) else END,
     )
     graph.add_edge("tools", "agent")
     return graph.compile()

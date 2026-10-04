@@ -114,7 +114,7 @@ class RerankSettings(ConfigModel):
 
 
 class RetrievalSettings(ConfigModel):
-    """本地分段、初召回、融合和最终回查长度配置。"""
+    """本地分段、初召回、融合和最终回查数量配置。"""
 
     chunk_tokens: int = Field(gt=0)
     chunk_overlap: int = Field(ge=0)
@@ -122,7 +122,8 @@ class RetrievalSettings(ConfigModel):
     final_top_k: int = Field(gt=0)
     semantic_weight: float = Field(ge=0)
     keyword_weight: float = Field(ge=0)
-    max_source_chars: int = Field(gt=0)
+    # Task32 D1：暂时停用返回字符预算；恢复须同时恢复检索与工具层裁剪。
+    # max_source_chars: int = Field(gt=0)
 
 
 class StorageSettings(ConfigModel):

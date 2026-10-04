@@ -30,8 +30,9 @@ class EvidenceSession:
     current: ParsedDocument
     history: dict[str, ParsedDocument]
     settings: AppSettings
-    counter: object
-    detail_budget_tokens: int
+    counter: object  # 统一输入控制器仍使用此计数器。
+    # Task32 D2：历史工具返回不再另设预算；以下字段仅留作恢复参考。
+    # detail_budget_tokens: int
     model_calls: int = 0
     batch_index: int = 0
     file_model_calls: int = 0
@@ -59,19 +60,20 @@ class EvidenceSession:
             saved = {item.file_id for item in self.library.materials}
             if not set(ids) <= saved:
                 raise ValueError("历史文件缺少已保存摘要")
-            parts, used = [], 0
-            for position, file_id in enumerate(ids):
+            parts = []
+            # Task32 D2：暂时停用整份历史摘要累计预算，由统一输入控制器计量。
+            # used = 0
+            for file_id in ids:
                 view = render_material(self.library, file_id)
-                size = self.counter.count_text(view)
-                if used + size > self.detail_budget_tokens:
-                    parts.append(
-                        "读取预算不足，以下文件详情未展示："
-                        + "、".join(ids[position:])
-                        + "。请缩小查看范围；不表示这些文件没有资料。"
-                    )
-                    break
+                # 恢复时使用 enumerate(ids)，同时恢复会话预算字段及每轮赋值。
+                # size = self.counter.count_text(view)
+                # if used + size > self.detail_budget_tokens:
+                #     parts.append("读取预算不足，以下文件详情未展示："
+                #                  + "、".join(ids[position:])
+                #                  + "。请缩小查看范围；不表示这些文件没有资料。")
+                #     break
                 parts.append(view)
-                used += size
+                # used += size
             return "\n\n".join(parts)
 
         async with self.lock:

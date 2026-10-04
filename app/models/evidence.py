@@ -20,10 +20,10 @@ class EvidenceMaterialInput(StrictModel):
         description="简洁说明当前文件的对象、可查事项及读取限制，不放图片路径，不下审核结论。"
     )
     evidence_summary: MaterialText = Field(
-        description="当前文件完整的详细摘要：关键事实、对象编号、范围、局部读取限制及关联依据；看图获得且正文无转写的事实必须附真实图片路径，不因精简关系而省略，不写阅读批次等运行状态。"
+        description="当前文件完整详细摘要：关键事实、对象编号、范围、局部读取限制及关联依据；图片事实附真实登记路径，不含阅读批次等运行状态。"
     )
     relations: list[tuple[MaterialText, MaterialText]] = Field(
-        description="二元组列表：[一个简短关系短语, 已完成历史文件ID]。第一项自由填写而非枚举，只写是什么联系，不写解释句、编号、主体或数值；具体依据放evidence_summary。仅记录有依据且需联合理解或核验的联系，仅同一主体不建立关系，无明确联系填[]。"
+        description="二元组列表：[简短关系短语, 已完成历史文件ID]。第一项是自由文本而非枚举，具体关联依据写入 evidence_summary；无关系时填 []。"
     )
 
 

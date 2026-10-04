@@ -21,6 +21,42 @@ def call(name, args, id="call-1"):
     return {"name": name, "args": args, "id": id, "type": "tool_call"}
 
 
+def test_search_description_uses_instance_configuration_without_changing_schema(
+    temp_settings,
+):
+    context = audit_context()
+    parsed = {"bid-1": context.parsed_documents["bid-1"]}
+    descriptions = []
+    for candidate, final in [(30, 10), (7, 3), (30, 10)]:
+        settings = temp_settings.model_copy(
+            update={
+                "retrieval": temp_settings.retrieval.model_copy(
+                    update={
+                        "candidate_top_k": candidate,
+                        "final_top_k": final,
+                    }
+                ),
+            }
+        )
+        tool = CommonTool(
+            parsed_documents=parsed,
+            settings=settings,
+            retrieval=SimpleNamespace(search=AsyncMock()),
+            file_filters={key: scope_for(p.document) for key, p in parsed.items()},
+            default_file_ids=["bid-1"],
+        ).search_tool()
+        descriptions.append(tool.description)
+        assert f"各自最多取 {candidate} 个候选" in tool.description
+        assert f"最终最多返回 {final} 个片段" in tool.description
+        assert (
+            "${" not in tool.description and "不按正文字符预算裁剪" in tool.description
+        )
+        schema = convert_to_openai_tool(tool)["function"]["parameters"]
+        assert set(schema["properties"]) == {"querylist"}
+        assert "candidate_top_k" not in str(schema) and "final_top_k" not in str(schema)
+    assert descriptions[0] == descriptions[2] != descriptions[1]
+
+
 @pytest.mark.asyncio
 async def test_common_search_routes_roles_and_records_only_displayed(temp_settings):
     context = audit_context()
@@ -31,13 +67,14 @@ async def test_common_search_routes_roles_and_records_only_displayed(temp_settin
     }
     ledger = SourceLedger(parsed)
     searches = []
+    full_text = "实际展示原文" + "完整表格行\n" * 1000 + "完整末尾"
 
     async def search(query, scope):
         searches.append(scope)
         file_id = scope.file_ids[0]
         return [
             SearchResult(
-                chunk_id="chunk-" + file_id,
+                chunk_id=f"chunk-{file_id}-{query}",
                 score=1,
                 source={
                     "file_id": file_id,
@@ -45,7 +82,7 @@ async def test_common_search_routes_roles_and_records_only_displayed(temp_settin
                     "source_path": file_id + ".md",
                     "section": "正文",
                 },
-                content="实际展示原文",
+                content=full_text,
                 parse_version=parsed[file_id].markdown_path,
                 project_id=scope.project_id,
                 bidder_id=scope.bidder_id,
@@ -67,14 +104,21 @@ async def test_common_search_routes_roles_and_records_only_displayed(temp_settin
             tool.name,
             {
                 "querylist": [
-                    {"queries": ["分辨率", "分辨率"], "file_ids": ["bid-1", "tender-1"]}
+                    {
+                        "queries": ["分辨率", "分辨率", "数量"],
+                        "file_ids": ["bid-1", "tender-1"],
+                    }
                 ]
             },
         )
     )
-    assert response.content.count("实际展示原文") == 2
+    assert response.content.count(full_text) == 4
     assert {s.scope_id for s in searches} == {"bid-audit-1", "rules-project-1"}
-    assert set(ledger.sources) == {"chunk-bid-1", "chunk-tender-1"}
+    assert set(ledger.sources) == {
+        f"chunk-{file_id}-{query}"
+        for file_id in ["bid-1", "tender-1"]
+        for query in ["分辨率", "数量"]
+    }
     searches.clear()
     response = await tool.ainvoke(
         call(tool.name, {"querylist": [{"queries": ["参数"], "file_ids": None}]})

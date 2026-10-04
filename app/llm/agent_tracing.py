@@ -2,15 +2,77 @@
 
 import json
 import logging
+import re
 from time import perf_counter
 from uuid import uuid4
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, ToolMessage
 from langsmith import traceable, tracing_context
+from pydantic import ValidationError
 
 from app.llm.model_diagnostics import request_diagnostics, response_diagnostics
 
 logger = logging.getLogger(__name__)
+
+
+def pending_tool_calls(response):
+    """保留合法和非法调用的关联；非法参数不修补、不交给工具执行。"""
+    calls = [*response.tool_calls, *response.invalid_tool_calls]
+    ids = [call.get("id") for call in calls]
+    if any(not key for key in ids) or len(ids) != len(set(ids)):
+        raise RuntimeError("工具调用 ID 缺失或重复，无法安全关联工具结果")
+    if any(not call.get("name") for call in calls):
+        raise RuntimeError("工具调用缺少名称，无法安全返回工具结果")
+    # SDK 将合法/非法调用分开存储；有原始顺序时沿用它，不修改 AI 消息。
+    order = {
+        call.get("id"): position
+        for position, call in enumerate(
+            response.additional_kwargs.get("tool_calls", [])
+        )
+    }
+    return sorted(calls, key=lambda call: order.get(call["id"], len(order)))
+
+
+def check_tool_arguments(call):
+    """只为解析失败生成简短诊断，不回显原始参数或 SDK 的整段错误正文。"""
+    if call.get("type") != "invalid_tool_call":
+        return
+    detail = "参数必须是合法 JSON 对象"
+    try:
+        json.loads(call.get("args") or "")
+    except json.JSONDecodeError as exc:
+        detail = f"JSON 解析失败：{exc.msg}（第 {exc.lineno} 行，第 {exc.colno} 列）"
+    except (ValueError, TypeError, RecursionError):
+        pass
+    raise ValueError(
+        f"工具未执行，本次调用未修改数据。{detail}；请按参数 Schema 修正后重新调用。"
+    )
+
+
+def tool_error_text(exc):
+    """工具错误反馈保留原因，省去参数回显、凭据、服务 URL 和磁盘绝对路径。"""
+    if isinstance(exc, ValidationError):
+        detail = "；".join(
+            f"{'.'.join(map(str, error['loc'])) or '参数'}: {error['msg']}"
+            for error in exc.errors(
+                include_input=False, include_context=False, include_url=False
+            )
+        )
+    else:
+        detail = str(exc)
+    detail = re.sub(r"(?i)(?:sk-|lsv2_)[A-Za-z0-9_+=/-]{6,}", "[密钥已隐藏]", detail)
+    detail = re.sub(
+        r"(?i)(?:bearer\s+|(?:api[_-]?key|authorization|token|password)\s*[:=]\s*)[^\s,;]+",
+        "[凭据已隐藏]",
+        detail,
+    )
+    detail = re.sub(r"https?://[^\s\"'<>]+", "[服务地址已隐藏]", detail)
+    detail = re.sub(
+        r"(?<![\w/])(?:/[\w.~-]+|[A-Za-z]:[\\/])(?:[^\s\"'<>]*)",
+        "[本地路径已隐藏]",
+        detail,
+    )
+    return f"{type(exc).__name__}: {detail}"
 
 
 def trace_payload(value):
@@ -155,6 +217,10 @@ async def invoke_agent_tool(tool, call, context):
         tracing_context(**context),
     ):
         result = await _tool_call(tool, call, langsmith_extra={"name": call["name"]})
+        if not isinstance(result, ToolMessage) or result.tool_call_id != call["id"]:
+            # 由调用边界在普通异常捕获之外终止；诊断不能先因读 content 而报错。
+            observation.update(status="failed", summary="工具返回无法关联当前调用")
+            return result
         observation["output"] = (
             result.content
             if call["name"] != "view_image"

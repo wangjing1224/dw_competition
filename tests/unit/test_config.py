@@ -8,6 +8,16 @@ from app.core import config
 from app.core.config import get_settings
 
 
+def test_retrieval_loads_without_inactive_character_budget():
+    raw = yaml.safe_load(
+        (config.PROJECT_ROOT / "configs/retrieval.yaml").read_text("utf-8")
+    )
+    assert "max_source_chars" not in str(raw)
+    retrieval = get_settings().retrieval
+    assert "max_source_chars" not in type(retrieval).model_fields
+    assert retrieval.candidate_top_k == 30 and retrieval.final_top_k == 10
+
+
 def test_cloud_and_commented_local_examples_validate_without_network(monkeypatch):
     monkeypatch.setenv("EMBEDDING_BASE_URL", "https://workspace.test/api/v1")
     monkeypatch.setenv("EMBEDDING_API_KEY", "example-key")

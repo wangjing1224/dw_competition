@@ -114,22 +114,16 @@ class RetrievalService:
                 SearchResult(
                     chunk_id=recall.chunk.chunk_id,
                     score=item.score if item.score is not None else fallback_score,
-                    source=recall.chunk.source_ref(
-                        self.settings.retrieval.max_source_chars
-                    ),
-                    # 表格/图片转写按完整结构返回，由工具说明输出预算，不能拦腰截断。
-                    content=(
-                        recall.chunk.content
-                        if recall.chunk.block_kind != "text"
-                        else recall.chunk.content[
-                            : self.settings.retrieval.max_source_chars
-                        ]
-                    ),
-                    truncated=(
-                        recall.chunk.block_kind == "text"
-                        and len(recall.chunk.content)
-                        > self.settings.retrieval.max_source_chars
-                    ),
+                    # Task32 D1：完整命中片段，避免 source_ref 默认500字符再次裁剪。
+                    source=recall.chunk.source_ref(len(recall.chunk.content)),
+                    content=recall.chunk.content,
+                    truncated=False,
+                    # 旧返回预算暂时停用，恢复时需与工具组预算及配置配套：
+                    # source=recall.chunk.source_ref(self.settings.retrieval.max_source_chars),
+                    # content=(recall.chunk.content if recall.chunk.block_kind != "text"
+                    #          else recall.chunk.content[:self.settings.retrieval.max_source_chars]),
+                    # truncated=(recall.chunk.block_kind == "text" and
+                    #            len(recall.chunk.content) > self.settings.retrieval.max_source_chars),
                     parse_version=recall.chunk.parse_version,
                     page_numbers=recall.chunk.page_numbers,
                     image_paths=recall.chunk.image_paths,

@@ -4,6 +4,7 @@ from typing import Annotated
 from uuid import uuid4
 
 from langchain_core.tools import InjectedToolCallId, StructuredTool
+from langgraph.errors import NodeCancelledError
 from pydantic import Field
 
 from app.agents.evidence_subagent import build_evidence_messages
@@ -26,7 +27,7 @@ class EvidenceCheck(StrictModel):
     file_ids: list[str] = Field(
         min_length=1,
         max_length=30,
-        description="从当前资料目录选一个或多个起始文件 ID；系统补充一层关系，不按类别拆分同一事实。",
+        description="当前资料目录中的非空起始文件 ID 列表；系统补充一层直接关系文件。",
     )
 
 
@@ -34,7 +35,7 @@ class EvidenceReviewInput(StrictModel):
     checks: list[EvidenceCheck] = Field(
         min_length=1,
         max_length=10,
-        description="独立事项分开，同一 rule_id 可以多次；结果按顺序返回。",
+        description="核验请求列表，每项含 rule_id、verification_request、file_ids；同一 rule_id 可重复，结果按顺序返回。",
     )
     tool_call_id: Annotated[str, InjectedToolCallId]
 
@@ -118,9 +119,10 @@ def build_evidence_review_tool(
                         stats=stats,
                         events=events,
                     )
+                except NodeCancelledError:
+                    raise
                 except Exception as exc:
-                    # 委派参数已经在上面校验。子会话中的配置、模型或预算失败，
-                    # 不能被父图当成可纠正的工具入参错误，更不能当作资料不足。
+                    # 子会话执行失败由父工具边界反馈；不是资料不足或核验结论。
                     raise RuntimeError(
                         f"资料核验执行失败：{type(exc).__name__}: {exc}"
                     ) from exc

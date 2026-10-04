@@ -20,17 +20,21 @@ def test_evidence_ingestion_prompt_separates_business_relations_from_similarity(
     assert "不得丢掉当前材料自身的图片回查入口" in system
 
 
-def test_evidence_save_schema_keeps_free_relations_and_matching_guidance():
+def test_evidence_tool_contract_and_parameter_schema_are_separate_from_strategy():
     from app.models.evidence import EvidenceMaterialInput
 
     description = load_tool_description("save_evidence_material")
-    assert "无明确业务联系填 []" in description
-    assert "简短短语" in description
-    assert "运行状态" in description
-    assert "必须在 evidence_summary 中保留对应真实图片路径" in description
+    assert "完整覆盖" in description
+    assert "material、file_ids" in description
+    assert "不另按历史摘要读取预算裁剪" in description
+    # 如何认定关系、何时保存、保留哪些看图事实由 System 规定。
+    assert "仅主体/供方相同" not in description
+    assert "首次整理须保存" not in description
     schema = EvidenceMaterialInput.model_json_schema()
     relations = schema["properties"]["relations"]
-    assert "仅同一主体不建立关系" in relations["description"]
+    assert "简短关系短语" in relations["description"]
+    assert "evidence_summary" in relations["description"]
+    assert "仅同一主体不建立关系" not in relations["description"]
     assert "enum" not in str(relations) and "maxLength" not in str(relations)
     assert set(schema["properties"]) == {"bid_summary", "evidence_summary", "relations"}
 

@@ -197,7 +197,8 @@ def observed_turn(function):
     async def wrapped(state, **kwargs):
         with turn(state["model_calls"] + 1):
             result = await function(state, **kwargs)
-            if not getattr(result["messages"][-1], "tool_calls", None):
+            response = result["messages"][-1]
+            if not (response.tool_calls or response.invalid_tool_calls):
                 finish_turn()
             return result
 

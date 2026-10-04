@@ -2,10 +2,10 @@
 
 本目录保存模型可调整的文本配置。每类调用拆成：
 
-- `xxx.md`：SystemMessage，包含角色、边界和判断原则；一次性结构化调用附输出 Schema，规则 Agent 使用原生工具参数 Schema。
+- `xxx.md`：SystemMessage，包含角色、边界、判断原则与工具使用策略；一次性结构化调用附输出 Schema，规则 Agent 使用原生工具参数 Schema。
 - `xxx_input.md`：本次运行的 HumanMessage，包含文件、规则、摘要、资料目录等动态数据。
 
-工具名称、说明和参数 Schema 由 LangChain `bind_tools` 注入，不在 System Prompt 中重复维护。
+工具名称、职责/契约说明和参数 Schema 由 LangChain `bind_tools` 注入，不在 System Prompt 中重复维护。Python 字段描述负责参数含义与约束，YAML 工具描述负责职责、权限、副作用、返回和错误语义；何时检索、委派、保存等策略集中在相应 System，不由共享工具说明规定工作顺序。
 
 ## 模板与占位符
 
@@ -29,6 +29,7 @@
 | `parser_image_transcription.md` | 无；System图表/图片转写要求 | `app/parsers/vision.py`，直接读取全文 |
 | `parser_table_merge.md` | 无；System跨页续表合并要求 | `app/parsers/vision.py`，直接读取全文 |
 | `audit_report_template.md` | 无；主Agent System中的报告模板片段 | 审核任务固定快照，经 `app/agents/bid_agent.py` 注入 |
+| `tool_descriptions.yaml::search_documents` | `${candidate_top_k}`、`${final_top_k}` | `app/tools/common_tools.py` 创建工具时，用该会话检索配置单独渲染 |
 | `evidence_classification.md` | `${evidence_types}`、`${evidence_classification_schema}` | `app/evidence/classifier.py`，旧单次分类入口，当前资料入库Agent不调用 |
 | `evidence_classification_input.md` | `${classification_input}` | 同上，旧入口Human模板，保留供参考/契约测试 |
 
@@ -61,6 +62,8 @@
 | `evidence_files` | str，选中/关联资料按ID渲染的evidence_summary；定位线索不是核验依据 | 已选择有效资料才调用；图片路径按摘要与原文实际可读性使用 |
 | `current_step` / `max_steps` | int，节点在调用前计算的当前调用序号/上限 | 必填；Human提醒不能代替代码是否绑定工具的判断 |
 | `missing` | str，报告草稿检查发现的缺项或校验错误，经 `app/audit/session.py` 拼接 | 无则代码传“无”，不是让模型杜撰遗漏 |
+| `candidate_top_k` | int，`settings.retrieval.candidate_top_k`；每 query、每 scope 内向量和关键词各自的初始候选上限，两路融合后可能更多 | 由配置提供，不是工具参数 |
+| `final_top_k` | int，`settings.retrieval.final_top_k`；每 query、每 scope 的 Rerank top_n／最终命中上限，不是全组或全调用总上限 | 由配置提供，不是工具参数 |
 | `evidence_types` | list[str]，旧分类入口的 `EvidenceType` 枚举值 | 由代码完整提供，渲染为JSON列表 |
 | `evidence_classification_schema` | dict，旧 `EvidenceClassification` 的JSON Schema | 由代码提供，旧入口与当前双摘要库不是同一协议 |
 | `classification_input` | dict，旧分类入口的文件名/相对目录/前20个标题/正文前4000与后2000字符/解析状态/图片数/警告 | 尾部短时为空，标题/警告可空列表；这是旧入口的裁剪，不是当前入库Agent策略 |
@@ -79,11 +82,17 @@
 
 `tool_descriptions.yaml` 中六个字符串分别描述 `search_documents`、`view_image`、`submit_rule_delta`、
 `save_evidence_material`、`request_evidence_review`、`report_document`。通用检索/看图由四类Agent复用，
-其余分别由规则入库、资料入库、主审核使用。入参Field说明与Schema在 `app/tools/` 中维护，
+其余分别由规则入库、资料入库、主审核使用。入参Field说明与Schema在 `app/tools/`、`app/models/` 中维护，
 返回结果由工具实现渲染；只改YAML不会改变权限、参数个数、返回字段或读写行为。
 
 例如扩充检索使用说明，应改`search_documents`对应块字符串；扩充入参则需同步
 `app/tools/common_tools.py`中的输入模型、校验、工具实现与测试，不能仅在文字里承诺支持新参数。
+
+检索工具在 `CommonTool.search_tool()` 内以 `string.Template.substitute` 注入两个 Top-K 配置值，再拼接实际授权范围；缓存的仍是 YAML 原始文本，不缓存跨会话的渲染结果。JSON 示例的普通花括号不会被解释为占位符；缺少变量会报错，不向模型发送未渲染模板。
+
+Task32 D1/D2 暂时停用检索正文／来源 quote／查询组的字符裁剪，以及历史摘要工具返回的专用预算；旧判断留注释供恢复。最终命中片段与所选历史摘要完整返回，不等于返回完整文件或取消所有限制：Top-K、Rerank、去重、授权、图片保护、统一输入控制器、初始阅读窗口及 Trace 展示裁剪均保留。
+
+普通工具异常和有真实调用 ID 的非法 JSON 由既有执行边界返回错误 ToolMessage，具体错误不搬进 System，不插入额外进度 Human。取消、不可配对的协议异常、硬轮次／输入窗口边界仍保持；错误不退还轮数，不自动续跑。参数拒绝与执行中失败分开说明，后者不能一律承诺未落盘。
 
 ## 独立报告模板
 
@@ -102,11 +111,11 @@ v2 解析仅在规则集合与顺序完整、归属唯一时补齐遗漏的固�
 ## 修改约束
 
 - 使用 `$name` 或 `${name}` 声明占位符。
-- 新增占位符后，必须在对应 `render_prompt()` 调用中提供同名参数。
+- 新增占位符后，必须在对应 `render_prompt()` 或工具描述的 `Template.substitute()` 调用中提供同名参数。
 - 缺少参数会立即报错，不会把占位符原样发送给模型。
 - 路由输出以 `BidRouteDecision` 的两字段 Schema 为准；Agent 不绑定最终 JSON Schema，工具参数仍严格校验。
 - `tool_descriptions.yaml` 只修改模型看到的工具说明，不修改工具名或参数 Schema。
 - 业务身份、来源对象和完整领域模型不应为了方便而重新塞入 LLM 输入。
-- `${...}`之外的美元符号若经过`render_prompt`须写为`$$`；直接读文件的静态parser模板不做此替换。
+- `${...}`之外的美元符号若经过 `render_prompt` 或工具描述模板渲染须写为 `$$`；直接读文件的静态parser模板不做此替换。
 - 修改后重启服务刷新缓存；代码会缓存模板与工具说明，已创建任务还可能持有旧模板快照。
 - 维护说明放在本README，工具配置用块字符串外的YAML注释；模板全文（包括HTML注释）可能进入模型。

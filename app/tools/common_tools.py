@@ -1,5 +1,6 @@
 """各 Agent 共用的工具提供类；每个会话单独注入文件范围和解析快照。"""
 
+from string import Template
 from typing import Annotated, Callable
 
 from langchain_core.tools import InjectedToolCallId, StructuredTool
@@ -20,7 +21,7 @@ class DocumentSearchGroup(StrictModel):
     queries: list[QueryText] = Field(
         min_length=1,
         max_length=12,
-        description="本组明确问题，可查询不同事项或提供互补表达；不要堆重复同义词。",
+        description="本组检索问题列表，每项为非空问题文本；所有查询共用本组 file_ids，结果标明命中的查询。",
     )
     file_ids: list[QueryText] | None = Field(
         min_length=1,
@@ -186,23 +187,19 @@ class CommonTool:
                         if hits
                         else "状态：检索完成，本次未召回；不代表原文没有相关内容"
                     )
-                    used = 0
-                    budget = self.settings.retrieval.max_source_chars
-                    # 每组去重、预算；不把其他查询组的命中冒充本组结果。
+                    # Task32 D1：暂时停用组正文预算，保留Top-K/Rerank及组内去重。
+                    # used = 0
+                    # budget = self.settings.retrieval.max_source_chars
                     for hit_number, (result, queries) in enumerate(hits.values(), 1):
-                        if used and used + len(result.content) > budget:
-                            lines.append("返回达到本组长度预算；其余命中未展示。")
-                            break
-                        displayed = len(result.content) <= budget
-                        content = (
-                            result.content
-                            if displayed
-                            else "完整结构超过本组预算，原文未展示，不截断表格。"
-                        )
+                        # 旧裁剪仅留作恢复参考，不把别组命中冒充本组结果：
+                        # if used and used + len(result.content) > budget:
+                        #     lines.append("返回达到本组长度预算；其余命中未展示。")
+                        #     break
+                        # displayed = len(result.content) <= budget
+                        # content = result.content if displayed else "完整结构超过本组预算，原文未展示，不截断表格。"
+                        content = result.content
                         lines.append(f"### 命中 {hit_number}")
-                        if displayed:
-                            # 直接展示索引中的真实 ID；未展示正文不能作为已读依据。
-                            lines.append(f"片段：{result.chunk_id}")
+                        lines.append(f"片段：{result.chunk_id}")
                         lines.extend(
                             [
                                 "命中查询：" + "；".join(queries),
@@ -229,11 +226,11 @@ class CommonTool:
                             lines.append(
                                 "读取限制：此次返回为文本节选，不代表完整原文。"
                             )
-                        if displayed and self.on_source_read:
+                        if self.on_source_read:
                             self.on_source_read(result.source.file_id)
-                        if displayed and self.on_chunk_read:
+                        if self.on_chunk_read:
                             self.on_chunk_read(result)
-                        used += len(content)
+                        # used += len(content)
                 except Exception as exc:
                     if self.strict_errors and not isinstance(exc, ValueError):
                         raise
@@ -247,7 +244,10 @@ class CommonTool:
             coroutine=search_documents,
             name="search_documents",
             args_schema=SearchDocumentsInput,
-            description=load_tool_description("search_documents")
+            description=Template(load_tool_description("search_documents")).substitute(
+                candidate_top_k=self.settings.retrieval.candidate_top_k,
+                final_top_k=self.settings.retrieval.final_top_k,
+            )
             + "\n授权文件："
             + "、".join(self.parsed_documents)
             + "\nfile_ids=null 默认范围："
