@@ -21,7 +21,7 @@ import type {
   ReportData,
   Span,
 } from '@/services/auditTasks';
-import { mergeTrace, orderedFindings } from '@/services/auditTasks';
+import { mergeTrace, orderedFindings, resultColors, resultLabels } from '@/services/auditTasks';
 import type { Rule } from '@/services/ruleLibraries';
 import Create from './Create';
 import List from './List';
@@ -72,7 +72,7 @@ const file: AuditFile = {
   export_error: null,
   report_kind: 'final',
   report_revision: 'rev1',
-  overall_conclusion: 'risk',
+  overall_conclusion: 'manual_review',
   outputs: {
     json_url: '/api/audit-tasks/audit-1/outputs?file_id=file-1&format=json',
     md_url: null,
@@ -127,17 +127,16 @@ const report: ReportData = {
     total: 2,
     compliant: 1,
     non_compliant: 0,
-    risk: 1,
-    manual_review: 0,
+    manual_review: 1,
   },
   result: {
     is_applicable: true,
-    overall_conclusion: 'risk',
+    overall_conclusion: 'manual_review',
     audit_summary: '精度待核对',
     project_match: { status: 'matched', reason: '项目一致' },
     exclusion_reason: null,
     category_summaries: { technical: '核对精度' },
-    findings: [finding('rule-1', 'risk'), finding('rule-2', 'compliant')],
+    findings: [finding('rule-1', 'manual_review'), finding('rule-2', 'compliant')],
     suggestions: [],
     sources: {},
   },
@@ -398,7 +397,7 @@ describe('审核工作区', () => {
             ...finding('rule-2', 'manual_review'),
             recommendation: ' 核对原件。 ',
           },
-          { ...finding('rule-1', 'risk'), recommendation: '核对原件。' },
+          { ...finding('rule-1', 'non_compliant'), recommendation: '核对原件。' },
         ],
       },
     };
@@ -411,7 +410,7 @@ describe('审核工作区', () => {
       'rule-1',
       'rule-2',
     ]);
-    expect(details.conclusions).toEqual(['risk', 'manual_review']);
+    expect(details.conclusions).toEqual(['non_compliant', 'manual_review']);
     expect(details.suggestions).toEqual([
       { text: '核对原件。', ruleIds: ['rule-1', 'rule-2'] },
     ]);
@@ -497,7 +496,7 @@ describe('审核工作区', () => {
               ],
               findings: [
                 {
-                  ...finding('rule-1', 'risk'),
+                  ...finding('rule-1', 'manual_review'),
                   summary: '**判断说明正文**',
                   observation: '已载明参数，缺少试验条件。',
                   recommendation: '核对原始测试记录。',
@@ -566,7 +565,7 @@ describe('审核工作区', () => {
               ...report.result,
               findings: [
                 finding('rule-147', 'compliant'),
-                finding('rule-148', 'risk'),
+                finding('rule-148', 'manual_review'),
               ],
             },
           }
@@ -615,7 +614,7 @@ describe('审核工作区', () => {
   it('问题清单按结论、重要程度、规则快照顺序排列', () => {
     expect(
       orderedFindings(
-        [finding('rule-2', 'compliant'), finding('rule-1', 'risk')],
+        [finding('rule-2', 'compliant'), finding('rule-1', 'manual_review')],
         rules,
       ).map((f) => f.rule_id),
     ).toEqual(['rule-1', 'rule-2']);
@@ -767,7 +766,7 @@ describe('审核工作区', () => {
     );
     expect(
       await screen.findByRole('img', {
-        name: '符合 1 条，不符合 0 条，风险 1 条，人工复核 0 条',
+        name: '符合 1 条，不符合 0 条，人工复核 1 条',
       }),
     ).toBeInTheDocument();
     expect(screen.queryByText('证据对照')).not.toBeInTheDocument();
@@ -785,6 +784,7 @@ describe('审核工作区', () => {
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByText('规则明细'));
     fireEvent.mouseDown(screen.getByRole('combobox', { name: '规则结论筛选' }));
+    expect(screen.queryByText('风险', { selector: '.ant-select-item-option-content' })).not.toBeInTheDocument();
     fireEvent.click(
       await screen.findByText('全部规则', {
         selector: '.ant-select-item-option-content',
@@ -794,9 +794,31 @@ describe('审核工作区', () => {
     fireEvent.click(screen.getByText('结果总览'));
     expect(
       screen.getByRole('img', {
-        name: '符合 1 条，不符合 0 条，风险 1 条，人工复核 0 条',
+        name: '符合 1 条，不符合 0 条，人工复核 1 条',
       }),
     ).toBeInTheDocument();
+  });
+  it('三分类映射及排序保留人工复核和冻结顺序，不改一致性与风险类别', () => {
+    expect(Object.keys(resultColors)).toEqual(['compliant', 'non_compliant', 'manual_review']);
+    expect(Object.keys(resultLabels)).toEqual([...Object.keys(resultColors), 'not_applicable']);
+    const frozen = ['rule-147', 'rule-148', 'rule-149', 'rule-150'].map((id) => ({
+      ...rules[0], rule_id: id, category: 'consistency_risk',
+    }));
+    expect(orderedFindings([
+      finding('rule-150', 'compliant'), finding('rule-149', 'manual_review'),
+      finding('rule-148', 'non_compliant'), finding('rule-147', 'manual_review'),
+    ], frozen).map((f) => f.rule_id)).toEqual(['rule-148', 'rule-147', 'rule-149', 'rule-150']);
+  });
+  it('零规则图表没有 NaN 或第四类图例', async () => {
+    mockApi((url) => url.endsWith('/files/file-1') ? {
+      ...report,
+      counts: { total: 0, compliant: 0, non_compliant: 0, manual_review: 0 },
+      result: { ...report.result!, findings: [] },
+    } : undefined);
+    render(<App><Report /></App>);
+    const donut = await screen.findByRole('img', { name: '符合 0 条，不符合 0 条，人工复核 0 条' });
+    expect(donut.getAttribute('style')).not.toContain('NaN');
+    expect(donut.closest('figure')?.querySelectorAll('figcaption > span')).toHaveLength(3);
   });
   it('路由排除文件不显示正式结论图', async () => {
     mockApi((url) => (url.endsWith('/files/file-1') ? excluded() : undefined));
@@ -819,7 +841,7 @@ describe('审核工作区', () => {
               audit_summary: long,
               findings: [
                 {
-                  ...finding('rule-1', 'risk'),
+                  ...finding('rule-1', 'manual_review'),
                   summary: '**需要复核**\n\n- 查验原件',
                 },
               ],
@@ -841,7 +863,7 @@ describe('审核工作区', () => {
     expect(
       within(charts).queryByRole('region', { name: '总体结论' }),
     ).not.toBeInTheDocument();
-    expect(donut.querySelectorAll('figcaption > span')).toHaveLength(4);
+    expect(donut.querySelectorAll('figcaption > span')).toHaveLength(3);
     expect(screen.getByRole('region', { name: '总体结论' })).toHaveStyle({
       maxHeight: '168px',
     });

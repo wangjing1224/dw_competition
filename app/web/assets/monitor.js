@@ -41,9 +41,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function enumText(value) {
     const labels = {
-      compliant: "合规",
-      non_compliant: "不合规",
-      risk: "存在风险",
+      compliant: "符合",
+      non_compliant: "不符合",
       manual_review: "人工复核",
       not_applicable: "不适用",
       matched: "匹配",
@@ -277,8 +276,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const results = payload.result?.file_results || [];
     const findings = results.flatMap((item) => item.findings || []);
     document.getElementById("overview-files").textContent = results.length || "—";
-    document.getElementById("overview-risks").textContent =
-      findings.filter((item) => ["risk", "non_compliant"].includes(item.result)).length || "—";
+    document.getElementById("overview-attention").textContent = results.length
+      ? findings.filter((item) => ["non_compliant", "manual_review"].includes(item.result)).length
+      : "—";
     document.getElementById("raw-json").textContent = JSON.stringify(payload, null, 2);
 
     const errorBox = document.getElementById("error-box");

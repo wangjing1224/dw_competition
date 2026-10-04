@@ -37,9 +37,11 @@ def file_result_from_report(
     if rule_order is not None:
         order = {key: i for i, key in enumerate(rule_order)}
         findings.sort(key=lambda f: order[f.rule_id])
+    if not findings:
+        raise ValueError("规则审核结果为空，不能生成总体结论")
     statuses = {str(item.result) for item in findings}
     conclusion = next(
-        (key for key in ("non_compliant", "risk", "manual_review") if key in statuses),
+        (key for key in ("non_compliant", "manual_review") if key in statuses),
         "compliant",
     )
     return FileAuditResult(

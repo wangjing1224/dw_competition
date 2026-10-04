@@ -45,7 +45,7 @@ async def test_delegate_search_image_and_report_without_extra_llm(
     context.evidence_library.materials[1].evidence_summary += " 图片位置：" + asset.path
     monkeypatch.setattr("app.graph.audit_task_graph.verify_indexes", lambda *args: {})
     hit = SearchResult(
-        chunk_id="chunk-e-1",
+        chunk_id="chunk-e-1-v0123456789abcdef",
         score=1,
         content="合同数量为10台。",
         bidder_id="bidder-1",
@@ -90,7 +90,7 @@ async def test_delegate_search_image_and_report_without_extra_llm(
                     },
                 ],
             ),
-            "资料不支持全部交付声明。合同（chunk-e-1）和验收图片（e-2/images/1.png）只支持10台。",
+            f"资料不支持全部交付声明。合同（{hit.chunk_id}）和验收图片（{asset.path}）只支持10台。",
         ]
     )
     draft = filled_report(
@@ -98,7 +98,7 @@ async def test_delegate_search_image_and_report_without_extra_llm(
         reason="合同及验收记录不支持全部交付声明。",
         conclusion="不符合",
     )
-    draft += f"资料片段：chunk-e-1\n图片来源：{asset.path}\n"
+    draft += f"资料片段：{hit.chunk_id}\n图片来源：{asset.path}\n"
     parent = SequenceModel(
         [
             tool_response(
@@ -148,6 +148,7 @@ async def test_delegate_search_image_and_report_without_extra_llm(
         "data:image/png;base64,"
     )
     assert "data:image" not in str(parent.calls[1][0])
+    assert hit.chunk_id in str(parent.calls[1][0]) and asset.path in str(parent.calls[1][0])
     file_result = result.file_results[0]
     assert file_result.sources[asset.path].page_numbers == [2]
     assert file_result.findings[0].image_paths == [asset.path]
@@ -161,3 +162,49 @@ async def test_delegate_search_image_and_report_without_extra_llm(
     assert "e-2.md" in text and "页码：2" in text and asset.path in text
     assert "合同数量为10台" in text and "non_compliant" not in text
     assert "资料1简洁目录" not in text and "资料1详细事实" not in text
+
+
+@pytest.mark.asyncio
+async def test_main_reads_human_image_directly_but_cannot_read_evidence(
+    monkeypatch, temp_settings
+):
+    context = audit_context()
+    context.report_format_version = 2
+    buffer = BytesIO()
+    Image.new("RGB", (80, 40), "white").save(buffer, format="PNG")
+    images = {}
+    for file_id in ("bid-1", "e-1"):
+        asset = AssetStore(file_asset_root(temp_settings.storage.data_root, file_id)).save_image(buffer.getvalue())
+        images[file_id] = asset.path
+        context.parsed_documents[file_id].sections[0].blocks.append(
+            ParsedBlock(kind="image", source_block_index=1, images=[asset])
+        )
+    monkeypatch.setattr("app.graph.audit_task_graph.verify_indexes", lambda *args: {})
+
+    async def no_search(*args):
+        pytest.fail("Human 已有图片入口，不要求先搜索")
+
+    monkeypatch.setattr(
+        "app.graph.audit_task_graph.RetrievalService",
+        lambda *args, **kwargs: SimpleNamespace(search=no_search),
+    )
+    draft = filled_report(context.rule_set, version=2) + f"\n图片来源：{images['bid-1']}\n"
+    parent = SequenceModel([
+        tool_response("view_image", {"path": images["e-1"]}, "denied"),
+        tool_response("view_image", {"path": images["bid-1"]}, "visible"),
+        tool_response("report_document", {"action": "write", "content": draft, "edits": None}, "save"),
+        "已保存。",
+    ])
+    result = await LangGraphAuditExecutor(
+        temp_settings,
+        SimpleNamespace(bid_chat=parent, evidence_chat=object(), embedding=object(), rerank=object()),
+    ).run(context)
+    assert not result.file_errors
+    human = next(m.content for m in parent.calls[0][0] if m.type == "human")
+    assert images["bid-1"] in human
+    assert "bid-1独立正文：分辨率640×480。" in human
+    denied = next(m for m in parent.calls[1][0] if m.type == "tool")
+    assert denied.status == "error" and "授权范围" in denied.content
+    image_message = next(m for m in parent.calls[2][0] if m.type == "tool" and m.tool_call_id == "visible")
+    assert image_message.content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert set(result.file_results[0].sources) == {images["bid-1"]}

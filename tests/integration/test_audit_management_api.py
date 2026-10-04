@@ -383,10 +383,12 @@ async def test_real_pipeline_per_file_results_traces_and_word_error(env, monkeyp
         assert report["counts"] == {
             "compliant": 1,
             "non_compliant": 0,
-            "risk": 0,
             "manual_review": 0,
             "total": 1,
         }
+        standalone = json.loads(env.service.output(task, "json", f["file_id"]).read_bytes())
+        assert standalone["file_results"][0]["overall_conclusion"] == "compliant"
+        assert {item["result"] for item in standalone["file_results"][0]["findings"]} == {"compliant"}
         assert report["document"]["kind"] == "final"
         assert report["result"]["report_title"] == "设备采购投标文件审核报告"
         assert report["rules"][0]["requirement"] == "精度至少100"
@@ -410,6 +412,7 @@ async def test_real_pipeline_per_file_results_traces_and_word_error(env, monkeyp
         )
     batch = json.loads(env.service.output(task, "json").read_bytes())
     assert batch["schema_version"] == "3.0" and len(batch["rule_libraries"]) == 2
+    assert {item["result"]["overall_conclusion"] for item in batch["files"]} == {"compliant"}
     progress = env.service.progress(task, True, files[0], limit=2)
     assert progress["has_more"] and progress["activity"]["model_calls"] == 3
     updates = []

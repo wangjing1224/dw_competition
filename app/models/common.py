@@ -109,7 +109,6 @@ class ResponseStatus(StrEnum):
 class FindingResult(StrEnum):
     COMPLIANT = "compliant"
     NON_COMPLIANT = "non_compliant"
-    RISK = "risk"
     MANUAL_REVIEW = "manual_review"
 
 
@@ -143,7 +142,6 @@ class BidderStatus(StrEnum):
 class OverallConclusion(StrEnum):
     COMPLIANT = "compliant"
     NON_COMPLIANT = "non_compliant"
-    RISK = "risk"
     MANUAL_REVIEW = "manual_review"
     NOT_APPLICABLE = "not_applicable"
 

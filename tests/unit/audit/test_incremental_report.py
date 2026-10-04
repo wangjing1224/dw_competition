@@ -138,6 +138,38 @@ async def test_invalid_saved_content_can_be_edited_next_turn(tmp_path, temp_sett
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("repair", [True, False])
+async def test_fourth_conclusion_returns_tool_feedback_without_conversion(
+    tmp_path, temp_settings, repair
+):
+    context = audit_context()
+    report = ReportDocument(
+        tmp_path / "draft.md", context.rule_set,
+        SourceLedger(context.parsed_documents), version=2,
+    )
+    invalid = filled_report(context.rule_set, version=2, conclusion="风险")
+    responses = [tool_response(
+        "report_document", {"action": "write", "content": invalid, "edits": None}, "draft"
+    )]
+    if repair:
+        responses.append(edit_call([("结论：风险", "结论：人工复核")], "repair"))
+    responses.append("结束本批。")
+    model = SequenceModel(responses)
+    await run(model, report, temp_settings, max_steps=8)
+    second = model.calls[1][0]
+    feedback = next(m for m in second if m.type == "tool")
+    assert "当前仅支持符合、不符合、人工复核" in feedback.content
+    assert "草稿已保存" in feedback.content
+    assert [m.type for m in second] == ["system", "human", "ai", "tool"]
+    if repair:
+        assert report.finish().categories[0].rules[0].result == "manual_review"
+    else:
+        assert "结论：风险" in report.read()
+        with pytest.raises(ValueError, match="当前仅支持"):
+            report.finish()
+
+
+@pytest.mark.asyncio
 async def test_query_only_rounds_keep_history_and_only_existing_final_reminders(
     tmp_path, temp_settings, monkeypatch
 ):

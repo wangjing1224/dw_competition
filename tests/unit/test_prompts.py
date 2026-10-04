@@ -114,6 +114,33 @@ def test_audit_system_uses_template_once_and_child_has_no_json_schema():
     assert "JSON" in child
 
 
+def test_three_conclusions_and_conditional_requirements_are_explicit():
+    contract = render_prompt("audit_report_template")
+    assert "结论：〈符合、不符合、人工复核，选一个〉" in contract
+    assert "- 风险：" not in contract
+    assert "本项无需响应" in contract and "非联合体" in contract
+    assert "适用前提尚不能确认" in contract
+    assert "轮数耗尽" in contract and "尚未开展" in contract
+    assert "来源填写（按实际使用的依据）" in contract
+    assert "实际发现／审核说明" in contract
+    assert "完整 chunk_id" in contract and "版本后缀" in contract
+
+
+def test_audit_strategy_keeps_scope_and_does_not_force_per_round_saves():
+    system = render_prompt("bid_agent", rule_view="规则", report_markdown_contract="契约")
+    assert "显式选择授权招标文件" in system
+    assert "默认范围是当前投标文件" in system
+    assert "主体、对象、版本和核验范围" in system
+    assert "不为填写来源ID重新检索" in system
+    assert "每轮核验后，只要" not in system
+    assert "无需逐条单开保存轮" in system
+    assert "解析转写不等于" in system
+    child = render_prompt("evidence_subagent")
+    assert "完整 chunk_id" in child and "版本后缀" in child
+    assert "主 Agent 收到的是你的正文" in child
+    assert "招标条款" in child and "决定性事实旁" in child
+
+
 def test_incremental_report_guidance_preserves_dependencies_and_fixed_round_limit():
     prompt = render_prompt(
         "bid_agent", rule_view="规则", report_markdown_contract="模板"

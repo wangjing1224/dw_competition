@@ -83,10 +83,12 @@ class AuditModel:
         for heading in headings:
             if heading.startswith("### rule-"):
                 parts.extend(
-                    [heading, "结论：风险\n审核说明：报价待完善，技术响应已有说明。"]
+                    [heading, "结论：人工复核\n实际发现：已核对报价和技术响应，部分条件尚不能确认。\n审核说明：需结合原件核对具体响应条件。"]
                 )
             elif heading == "## 总体总结" or heading == "### 分类总结":
                 parts.extend([heading, "存在待完善项，需要复核。"])
+            elif heading == "## 重点问题":
+                parts.extend([heading, "无重点问题。"])
             elif heading == f"# {TITLE_PLACEHOLDER}":
                 parts.append("# 设备采购投标文件审核报告")
             elif re.search(r"（[a-z_]+）", heading):
@@ -246,6 +248,6 @@ async def test_mock_dataset_new_libraries_through_route_agent_and_reports(
         item["file"]["file_name"]: item["overall_conclusion"]
         for item in response["result"]["file_results"]
     }
-    assert conclusions["01-红外热成像仪投标文件.md"] == "risk"
+    assert conclusions["01-红外热成像仪投标文件.md"] == "manual_review"
     assert conclusions["02-机械加工设备投标文件.md"] == "not_applicable"
     assert len(response["outputs"]["word"]) == 2

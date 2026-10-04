@@ -37,7 +37,7 @@ def sample(count=2):
         }[parsed.document.data_role]
     context.rule_set.source_files[0].file_name = "招标依据.md"
     ledger = SourceLedger(context.parsed_documents)
-    text = filled_report(context.rule_set, version=2, conclusion="风险")
+    text = filled_report(context.rule_set, version=2, conclusion="人工复核")
     text = text.replace(
         "无重点问题。",
         "### 问题 1：技术指标需复核\n\n关联规则："
@@ -113,7 +113,7 @@ def test_v2_complete_projection_quotes_and_native_word(tmp_path):
     md = report_markdown(result, f)
     assert "2026年10月01日 12:30" in md
     assert "第4.1节、第4.2节" in md
-    assert "[第4.1节](#41-技术响应风险)" in md
+    assert "[第4.1节](#41-技术响应人工复核)" in md
     assert md.count("核对原始测试记录。") == 3  # 重点中一次，两项明细各一次。
     assert "未引用的正文" not in md
     assert "\n> ".join(quote.splitlines()) in md
@@ -143,6 +143,10 @@ def test_v2_complete_projection_quotes_and_native_word(tmp_path):
         for key in ["rule-147", "rule-148", "chunk-real"]
     )
     assert len(document.tables) == 3  # 概况、统计、引文表格。
+    assert [c.text for c in document.tables[1].rows[0].cells] == [
+        "已审核要求", "符合", "不符合", "人工复核"
+    ]
+    assert len(document.tables[1].columns) == 4
     bookmarks = document.element.findall(".//" + qn("w:bookmarkStart"))
     links = document.element.findall(".//" + qn("w:hyperlink"))
     assert {p.get(qn("w:name")) for p in bookmarks} == {
@@ -165,7 +169,8 @@ def test_v2_complete_projection_quotes_and_native_word(tmp_path):
         lambda t: t.replace("实际发现：", "实际发现：重复\n实际发现：", 1),
         lambda t: t.replace("关联规则：rule-147", "关联规则：rule-999"),
         lambda t: t.replace("关联规则：rule-147", "关联规则：rule-147、rule-147"),
-        lambda t: t.replace("结论：风险", "结论：符合"),
+        lambda t: t.replace("结论：人工复核", "结论：符合"),
+        lambda t: t.replace("结论：人工复核", "结论：风险"),
         lambda t: t.replace("实际发现：技术响应表载明参数。", "实际发现：待填写。"),
         lambda t: t.replace("问题概述：", "问题概述：重复\n问题概述："),
         lambda t: t + "\n投标片段：chunk-invented\n",
@@ -220,7 +225,7 @@ def test_56_rules_complete_no_forced_highlights_or_truncation():
     assert len(result.file_results[0].findings) == 56
     assert "无重点问题。" in md and "### 4.56 技术响应｜符合" in md
     assert context.rule_set.rules[-1].requirement in md
-    assert "| 56项 | 56项 | 0项 | 0项 | 0项 |" in md
+    assert "| 56项 | 56项 | 0项 | 0项 |" in md
 
 
 @pytest.mark.asyncio
@@ -394,16 +399,79 @@ def test_wrong_source_role_and_version_rejected():
         assemble(context, ledger, text + "\n投标片段：chunk-read\n")
 
 
-def test_mixed_results_counts_and_conclusion_priority():
-    context, ledger, text = sample(4)
-    for index, conclusion in enumerate(["不符合", "符合", "人工复核", "风险"]):
+def test_mixed_results_counts_and_conclusion_priority(tmp_path):
+    context, ledger, text = sample(3)
+    for rule in context.rule_set.rules:
+        rule.requirement = "投标响应应满足本项技术条件，并注明适用范围及单位。"
+    for index, conclusion in enumerate(["不符合", "符合", "人工复核"]):
         text = text.replace(
-            f"### rule-{147 + index}\n\n结论：风险",
+            f"### rule-{147 + index}\n\n结论：人工复核",
             f"### rule-{147 + index}\n\n结论：{conclusion}",
         )
     result = assemble(context, ledger, text)
     f = result.file_results[0]
     assert f.overall_conclusion == "non_compliant"
     md = report_markdown(result, f)
-    assert "| 4项 | 1项 | 1项 | 1项 | 1项 |" in md
-    assert "**涉及结论：** 不符合、符合、人工复核、风险" in md
+    assert "| 3项 | 1项 | 1项 | 1项 |" in md
+    assert "**涉及结论：** 不符合、符合、人工复核" in md
+    document = _render_report(result, f)
+    assert len(document.tables[1].columns) == 4
+    document.save(tmp_path / "mixed.docx")
+
+
+@pytest.mark.parametrize(
+    "conclusion,observation,reason,counts",
+    [
+        ("符合", "投标函载明：\n\n> 我方以独立投标人身份投标。", "已确认非联合体，本项无需响应。", "| 1项 | 1项 | 0项 | 0项 |"),
+        ("人工复核", "已核对投标函和主体信息，仍无法确认是否为联合体。", "适用前提尚不能确认，需核对投标主体身份。", "| 1项 | 0项 | 0项 | 1项 |"),
+    ],
+)
+def test_human_quote_and_conditional_rule_need_no_fabricated_chunk(
+    conclusion, observation, reason, counts, tmp_path
+):
+    context, ledger, _ = sample(1)
+    context.rule_set.rules[0].requirement = "联合体投标须提供联合体协议"
+    text = filled_report(context.rule_set, version=2, conclusion=conclusion, reason=reason)
+    text = text.replace("实际发现：技术响应表载明参数。", "实际发现：" + observation)
+    result = assemble(context, ledger, text)
+    f = result.file_results[0]
+    assert not f.sources and not f.findings[0].bid_chunk_ids
+    assert len(f.findings) == 1  # 无需响应不跳过冻结规则。
+    md = report_markdown(result, f)
+    assert observation in md and reason in md
+    assert "rule-147" not in md and counts in md
+    _render_report(result, f).save(tmp_path / "conditional.docx")
+
+
+@pytest.mark.parametrize(
+    "file_id,label,role_name",
+    [("tender-1", "招标片段", "招标"), ("bid-1", "投标片段", "投标"), ("e-1", "资料片段", "资料")],
+)
+def test_complete_source_key_and_viewed_image_project_without_ids(file_id, label, role_name):
+    from app.models.documents import ParsedImage
+
+    context, ledger, text = sample(1)
+    parsed = context.parsed_documents[file_id]
+    key = f"chunk-{file_id}-1-v0123456789abcdef"
+    path = f"{file_id}/images/scan.png"
+    parsed.sections[0].blocks[0].images = [
+        ParsedImage(path=path, mime_type="image/png", width=100, height=100)
+    ]
+    # 仅有图片入口不代表实际看过；缩短的片段键也不会猜补。
+    ledger.chunk_read(SimpleNamespace(
+        source=SimpleNamespace(file_id=file_id, section="证明章节"),
+        parse_version=parsed.markdown_path, page_numbers=[2], content="实际读取的原句。", chunk_id=key,
+    ))
+    with pytest.raises(ValueError, match="未实际读取"):
+        assemble(context, ledger, text + f"\n图片来源：{path}\n")
+    with pytest.raises(ValueError, match="未实际读取"):
+        assemble(context, ledger, text + f"\n{label}：{key.split('-v')[0]}\n")
+    ledger.image_read(path)
+    result = assemble(context, ledger, text + f"\n{label}：{key}\n图片来源：{path}\n")
+    f = result.file_results[0]
+    assert set(f.sources) == {key, path}
+    assert f.sources[key].data_role == parsed.document.data_role
+    md = report_markdown(result, f)
+    assert "实际读取的原句。" in md
+    assert f"**{role_name}图片依据**" in md
+    assert key not in md and path not in md and "rule-147" not in md

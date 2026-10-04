@@ -237,7 +237,9 @@ def parse_v2(text, rule_set, ledger, *, final=False, report_context=None):
             except ValueError as exc:
                 raise ValueError(f"{key}：{exc}") from exc
             if values["结论"] not in RESULTS:
-                raise ValueError(f"{key}结论非法")
+                raise ValueError(
+                    f"{key}结论非法：当前仅支持符合、不符合、人工复核，请根据已有事实修正"
+                )
             data = {
                 "reason": values["审核说明"],
                 "observation": values["实际发现"],

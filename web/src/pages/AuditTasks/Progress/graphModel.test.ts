@@ -30,7 +30,7 @@ const testFile: AuditFile = {
   export_error: null,
   report_kind: 'final',
   report_revision: 'r',
-  overall_conclusion: 'risk',
+  overall_conclusion: 'manual_review',
   outputs: { json_url: '/json', md_url: '/md', word_url: '/word' },
 };
 const node = (

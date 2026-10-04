@@ -15,7 +15,6 @@ from app.reports.styles import category_label
 RESULTS = {
     "符合": "compliant",
     "不符合": "non_compliant",
-    "风险": "risk",
     "人工复核": "manual_review",
 }
 SOURCE_FIELDS = {
@@ -141,8 +140,12 @@ def parse_report(
                 ].strip()
                 for i, m in enumerate(fields)
             }
-            if values["结论"] not in RESULTS or not values["审核说明"]:
-                raise ValueError(f"{rule_id}结论非法或说明为空")
+            if values["结论"] not in RESULTS:
+                raise ValueError(
+                    f"{rule_id}结论非法：当前仅支持符合、不符合、人工复核，请根据已有事实修正"
+                )
+            if not values["审核说明"]:
+                raise ValueError(f"{rule_id}审核说明为空")
             data = {"reason": values["审核说明"]}
             for label, (field, role) in SOURCE_FIELDS.items():
                 if label not in values:

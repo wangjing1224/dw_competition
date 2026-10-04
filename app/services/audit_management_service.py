@@ -578,7 +578,7 @@ class AuditManagementService:
                 if value.is_applicable:
                     counts = {
                         k: sum(str(f.result) == k for f in value.findings)
-                        for k in ("compliant", "non_compliant", "risk", "manual_review")
+                        for k in ("compliant", "non_compliant", "manual_review")
                     }
                     counts["total"] = len(value.findings)
                 for key, src in value.sources.items():

@@ -28,8 +28,7 @@ PRIORITY_LABELS = {
 FINDING_LABELS = {
     "compliant": "符合",
     "non_compliant": "不符合",
-    "risk": "存在风险",
-    "manual_review": "需人工复核",
+    "manual_review": "人工复核",
 }
 MATCH_LABELS = {
     "matched": "匹配",
@@ -39,7 +38,6 @@ MATCH_LABELS = {
 CONCLUSION_LABELS = {
     "compliant": "总体符合",
     "non_compliant": "存在不符合项",
-    "risk": "存在风险",
     "manual_review": "需人工复核",
     "not_applicable": "不适用",
 }
@@ -60,7 +58,6 @@ MUTED = "667085"
 LIGHT_FILL = "F2F4F7"
 ACCENT_FILL = "EAF2F8"
 RISK_FILL = "FDECEC"
-WARNING_FILL = "FFF4E5"
 MANUAL_FILL = "F3F0FF"
 POSITIVE_FILL = "EAF6EE"
 TABLE_WIDTH_DXA = 9360
@@ -192,7 +189,6 @@ def result_fill(value: object) -> str:
     return {
         "compliant": POSITIVE_FILL,
         "non_compliant": RISK_FILL,
-        "risk": WARNING_FILL,
         "manual_review": MANUAL_FILL,
     }.get(str(value), LIGHT_FILL)
 

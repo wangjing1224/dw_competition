@@ -38,9 +38,8 @@ CATEGORY_ORDER = {
 PRIORITY_ORDER = {"critical": 0, "important": 1, "normal": 2}
 FINDING_ORDER = {
     "non_compliant": 0,
-    "risk": 1,
-    "manual_review": 2,
-    "compliant": 3,
+    "manual_review": 1,
+    "compliant": 2,
 }
 
 

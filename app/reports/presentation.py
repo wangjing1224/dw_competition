@@ -18,7 +18,6 @@ CATEGORIES = {
 RESULTS = {
     "compliant": "符合",
     "non_compliant": "不符合",
-    "risk": "风险",
     "manual_review": "人工复核",
     "not_applicable": "不适用",
 }
@@ -91,10 +90,11 @@ def report_markdown(result: AuditResult, file_result) -> str:
         file_result.audit_summary or "",
     ]
     counts = [
-        sum(f.result == key for f in findings.values()) for key in list(RESULTS)[:4]
+        sum(f.result == key for f in findings.values())
+        for key in ("compliant", "non_compliant", "manual_review")
     ]
     parts += [
-        "| 已审核要求 | 符合 | 不符合 | 风险 | 人工复核 |\n|---|---|---|---|---|\n| "
+        "| 已审核要求 | 符合 | 不符合 | 人工复核 |\n|---|---|---|---|\n| "
         + " | ".join(f"{n}项" for n in [len(findings), *counts])
         + " |",
         "## 三、重点问题与处理建议",

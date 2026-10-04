@@ -8,6 +8,16 @@ from app.models.evidence import EvidenceLibrary
 from app.models.results import AuditResult, FileAuditResult, ProjectMatch
 
 
+def test_only_three_rule_conclusions_and_file_applicability_remain():
+    from app.models.common import FindingResult, OverallConclusion
+
+    assert set(FindingResult) == {"compliant", "non_compliant", "manual_review"}
+    assert set(OverallConclusion) == {*FindingResult, "not_applicable"}
+    for enum in (FindingResult, OverallConclusion):
+        with pytest.raises(ValueError):
+            enum("risk")
+
+
 def test_duplicate_file_result_is_rejected():
     document = DocumentRef(
         file_id="file-1",
