@@ -17,18 +17,25 @@
   align-items: center;
   > * { min-width: 0; }
 }
-.audit-report-context {
+.audit-report-page .page-heading > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.audit-report-heading-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 24px;
-  padding: 16px 20px;
-  margin-bottom: 22px;
-  background: #fff;
-  border: 1px solid #e7edf7;
-  border-radius: 10px;
-  color: #60718c;
-  font-size: 13px;
+  align-items: baseline;
+  gap: 4px 24px;
+}
+.audit-report-heading-context {
+  flex: 1 1 320px;
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+.audit-report-heading-time {
+  color: #8a97ad;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 .audit-highlights {
   display: grid;

@@ -416,6 +416,60 @@ describe('审核工作区', () => {
       { text: '核对原件。', ruleIds: ['rule-1', 'rule-2'] },
     ]);
   });
+  it.each(['2026-10-01T04:30:00Z', null])(
+    '报告页移除重复概况，仅在标题下展示已有生成时间（%s）',
+    async (finalizedAt) => {
+      mockApi((url) =>
+        url.endsWith('/files/file-1')
+          ? {
+              ...report,
+              result: {
+                ...report.result!,
+                report_format_version: 2,
+                report_title: '设备采购审核报告',
+                report_context: {
+                  task_name: '受理时任务名',
+                  finalized_at: finalizedAt,
+                },
+              },
+            }
+          : undefined,
+      );
+      render(
+        <App>
+          <Report />
+        </App>,
+      );
+      await screen.findByRole('heading', { name: '设备采购审核报告' });
+      const heading = within(screen.getByRole('banner'));
+      expect(heading.getByText('受理时任务名 · 标书一.md')).toBeInTheDocument();
+      if (finalizedAt) {
+        expect(heading.getByText('报告生成时间：')).toBeInTheDocument();
+        expect(
+          heading.getByText(
+            new Date(finalizedAt).toLocaleString('zh-CN', { hour12: false }),
+          ),
+        ).toHaveAttribute('datetime', finalizedAt);
+      } else {
+        expect(screen.queryByText('报告生成时间：')).not.toBeInTheDocument();
+      }
+      expect(
+        screen.queryByRole('region', { name: '审核概况' }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText(/审核文件：/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/招标依据文件：/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/审核范围：/)).not.toBeInTheDocument();
+      expect(
+        screen.getByText('仅使用本次审核固定的规则快照'),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: '下载 Word' }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: '导出 Markdown' }),
+      ).toBeInTheDocument();
+    },
+  );
   it('新版重点可跳关联明细，展示发现、判断、建议和真实摘录，不铺内部草稿', async () => {
     const quote = '投标响应表载明：精度100，单位与试验条件待核验。';
     mockApi((url) =>

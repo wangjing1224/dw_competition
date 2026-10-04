@@ -224,10 +224,31 @@ function ReportFile({
       <Button>查看处理过程</Button>
     </Link>
   );
+  const finalizedAt =
+    data?.file.file_id === fileId && data.result?.report_format_version === 2
+      ? data.result.report_context?.finalized_at
+      : null;
   const heading = (
     <PageHeading
       title={data?.result?.report_title || fileLabel(fileId, files)}
-      description={`${data?.result?.report_context?.task_name || taskName} · ${fileLabel(fileId, files)}`}
+      description={
+        <span className="audit-report-heading-meta">
+          <span className="audit-report-heading-context">
+            {data?.result?.report_context?.task_name || taskName} ·{' '}
+            {fileLabel(fileId, files)}
+          </span>
+          {finalizedAt && (
+            <span className="audit-report-heading-time">
+              报告生成时间：
+              <time dateTime={finalizedAt}>
+                {new Date(finalizedAt).toLocaleString('zh-CN', {
+                  hour12: false,
+                })}
+              </time>
+            </span>
+          )}
+        </span>
+      }
       backTo="/audit-tasks"
       backLabel="返回审核任务"
       actions={data && <Status value={data.file.status} />}
@@ -294,33 +315,6 @@ function ReportFile({
           <Binding file={data.file} />
         </div>
       )}
-      {data.result?.report_format_version === 2 &&
-        data.result.report_context && (
-          <section className="audit-report-context" aria-label="审核概况">
-            <span>审核文件：{data.file.file_name}</span>
-            {!!data.rules.some((r) => r.sources.length) && (
-              <span>
-                招标依据文件：
-                {[
-                  ...new Set(
-                    data.rules.flatMap((r) =>
-                      r.sources.map((s) => s.file_name),
-                    ),
-                  ),
-                ].join('、')}
-              </span>
-            )}
-            {data.result.report_context.finalized_at && (
-              <span>
-                报告形成时间：
-                {new Date(
-                  data.result.report_context.finalized_at,
-                ).toLocaleString('zh-CN', { hour12: false })}
-              </span>
-            )}
-            <span>审核范围：本次提交文件及所选规则库、资料库的固定版本</span>
-          </section>
-        )}
       <FileErrors file={data.file} />
       {data.document.kind !== 'final' ? (
         <Card title="已保存内容">
@@ -732,7 +726,7 @@ export default function AuditReport() {
   const file =
     data?.files.find((f) => f.file_id === params.get('file')) || data?.files[0];
   return (
-    <div className="business-page audit-page">
+    <div className="business-page audit-page audit-report-page">
       {!file && (
         <PageHeading
           title="审核报告"
