@@ -7,7 +7,7 @@ from app.core.config import get_settings
 from app.models.documents import DocumentRef, ParsedDocument, ParsedSection
 from app.parsers.assets import AssetStore, file_asset_root
 
-PARSER_VERSION = "2.3.0"
+PARSER_VERSION = "2.3.1"
 
 
 def assets_for(document: DocumentRef) -> AssetStore:

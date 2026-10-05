@@ -1,6 +1,9 @@
 """将 XLSX 的每个 Sheet 解析为独立表格章节。"""
 
 import hashlib
+import re
+from datetime import date, datetime, time
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import StringIO
 from html import escape
 from pathlib import Path
@@ -11,6 +14,97 @@ from app.core.config import get_settings
 from app.models.documents import DocumentRef, ParsedBlock, ParsedDocument, ParsedSection
 from app.parsers.assets import AssetStore
 from app.parsers.common import assets_for, finish_document
+
+
+def _display_value(cell) -> str:
+    """保留公式；按常见 Excel 显示格式输出值，不模拟公式或猜测复杂格式。"""
+    value = cell.value
+    if value is None:
+        return ""
+    if cell.data_type == "f":
+        return "[公式，未计算] " + str(value)
+    fmt = cell.number_format
+    if isinstance(value, (datetime, date, time)):
+        # 仅处理明确的年月日/时分秒格式。区域、星期、条件和累计时长等
+        # 复杂格式保持原值，避免为了排版改变日期含义。
+        tokens = re.findall(r'"[^"]*"|[ymdhs]+|[-/: .年月日时分秒]', fmt, re.I)
+        if "".join(tokens) == fmt and tokens:
+            result = []
+            fields = [t.lower() for t in tokens if t[0].lower() in "ymdhs"]
+            index = 0
+            for token in tokens:
+                if token.startswith('"'):
+                    result.append(token[1:-1])
+                elif token.lower() in fields:
+                    token = token.lower()
+                    previous = fields[index - 1][0] if index else ""
+                    following = fields[index + 1][0] if index + 1 < len(fields) else ""
+                    index += 1
+                    if token[0] == "m":
+                        field = "minute" if previous == "h" or following == "s" else "month"
+                    else:
+                        field = {"y": "year", "d": "day", "h": "hour", "s": "second"}[token[0]]
+                    if not hasattr(value, field) or len(token) > (4 if field == "year" else 2):
+                        return str(value)
+                    number = getattr(value, field)
+                    if token == "yy":
+                        number %= 100
+                    result.append(str(number).zfill(len(token)))
+                else:
+                    result.append(token)
+            return "".join(result)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        number = re.fullmatch(r"(#,##)?(0+)(?:\.(0+))?(%)?", fmt)
+        if number:
+            comma, zeros, decimals, percent = number.groups()
+            try:
+                scaled = Decimal(str(value)) * (100 if percent else 1)
+                rounded = scaled.quantize(Decimal(1).scaleb(-len(decimals or "")), rounding=ROUND_HALF_UP)
+                rendered = format(rounded, ",f" if comma else "f")
+            except InvalidOperation:
+                return str(value)
+            if not comma:
+                sign = "-" if rendered.startswith("-") else ""
+                length = len(zeros) + (len(decimals) + 1 if decimals else 0)
+                rendered = sign + rendered.lstrip("-").zfill(length)
+            return rendered + ("%" if percent else "")
+    return str(value)
+
+
+def _header_rows(sheet, covered) -> set[int]:
+    """仅采信表格开头清晰的加粗列名带，不把首个非空行强认作表头。"""
+    headers = set()
+    preceding_dense = False
+    for row in sheet.iter_rows():
+        cells = [c for c in row if (c.row, c.column) not in covered and c.value is not None]
+        if not cells:
+            if headers:
+                break
+            preceding_dense = False
+            continue
+        is_header = (
+            len(cells) >= 2
+            and all(isinstance(c.value, str) and c.data_type != "f" and c.font.bold for c in cells)
+        )
+        if is_header:
+            if preceding_dense and not headers:
+                break
+            headers.add(row[0].row)
+        elif headers or any(not isinstance(c.value, str) or c.data_type == "f" for c in cells):
+            break
+        else:
+            preceding_dense = len(cells) >= max(2, sheet.max_column * 0.65)
+    return headers
+
+
+def _column_widths(sheet) -> list[float]:
+    widths = [sheet.sheet_format.defaultColWidth or 8.43] * sheet.max_column
+    # 列分组可能只在首列登记 min/max，不能靠访问 column_dimensions 新建默认项。
+    for dimension in sheet.column_dimensions.values():
+        for column in range(dimension.min or 1, min(dimension.max or 1, sheet.max_column) + 1):
+            if dimension.width and dimension.width > 0:
+                widths[column - 1] = dimension.width
+    return widths
 
 
 def _section_id(file_id: str, sheet_name: str) -> str:
@@ -57,6 +151,7 @@ class XlsxParser:
                         for c in range(region.min_col, region.max_col + 1)
                         if (r, c) != (region.min_row, region.min_col)
                     )
+                headers = _header_rows(sheet, covered)
                 rows = []
                 for row in sheet.iter_rows():
                     cells = []
@@ -64,20 +159,30 @@ class XlsxParser:
                         if (cell.row, cell.column) in covered:
                             continue
                         rs, cs = merges.get((cell.row, cell.column), (1, 1))
-                        value = "" if cell.value is None else str(cell.value)
-                        if cell.data_type == "f":
-                            value = "[公式，未计算] " + value
+                        value = _display_value(cell)
+                        tag = "th" if cell.row in headers else "td"
+                        # 原值/格式随解析快照保留，显示格式（如百分比、日期）不丢精度依据。
+                        display = ""
+                        if cell.value is not None and value != str(cell.value) and cell.data_type != "f":
+                            display = (
+                                f' data-raw-value="{escape(str(cell.value), quote=True)}"'
+                                f' data-number-format="{escape(cell.number_format, quote=True)}"'
+                            )
                         cells.append(
-                            f'<td rowspan="{rs}" colspan="{cs}">{escape(value)}</td>'
+                            f'<{tag} rowspan="{rs}" colspan="{cs}"{display}>{escape(value)}</{tag}>'
                         )
-                    rows.append("<tr>" + "".join(cells) + "</tr>")
+                    rows.append(f'<tr data-source-row="{row[0].row}">' + "".join(cells) + "</tr>")
                 if any(
                     cell.value is not None for row in sheet.iter_rows() for cell in row
                 ):
                     blocks.append(
                         ParsedBlock(
                             kind="table",
-                            content="<table>\n" + "\n".join(rows) + "\n</table>",
+                            content=(
+                                '<table data-origin="worksheet">\n<colgroup>'
+                                + "".join(f'<col data-width="{w:.2f}">' for w in _column_widths(sheet))
+                                + "</colgroup>\n" + "\n".join(rows) + "\n</table>"
+                            ),
                             source_block_index=0,
                         )
                     )

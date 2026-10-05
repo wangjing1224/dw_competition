@@ -447,6 +447,117 @@ def test_excerpt_table_with_blank_lines_and_invalid_span_keeps_text():
     assert "&lt;table" not in document.element.xml
 
 
+def test_worksheet_excerpt_removes_preamble_and_repeats_real_header_only():
+    from app.reports.word_markdown import render_markdown
+
+    doc = Document()
+    render_markdown(doc, (
+        '<table data-origin="worksheet"><colgroup><col data-width="8">'
+        '<col data-width="24"></colgroup>'
+        '<tr><td></td><td></td></tr>'
+        '<tr><td colspan="2">复检页明细</td></tr>'
+        '<tr><td>供应商</td><td>演练包</td></tr>'
+        '<tr><td></td><td></td></tr>'
+        '<tr><th>序号</th><th>说明</th></tr>'
+        '<tr><td>1</td><td>复检</td></tr>'
+        '<tr><td></td><td></td></tr>'  # 内部空数据行，不擅自删除。
+        '<tr><td>2</td><td></td></tr>'
+        '<tr><td></td><td></td></tr></table>'
+    ))
+    assert [p.text for p in doc.paragraphs] == ["复检页明细", "供应商 · 演练包"]
+    table = doc.tables[0]
+    assert len(table.rows) == 4
+    assert [c.text for c in table.rows[0].cells] == ["序号", "说明"]
+    assert [i for i, r in enumerate(table.rows) if r._tr.xpath("./w:trPr/w:tblHeader")] == [0]
+    assert [c.text for c in table.rows[2].cells] == ["", ""]
+    assert table.cell(3, 0).text == "2" and table.cell(3, 1).text == ""
+    widths = [int(c.get(qn("w:w"))) for c in table._tbl.tblGrid]
+    assert widths[1] > widths[0]
+
+
+def test_blank_rows_inside_vertical_merge_are_never_trimmed():
+    from app.reports.word_markdown import render_markdown
+
+    doc = Document()
+    render_markdown(doc, (
+        '<table><tr><th rowspan="2">类别</th><th>上层表头</th></tr>'
+        '<tr><th>下层表头</th></tr>'
+        '<tr><td rowspan="3">合并内容</td><td>开始</td></tr>'
+        '<tr><td></td></tr><tr><td></td></tr></table>'
+    ))
+    table = doc.tables[0]
+    assert len(table.rows) == 5
+    assert table.cell(2, 0)._tc is table.cell(4, 0)._tc
+    assert [i for i, r in enumerate(table.rows) if r._tr.xpath("./w:trPr/w:tblHeader")] == [0, 1]
+
+
+def test_unknown_table_does_not_treat_first_data_row_as_header():
+    from app.reports.word_markdown import render_markdown
+
+    doc = Document()
+    render_markdown(doc, '<table><tr><td></td><td></td></tr>'
+        '<tr><td>张三</td><td>负责人</td></tr><tr><td>李四</td><td>成员</td></tr></table>')
+    assert len(doc.tables[0].rows) == 2
+    assert not doc.tables[0]._tbl.xpath(".//w:tblHeader")
+
+
+@pytest.mark.parametrize("after", ["", "\n\n后续正文"])
+def test_wide_excerpt_uses_landscape_and_restores_portrait_when_needed(tmp_path, after):
+    from docx.enum.section import WD_ORIENT
+    from app.reports.styles import apply_document_styles
+    from app.reports.word_markdown import render_markdown
+
+    doc = Document()
+    apply_document_styles(doc)
+    html = '<table><tr>' + ''.join(f'<th>列{i}</th>' for i in range(11)) + '</tr><tr>'
+    html += ''.join(f'<td>值{i}</td>' for i in range(11)) + '</tr></table>'
+    render_markdown(doc, '报告正文\n\n**资料解析原文摘录**\n\n来源.xlsx\n\n> ' + html + after)
+    path = tmp_path / 'wide.docx'
+    doc.save(path)
+    doc = Document(path)
+    assert len(doc.sections) == (3 if after else 2)  # 不在结尾强行恢复并多出空页。
+    assert doc.sections[0].orientation == WD_ORIENT.PORTRAIT
+    landscape = doc.sections[1]
+    assert landscape.orientation == WD_ORIENT.LANDSCAPE
+    assert landscape.page_width > landscape.page_height
+    expected = int((landscape.page_width - landscape.left_margin - landscape.right_margin) / 635) - 120
+    assert sum(int(c.get(qn('w:w'))) for c in doc.tables[0]._tbl.tblGrid) == expected
+    assert expected > 9360
+    if after:
+        assert doc.sections[-1].orientation == WD_ORIENT.PORTRAIT
+    # 来源标题必须在第一个节分隔符之后，即和宽表一起进入横向页。
+    xml = doc._element.xml
+    assert xml.index('w:sectPr') < xml.index('资料解析原文摘录') < xml.index('来源.xlsx')
+
+
+def test_adjacent_wide_excerpts_share_section_without_blank_pages():
+    from docx.enum.section import WD_ORIENT
+    from app.reports.word_markdown import render_markdown
+
+    doc = Document()
+    table = '<table><tr>' + ''.join(f'<th>列{i}</th>' for i in range(10)) + '</tr></table>'
+    render_markdown(doc, '**原文摘录**\n\n来源一\n\n> ' + table
+        + '\n\n**原文摘录**\n\n来源二\n\n> ' + table
+        + '\n\n**原文摘录**\n\n来源三\n\n> <table><tr><th>列名</th></tr><tr><td>正文</td></tr></table>')
+    assert len(doc.sections) == 2
+    assert doc.sections[0].orientation == WD_ORIENT.LANDSCAPE
+    assert doc.sections[1].orientation == WD_ORIENT.PORTRAIT
+    assert all(p.paragraph_format.keep_with_next for p in doc.paragraphs if p.text.startswith("来源"))
+    xml = doc._element.xml
+    assert xml.index('来源二') < xml.index('w:sectPr') < xml.index('来源三')
+
+
+@pytest.mark.parametrize("width", ["nan", "inf", "-1", "broken", "1e308"])
+def test_invalid_column_width_metadata_falls_back_without_losing_cells(width):
+    from app.reports.word_markdown import render_markdown
+
+    doc = Document()
+    render_markdown(doc, f'<table><colgroup><col data-width="{width}"/></colgroup>'
+        '<tr><td>原文</td></tr></table>')
+    assert doc.tables[0].cell(0, 0).text == "原文"
+    assert sum(int(c.get(qn('w:w'))) for c in doc.tables[0]._tbl.tblGrid) > 0
+
+
 def test_image_reference_without_quote_does_not_invent_ocr_or_page():
     from app.models.documents import ParsedImage
 

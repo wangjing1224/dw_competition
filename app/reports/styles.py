@@ -133,18 +133,18 @@ def set_cell_margins(cell, *, top=100, start=120, bottom=100, end=120) -> None:
         node.set(qn("w:type"), "dxa")
 
 
-def set_table_geometry(table, widths: list[int]) -> None:
+def set_table_geometry(table, widths: list[int], *, total_width: int = TABLE_WIDTH_DXA) -> None:
     """显式设置 tblW、tblInd、tblGrid 和每个 tcW。"""
 
-    if sum(widths) != TABLE_WIDTH_DXA:
-        raise ValueError("Word 表格列宽之和必须等于 9360 DXA")
+    if sum(widths) != total_width or any(width <= 0 for width in widths):
+        raise ValueError("Word 表格列宽之和必须等于当前版心宽度，且各列宽为正")
     table.autofit = False
     tbl_pr = table._tbl.tblPr
     tbl_w = tbl_pr.first_child_found_in("w:tblW")
     if tbl_w is None:
         tbl_w = OxmlElement("w:tblW")
         tbl_pr.append(tbl_w)
-    tbl_w.set(qn("w:w"), str(TABLE_WIDTH_DXA))
+    tbl_w.set(qn("w:w"), str(total_width))
     tbl_w.set(qn("w:type"), "dxa")
     tbl_ind = tbl_pr.first_child_found_in("w:tblInd")
     if tbl_ind is None:
@@ -152,6 +152,18 @@ def set_table_geometry(table, widths: list[int]) -> None:
         tbl_pr.append(tbl_ind)
     tbl_ind.set(qn("w:w"), str(TABLE_INDENT_DXA))
     tbl_ind.set(qn("w:type"), "dxa")
+    borders = tbl_pr.find(qn("w:tblBorders"))
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        tbl_pr.append(borders)
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = borders.find(qn(f"w:{side}"))
+        if border is None:
+            border = OxmlElement(f"w:{side}")
+            borders.append(border)
+        border.set(qn("w:val"), "single")
+        border.set(qn("w:sz"), "4")
+        border.set(qn("w:color"), "D9D9D9")
 
     grid = table._tbl.tblGrid
     for child in list(grid):
