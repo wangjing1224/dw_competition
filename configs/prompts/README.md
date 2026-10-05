@@ -30,8 +30,6 @@
 | `parser_table_merge.md` | 无；System跨页续表合并要求 | `app/parsers/vision.py`，直接读取全文 |
 | `audit_report_template.md` | 无；主Agent System中的报告模板片段 | 审核任务固定快照，经 `app/agents/bid_agent.py` 注入 |
 | `tool_descriptions.yaml::search_documents` | `${candidate_top_k}`、`${final_top_k}` | `app/tools/common_tools.py` 创建工具时，用该会话检索配置单独渲染 |
-| `evidence_classification.md` | `${evidence_types}`、`${evidence_classification_schema}` | `app/evidence/classifier.py`，旧单次分类入口，当前资料入库Agent不调用 |
-| `evidence_classification_input.md` | `${classification_input}` | 同上，旧入口Human模板，保留供参考/契约测试 |
 
 ### 占位符类型、来源和空值约定
 
@@ -64,9 +62,6 @@
 | `missing` | str，报告草稿检查发现的缺项或校验错误，经 `app/audit/session.py` 拼接 | 无则代码传“无”，不是让模型杜撰遗漏 |
 | `candidate_top_k` | int，`settings.retrieval.candidate_top_k`；每 query、每 scope 内向量和关键词各自的初始候选上限，两路融合后可能更多 | 由配置提供，不是工具参数 |
 | `final_top_k` | int，`settings.retrieval.final_top_k`；每 query、每 scope 的 Rerank top_n／最终命中上限，不是全组或全调用总上限 | 由配置提供，不是工具参数 |
-| `evidence_types` | list[str]，旧分类入口的 `EvidenceType` 枚举值 | 由代码完整提供，渲染为JSON列表 |
-| `evidence_classification_schema` | dict，旧 `EvidenceClassification` 的JSON Schema | 由代码提供，旧入口与当前双摘要库不是同一协议 |
-| `classification_input` | dict，旧分类入口的文件名/相对目录/前20个标题/正文前4000与后2000字符/解析状态/图片数/警告 | 尾部短时为空，标题/警告可空列表；这是旧入口的裁剪，不是当前入库Agent策略 |
 
 ### 特殊模板的消息组织
 
@@ -76,7 +71,9 @@
   不改写规则/资料库；续跑的业务适配器负责读取最新状态、重新组织System与当前阅读范围。
 - 两份`parser_*.md`：无业务占位符，视觉模块直接读文件，Human另外附图片上下文/相邻原文与多模态图片。
   转写输出与 `ImageReading`、续表合并结果校验配套；不是业务Agent的`view_image`工具说明。
-- `evidence_classification*.md`：保留的旧入口模板，不代表当前资料入库仍调用它；不要在这里修改后期待资料Agent行为改变。
+
+资料入库使用`evidence_ingestion*.md`，资料核验使用`evidence_subagent*.md`。
+模型配置仍沿用`evidence_classification_model`及相应环境变量名称，它们供当前入库Agent使用，不代表存在独立分类步骤。
 
 ## 工具说明配置
 

@@ -66,7 +66,11 @@ def test_every_prompt_file_and_placeholder_is_documented():
 
 
 def test_settings_load_yaml_and_environment(monkeypatch):
-    monkeypatch.setenv("BID_CHAT_MODEL_API_KEY", "test-secret")
+    raw = yaml.safe_load(
+        (config.PROJECT_ROOT / "configs/model.yaml").read_text("utf-8")
+    )
+    key_variable = raw["bid_chat_model"]["api_key"].removeprefix("${").removesuffix("}")
+    monkeypatch.setenv(key_variable, "test-secret")
     get_settings.cache_clear()
 
     settings = get_settings()
@@ -168,6 +172,21 @@ def test_rule_limit_requires_positive_integer(limit):
 
 
 def test_parser_vision_has_independent_environment(monkeypatch):
+    original_load = config._load_yaml
+
+    def load_yaml(path):
+        value = original_load(path)
+        if path.name == "model.yaml":
+            value["parser_vision_model"].update(
+                base_url="${PARSER_VISION_MODEL_BASE_URL}",
+                api_key="${PARSER_VISION_MODEL_API_KEY}",
+                model="${PARSER_VISION_MODEL_NAME}",
+            )
+            value["bid_chat_model"]["api_key"] = "${BID_CHAT_MODEL_API_KEY}"
+            value["parsing"]["vision_enabled"] = False
+        return value
+
+    monkeypatch.setattr(config, "_load_yaml", load_yaml)
     monkeypatch.setenv("PARSER_VISION_MODEL_BASE_URL", "https://vision.example/v1")
     monkeypatch.setenv("PARSER_VISION_MODEL_API_KEY", "vision-secret")
     monkeypatch.setenv("PARSER_VISION_MODEL_NAME", "gateway-vision-id")
@@ -179,6 +198,35 @@ def test_parser_vision_has_independent_environment(monkeypatch):
     assert settings.bid_chat_model.api_key.get_secret_value() == "agent-secret"
     assert not settings.parsing.vision_enabled
     assert "vision-secret" not in repr(settings)
+
+
+def test_current_six_chat_roles_use_bailian_without_replacing_legacy_keys(monkeypatch):
+    from app.llm.model_capabilities import get_model_capabilities
+
+    monkeypatch.setenv("BAILIAN_CHAT_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    monkeypatch.setenv("BAILIAN_CHAT_API_KEY", "bailian-test-key")
+    monkeypatch.setenv("BID_CHAT_MODEL_API_KEY", "legacy-ds-test-key")
+    settings = get_settings()
+    for role in (
+        "rule_extraction_model",
+        "evidence_classification_model",
+        "bid_summary_model",
+        "bid_chat_model",
+        "evidence_chat_model",
+        "parser_vision_model",
+    ):
+        model = getattr(settings, role)
+        assert model.platform == "bailian"
+        assert model.model == "deepseek-v4.1-flash"
+        assert model.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        assert model.api_key.get_secret_value() == "bailian-test-key"
+        assert not model.enable_thinking
+        if model.context_window_tokens is not None:
+            caps = get_model_capabilities(model)
+            assert caps.max_context_tokens == 1_000_000
+            assert caps.max_output_tokens == 393_216
+            assert caps.image_tokens_per_image == 1024
+    assert settings.parser_vision_model.max_output_tokens == 16384
 
 
 @pytest.mark.parametrize("platform", ["scnet", "unknown", None])

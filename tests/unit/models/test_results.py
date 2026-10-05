@@ -18,6 +18,24 @@ def test_only_three_rule_conclusions_and_file_applicability_remain():
             enum("risk")
 
 
+def test_exported_schemas_only_include_current_contracts(tmp_path):
+    import json
+
+    from app.models.schema_export import export_schemas
+
+    paths = export_schemas(tmp_path)
+    assert {path.name for path in paths} == {
+        "rule_set.schema.json",
+        "report_decision.schema.json",
+        "evidence_library.schema.json",
+        "bid_route.schema.json",
+        "audit_result.schema.json",
+    }
+    schemas = {path.name: json.loads(path.read_text("utf-8")) for path in paths}
+    assert schemas["evidence_library.schema.json"] == EvidenceLibrary.model_json_schema()
+    assert schemas["audit_result.schema.json"] == AuditResult.model_json_schema()
+
+
 def test_duplicate_file_result_is_rejected():
     document = DocumentRef(
         file_id="file-1",

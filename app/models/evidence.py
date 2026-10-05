@@ -1,14 +1,10 @@
-"""独立资料库及入库模型；保留旧分类辅助函数使用的 DTO。审核子 Agent 直接返回正文。"""
+"""独立资料库及入库模型。审核子 Agent 直接返回正文。"""
 
 from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints, model_validator
 
-from app.models.common import (
-    ClassificationStatus,
-    EvidenceType,
-    StrictModel,
-)
+from app.models.common import StrictModel
 
 MaterialText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -96,24 +92,3 @@ class EvidenceIngestionProgress(StrictModel):
     compaction_records: list[dict] = Field(default_factory=list)
     error: str | None = None
     unresolved_write_error: str | None = None
-
-
-class EvidenceClassification(StrictModel):
-    evidence_type: EvidenceType
-    classification_status: ClassificationStatus
-    reason: str = Field(min_length=2, max_length=500)
-    bid_summary: str = Field(min_length=2, max_length=500)
-    evidence_summary: str = Field(min_length=2, max_length=2000)
-
-
-class EvidenceClassificationRecord(EvidenceClassification):
-    """代码补充文件 ID 后保存到最终结果，不进入主 Agent 输入。"""
-
-    file_id: str
-    file_name: str
-
-
-class EvidenceCatalogItem(StrictModel):
-    file_id: str
-    status: ClassificationStatus
-    summary: str

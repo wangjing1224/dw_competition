@@ -40,6 +40,7 @@ def test_audit_factory_only_constructs_audit_roles(monkeypatch, temp_settings):
     [
         ("deepseek", "deepseek-v4-flash", "max_tokens"),
         ("bailian", "qwen3.6-plus", "max_completion_tokens"),
+        ("bailian", "deepseek-v4.1-flash", "max_completion_tokens"),
         ("openai", "gpt-5.1", "max_completion_tokens"),
     ],
 )
@@ -72,10 +73,10 @@ def test_budgeted_and_fixed_requests_use_platform_parameters(
             "thinking": {"type": "enabled" if thinking else "disabled"}
         }
     elif platform == "bailian":
-        assert payload["extra_body"] == {
-            "enable_thinking": thinking,
-            "preserve_thinking": thinking,
-        }
+        expected = {"enable_thinking": thinking}
+        if model_name == "qwen3.6-plus":
+            expected["preserve_thinking"] = thinking
+        assert payload["extra_body"] == expected
         assert real.streaming == thinking
     else:
         assert payload.get("extra_body") is None
@@ -112,6 +113,7 @@ def test_openai_non_reasoning_and_unsupported_toggle(temp_settings):
     [
         ("deepseek", "deepseek-v4-flash"),
         ("bailian", "qwen3.6-plus"),
+        ("bailian", "deepseek-v4.1-flash"),
         ("openai", "gpt-5.1"),
     ],
 )
@@ -225,7 +227,7 @@ async def test_real_http_serialization_and_reasoning_replay(
             assert requests[1]["tools"] == context.bindings["tools"]
             replayed = requests[1]["messages"][-2]
             assert ("reasoning_content" in replayed) == (
-                thinking and platform != "openai"
+                thinking and (platform == "deepseek" or model_name == "qwen3.6-plus")
             )
             if platform == "deepseek":
                 assert requests[1]["thinking"]["type"] == (
@@ -240,6 +242,10 @@ async def test_real_http_serialization_and_reasoning_replay(
                     requests[1]["max_completion_tokens"] == cfg.max_output_tokens
                     and "thinking" not in requests[1]
                 )
+                if platform == "bailian" and model_name == "deepseek-v4.1-flash":
+                    assert requests[1]["model"] == "deepseek-v4.1-flash"
+                    assert requests[1]["enable_thinking"] == thinking
+                    assert "preserve_thinking" not in requests[1]
             await model.ainvoke(messages)
             final_context = InputContext(
                 tuple(messages), protocol=ChatProtocol.from_settings(cfg)

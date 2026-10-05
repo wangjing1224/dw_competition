@@ -1,6 +1,6 @@
 # 修改后重启服务；所有 ${NAME} 都从环境变量或根目录 .env 读取，环境变量优先。
 # 不支持局部字符串插值；API Key 不要直接写在 YAML。缺失字段或未知字段会校验失败。
-# Chat 通用字段（下面六个模型块同义，不同角色连接信息相互独立）：
+# Chat 通用字段（下面六个模型块同义，可分别配置连接；当前共用百炼连接）：
 # platform：必填 deepseek / bailian / openai，选择协议而非 tokenizer。
 # base_url/api_key：必填连接地址/密钥；URL 不加 /chat/completions。
 # model：必填服务端模型 ID；平台、URL、Key、ID 必须匹配。
@@ -38,14 +38,17 @@ audit:
 rule_limit: 10000
 
 # 招标规则抽取 Agent：按需检索、看图，以工具增量保存 RuleSet。
+# 六类 Chat 当前使用百炼 deepseek-v4.1-flash；原 DS 官方环境变量保留作切回备用。
+# 切回时将 platform 改为 deepseek、model 改为 deepseek-flash，
+# URL/Key 恢复各角色原有的 *_MODEL_BASE_URL / *_MODEL_API_KEY 引用。
 rule_extraction_model:
   # 平台协议显式选择：deepseek（官方）、bailian（百炼兼容接口）、openai（官方）。
   # 切换时同步修改 platform/model 和 .env 中的 URL/Key；tokenizer 独立选择。
-  platform: deepseek
-  base_url: ${RULE_EXTRACTION_MODEL_BASE_URL}
-  api_key: ${RULE_EXTRACTION_MODEL_API_KEY}
-  # DeepSeek 官方模型 ID。
-  model: deepseek-v4-flash
+  platform: bailian
+  base_url: ${BAILIAN_CHAT_BASE_URL}
+  api_key: ${BAILIAN_CHAT_API_KEY}
+  # 百炼阿里云直供模型 ID，不使用 DS 官方的 deepseek-flash 别名。
+  model: deepseek-v4.1-flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -58,12 +61,12 @@ rule_extraction_model:
   # 保留通用模型配置；规则 Agent 不调用一次性结构化抽取接口。
   structured_output_mode: prompt_only
 
-# 资料入库 Agent：沿用配置名称和 Key，产出文件双摘要及跨文件关联。
+# 资料入库 Agent：沿用配置名称，产出文件双摘要及跨文件关联。
 evidence_classification_model:
-  platform: deepseek
-  base_url: ${EVIDENCE_CLASSIFICATION_MODEL_BASE_URL}
-  api_key: ${EVIDENCE_CLASSIFICATION_MODEL_API_KEY}
-  model: deepseek-v4-flash
+  platform: bailian
+  base_url: ${BAILIAN_CHAT_BASE_URL}
+  api_key: ${BAILIAN_CHAT_API_KEY}
+  model: deepseek-v4.1-flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -75,11 +78,11 @@ evidence_classification_model:
 
 # 项目相关性路由模型：仅输出状态和理由，不生成投标摘要。
 bid_summary_model:
-  platform: deepseek
-  # 独立配置 URL 和 Key，允许与主审核 Agent 分别切换模型服务或账号。
-  base_url: ${BID_SUMMARY_MODEL_BASE_URL}
-  api_key: ${BID_SUMMARY_MODEL_API_KEY}
-  model: deepseek-v4-flash
+  platform: bailian
+  # 当前共用百炼连接；仍可单独改为其他角色连接变量。
+  base_url: ${BAILIAN_CHAT_BASE_URL}
+  api_key: ${BAILIAN_CHAT_API_KEY}
+  model: deepseek-v4.1-flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -91,10 +94,10 @@ bid_summary_model:
 
 # 主审核 Agent 模型：一次审核当前投标文件的全部最终规则并按需调用工具。
 bid_chat_model:
-  platform: deepseek
-  base_url: ${BID_CHAT_MODEL_BASE_URL}
-  api_key: ${BID_CHAT_MODEL_API_KEY}
-  model: deepseek-v4-flash
+  platform: bailian
+  base_url: ${BAILIAN_CHAT_BASE_URL}
+  api_key: ${BAILIAN_CHAT_API_KEY}
+  model: deepseek-v4.1-flash
   temperature: 0.2
   timeout_seconds: 120
   max_retries: 2
@@ -106,10 +109,10 @@ bid_chat_model:
 
 # 资料核验子 Agent 模型：针对主 Agent 派发的任务核验资料，轮数由 audit.evidence_agent_max_steps 配置。
 evidence_chat_model:
-  platform: deepseek
-  base_url: ${EVIDENCE_CHAT_MODEL_BASE_URL}
-  api_key: ${EVIDENCE_CHAT_MODEL_API_KEY}
-  model: deepseek-v4-flash
+  platform: bailian
+  base_url: ${BAILIAN_CHAT_BASE_URL}
+  api_key: ${BAILIAN_CHAT_API_KEY}
+  model: deepseek-v4.1-flash
   temperature: 0.1
   timeout_seconds: 120
   max_retries: 2
@@ -121,11 +124,11 @@ evidence_chat_model:
 
 # 公共解析阶段的视觉辅助；不是 view_image 工具或业务 Agent 的模型配置。
 parser_vision_model:
-  platform: deepseek
-  base_url: ${PARSER_VISION_MODEL_BASE_URL}
-  api_key: ${PARSER_VISION_MODEL_API_KEY}
-  # 必须填写实际网关暴露的多模态模型 ID，不猜测服务端名称。
-  model: ${PARSER_VISION_MODEL_NAME}
+  platform: bailian
+  base_url: ${BAILIAN_CHAT_BASE_URL}
+  api_key: ${BAILIAN_CHAT_API_KEY}
+  # 此型号支持图片；原 PARSER_VISION_MODEL_* 环境配置保留，切回时恢复引用。
+  model: deepseek-v4.1-flash
   temperature: 0
   timeout_seconds: 120
   max_retries: 2
@@ -136,7 +139,7 @@ parser_vision_model:
 
 parsing:
   # bool，默认false；prepare_document调用方显式参数优先；开启须配置独立视觉模型。
-  vision_enabled: false
+  vision_enabled: true
   # 单张原始图片字节/像素资源上限，正整数（默认20MB十进制 / 4000万像素）。
   max_image_bytes: 20000000
   max_image_pixels: 40000000

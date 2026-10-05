@@ -162,3 +162,65 @@ def test_incremental_report_guidance_preserves_dependencies_and_fixed_round_limi
     assert "先返回“当前草稿状态”" in description
     assert "状态首部与分隔文字不属于草稿" in description
     assert "不返回变更正文" in description
+
+
+def test_evidence_delegation_separates_criteria_claims_and_verified_facts():
+    prompt = render_prompt(
+        "bid_agent", rule_view="当前规则", report_markdown_contract="报告契约"
+    )
+    for heading in (
+        "【核验目标】", "【已确定的适用标准】", "【待核声明】",
+        "【已有已核事实】", "【必须返回的事实】",
+    ):
+        assert prompt.count(heading) == 1
+    assert "不增加工具参数" in prompt
+    assert "不以规则ID代替标准正文" in prompt
+    assert "申报值、目录或入库摘要不冒充已核事实" in prompt
+    assert "明确反证不能被一般承诺" in prompt
+    assert "不要求每条规则单独委派" in prompt
+
+
+def test_evidence_handoff_preserves_message_shape_variables_and_scope():
+    from string import Template
+
+    from app.agents.evidence_subagent import build_evidence_messages
+    from app.prompts.loader import load_prompt
+    from app.tools.bid_tools import EvidenceCheck
+
+    check = EvidenceCheck(
+        rule_id="rule-internal-only",
+        verification_request="【已确定的适用标准】按给定公式比对。\n【待核声明】${literal}",
+        file_ids=["file-a"],
+    )
+    messages = build_evidence_messages(
+        check, ["file-a", "file-b"], "已授权的一层关联", "详细摘要数据", "既有交接内容"
+    )
+    assert [message.type for message in messages] == ["system", "human"]
+    human = messages[1].content
+    assert check.verification_request in human  # 任务正文原样插入，不递归解释占位符。
+    assert "rule-internal-only" not in human
+    assert "声明为待核事实" not in human
+    assert "适用标准、待核声明与已核事实分别列示" in human
+    for value in ("file-a", "已授权的一层关联", "详细摘要数据", "既有交接内容"):
+        assert value in human
+    assert set(Template(load_prompt("evidence_subagent_input")).get_identifiers()) == {
+        "verification_request", "file_ids", "relations", "evidence_files", "continuation"
+    }
+    assert set(EvidenceCheck.model_json_schema()["properties"]) == {
+        "rule_id", "verification_request", "file_ids"
+    }
+
+
+def test_evidence_response_keeps_decisive_values_sources_and_boundaries():
+    prompt = render_prompt("evidence_subagent")
+    assert "不要求供应商附件再次记载、签认或证明该标准" in prompt
+    assert "不自行补造替代公式或额外审批条件" in prompt
+    assert "说明应由主审补充的具体项" in prompt
+    assert "承接主审已有已核事实时标明其为主审提供" in prompt
+    assert "原文值或短原句" in prompt
+    assert "逐项保留决定性值及相反值" in prompt
+    assert "正文开头的支持情况须与后面的事实一致" in prompt
+    assert "没有读到的值明确说明，不按摘要补写" in prompt
+    assert "完整 chunk_id" in prompt and "版本后缀" in prompt
+    assert "主 Agent 收到的是你的正文" in prompt
+    assert "不要输出 JSON、content 外壳、状态枚举或来源数组" in prompt

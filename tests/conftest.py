@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from app.core.config import get_settings
 
@@ -20,11 +21,30 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 @pytest.fixture
 def temp_settings(tmp_path: Path):
-    """返回数据目录指向临时路径的完整配置，避免测试污染项目 data。"""
+    """隔离数据目录与 Mock 模型协议，不让本地部署切换改变测试基线。"""
 
     settings = get_settings()
+    mock_models = {
+        role: getattr(settings, role).model_copy(
+            update={
+                "platform": "deepseek",
+                "base_url": "https://api.deepseek.com",
+                "api_key": SecretStr("test-key"),
+                "model": "deepseek-v4-flash",
+            }
+        )
+        for role in (
+            "rule_extraction_model",
+            "evidence_classification_model",
+            "bid_summary_model",
+            "bid_chat_model",
+            "evidence_chat_model",
+            "parser_vision_model",
+        )
+    }
     return settings.model_copy(
         update={
+            **mock_models,
             "storage": settings.storage.model_copy(
                 update={
                     "data_root": tmp_path / "data",

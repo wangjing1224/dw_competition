@@ -25,7 +25,7 @@ SERVICE_CAPABILITIES = {
     )
     for model in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp")
 }
-# 文本预算能力；其他平台视觉上界尚未标定，遇到图片会明确阻塞而非套用 DS 的 1024。
+# 以下 OpenAI/Qwen 登记文本预算能力；未标定视觉上界的型号遇到图片会明确阻塞。
 # https://developers.openai.com/api/docs/models/gpt-5.1
 SERVICE_CAPABILITIES.update(
     {
@@ -53,6 +53,21 @@ SERVICE_CAPABILITIES.update(
             ("qwen-plus", 32768, 995904),
         )
     }
+)
+
+
+# 2026-10-05：百炼阿里云直供 V4.1 Flash，北京兼容接口；不是 vanchin/ 等三方直供。
+# 上下文/输出/输入模式：https://www.alibabacloud.com/help/en/model-studio/deepseek-v4-1-flash
+# 图像本地预算按原模型公开的单图 1024 token 上界估算，不冒充百炼计费实测；
+# https://api-docs.deepseek.com/guides/vision/ 。后续仍由完整 prompt_tokens 校准。
+SERVICE_CAPABILITIES[
+    (
+        "bailian",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "deepseek-v4.1-flash",
+    )
+] = ModelCapabilities(
+    1_000_000, 393_216, 1024, True, max_input_tokens=1_000_000
 )
 
 
