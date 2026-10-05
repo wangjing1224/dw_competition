@@ -370,6 +370,21 @@ unzip -n /tmp/deepseek_v4_tokenizer.zip 'deepseek_v4_tokenizer/tokenizer*.json' 
 旧 `content/tables` 字段由新结构派生以兼容现有调用；早期无图片引用的旧 JSON 可以读取，但无法恢复
 历史丢失的图片和原始交错顺序，需要重新解析。复杂表格使用 HTML 保留行列合并。
 
+DOCX 的 OLE/Package 嵌入附件按实际内容识别，不按 `.bin` 后缀猜格式；支持递归读取
+嵌入的 DOCX、XLSX、旧版 XLS，以及 ZIP/RAR 内的这些文件。附件在原文位置展开，
+章节保留父文件、附件和工作表/章节的来源链，图片与检索仍归属上传的父文件，不新增业务文件 ID。
+只读附件正文，不执行宏、不自动下载外链、不把 OLE 预览图标当正文图片。
+单个附件损坏、加密或格式不支持时，保留明确的未展开说明，继续解析其余正文与附件。
+
+新增 Python 依赖由 `uv sync` 安装；压缩 RAR 还需系统解压器，本机可用 `bsdtar`，
+无 `bsdtar` 时由 `rarfile` 使用其他已安装的解压器（见 [RAR 后端说明](https://rarfile.readthedocs.io/index.html)）。
+`parsing` 下的 `max_embedded_depth`、`max_embedded_files`、`max_embedded_bytes`
+分别限制嵌套层数、展开对象数及累计字节量，
+OLE 包装与压缩容器也计入；这些是异常文件资源保护，不裁剪模型上下文或检索正文，超限会明确提示。
+旧版 XLS 仅支持保存的单元格值和合并区域，不重算公式，也不展开其中的图形或子附件；
+此类能力边界会保留在解析警告中。此变更不新增顶层 `.xls`/压缩包上传入口。
+旧解析快照不会自动补入附件内容，需重新解析；规则、资料摘要及索引也不会自动重建。
+
 产物位于 `data/parsed/{file_id}.json` 和 `data/parsed/{file_id}/`：
 
 - `document.md`：文件内的最新 Markdown 副本；直接预览请打开 `data/parsed/{file_id}.md`，其图片链接可按相对路径正常打开。

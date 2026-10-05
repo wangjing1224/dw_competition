@@ -150,6 +150,11 @@ parsing:
   max_pdf_pages: 1000
   # 单工作表检查的单元格规模上限，正整数，默认500000，防止巨型空白范围撑爆内存。
   max_sheet_cells: 500000
+  # 嵌入附件/压缩包的递归深度、成员数量和累计展开字节上限。
+  # 仅防止压缩炸弹与异常递归，不是模型输入/检索的文本裁剪预算；超限明确提示未展开。
+  max_embedded_depth: 8
+  max_embedded_files: 100
+  max_embedded_bytes: 100000000
 
 # 文本向量模型：为规则来源、投标文件和投标方资料生成 Embedding。
 embedding_model:

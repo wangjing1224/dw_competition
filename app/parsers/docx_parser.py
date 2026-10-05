@@ -86,9 +86,14 @@ class DocxParser:
         stored_path: Path,
         *,
         assets: AssetStore | None = None,
+        _embedded=None,
+        _depth=0,
     ) -> ParsedDocument:
         doc = Document(stored_path)
         assets = assets or assets_for(document)
+        from app.parsers.embedded import EmbeddedParser
+
+        embedded = _embedded or EmbeddedParser(document, assets)
         warnings: list[str] = []
         sections: list[ParsedSection] = []
         heading_stack: list[str] = []
@@ -124,7 +129,10 @@ class DocxParser:
                     heading_stack.append(text)
                     current_title = " > ".join(item for item in heading_stack if item)
                     current_index = block_index
-                parts = paragraph_parts(block._element, doc.part, assets, warnings)
+                parts = paragraph_parts(
+                    block._element, doc.part, assets, warnings,
+                    embedded=embedded, depth=_depth,
+                )
                 for kind, value in parts:
                     if kind == "text" and level is None and value.strip():
                         blocks.append(
@@ -142,8 +150,16 @@ class DocxParser:
                                 source_block_index=block_index,
                             )
                         )
+                    elif kind == "embedded":
+                        flush()
+                        for section in value:
+                            section.title = current_title + " > " + section.title
+                            sections.append(section)
             else:
-                html, images = table_to_html(block._tbl, doc.part, assets, warnings)
+                html, images = table_to_html(
+                    block._tbl, doc.part, assets, warnings,
+                    embedded=embedded, depth=_depth,
+                )
                 blocks.append(
                     ParsedBlock(
                         kind="table",
@@ -154,16 +170,42 @@ class DocxParser:
                 )
 
         flush()
+        # 插入附件后同一父段落可能分成多个章节，按最终有序位置生成唯一且稳定的 ID。
+        for index, section in enumerate(sections):
+            section.section_id = stable_section_id(document.file_id, index, section.title)
         return finish_document(document, stored_path, sections, warnings)
 
 
-def paragraph_parts(element, part, assets: AssetStore, warnings: list[str]):
+def paragraph_parts(element, part, assets: AssetStore, warnings: list[str], *, embedded=None, depth=0):
     """读取 run 内的实际次序，涵盖超链接内文字、DrawingML 与旧式 VML 图片。"""
     parts, text = [], []
-    for item in element.iter():
+    def nodes(parent):
+        for item in parent:
+            if item.tag == qn("w:object") and embedded is not None:
+                # OLE 图标只是入口，不作为待 OCR 的正文图重复提取。
+                objects = item.findall(".//{urn:schemas-microsoft-com:office:office}OLEObject")
+                if objects:
+                    yield from objects
+                    continue
+            yield item
+            yield from nodes(item)
+
+    for item in nodes(element):
         local = item.tag.rsplit("}", 1)[-1]
-        if item.tag == qn("w:t"):
-            text.append(item.text or "")
+        if local == "OLEObject" and embedded is not None:
+            if text:
+                parts.append(("text", "".join(text)))
+                text = []
+            parts.append(("embedded", embedded.object(item, part, warnings, depth=depth)))
+        elif item.tag == qn("w:t"):
+            value = item.text or ""
+            run = item.getparent()
+            vertical = run.find("./" + qn("w:rPr") + "/" + qn("w:vertAlign"))
+            if vertical is not None and vertical.get(qn("w:val")) in {"superscript", "subscript"}:
+                # 评分算法中的幂次不能丢成普通相邻字母；不推算或改写原公式。
+                marker = "^" if vertical.get(qn("w:val")) == "superscript" else "_"
+                value = marker + "(" + value + ")"
+            text.append(value)
         elif item.tag in {qn("w:br"), qn("w:cr")}:
             text.append("\n")
         elif item.tag == qn("w:tab"):
@@ -200,7 +242,7 @@ def paragraph_parts(element, part, assets: AssetStore, warnings: list[str]):
     return parts
 
 
-def table_to_html(tbl, part, assets: AssetStore, warnings: list[str]):
+def table_to_html(tbl, part, assets: AssetStore, warnings: list[str], *, embedded=None, depth=0):
     """按 XML 实际单元格恢复横/纵合并；不把首行擅自认作表头。"""
     rows, images, previous = [], [], {}
     for tr in tbl.findall(qn("w:tr")):
@@ -218,15 +260,32 @@ def table_to_html(tbl, part, assets: AssetStore, warnings: list[str]):
             for child in tc:
                 if child.tag == qn("w:p"):
                     paragraph = []
-                    for kind, value in paragraph_parts(child, part, assets, warnings):
+                    for kind, value in paragraph_parts(
+                        child, part, assets, warnings, embedded=embedded, depth=depth
+                    ):
                         if kind == "text":
                             paragraph.append(escape(value).replace("\n", "<br>"))
-                        else:
+                        elif kind == "image":
                             images.append(value)
                             paragraph.append(f'<img src="{value.path}" alt="图片">')
+                        elif kind == "embedded":
+                            for section in value:
+                                paragraph.append(escape(section.title) + "<br>")
+                                for block in section.blocks:
+                                    paragraph.append(
+                                        block.content if block.kind == "table"
+                                        else escape(block.content).replace("\n", "<br>")
+                                    )
+                                    images.extend(block.images)
+                                    for image in block.images:
+                                        if image.path not in block.content:
+                                            paragraph.append(f'<img src="{image.path}" alt="图片">')
+                                    paragraph.append("<br>")
                     parts.append("".join(paragraph))
                 elif child.tag == qn("w:tbl"):
-                    nested, nested_images = table_to_html(child, part, assets, warnings)
+                    nested, nested_images = table_to_html(
+                        child, part, assets, warnings, embedded=embedded, depth=depth
+                    )
                     parts.append(nested)
                     images.extend(nested_images)
             body = "<br>".join(p for p in parts if p)

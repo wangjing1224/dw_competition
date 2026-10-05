@@ -164,6 +164,9 @@ class ParsingSettings(ConfigModel):
     pdf_render_max_dpi: int = Field(default=300, ge=72, le=600)
     max_pdf_pages: int = Field(default=1000, gt=0)
     max_sheet_cells: int = Field(default=500_000, gt=0)
+    max_embedded_depth: int = Field(default=8, gt=0)
+    max_embedded_files: int = Field(default=100, gt=0)
+    max_embedded_bytes: int = Field(default=100_000_000, gt=0)
 
 
 class AppSettings(ConfigModel):
