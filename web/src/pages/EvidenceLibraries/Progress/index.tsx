@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   mergeChanges,
   type SeenNode,
+  TraceDetail,
   TracePanel,
   TraceTree,
 } from '@/components/LibraryTrace';
@@ -267,34 +268,7 @@ export default function Progress() {
       >
         {detailError && <Failure error={detailError} />}
         {!detail && !detailError && <p>读取中…</p>}
-        {detail && (
-          <>
-            {detail.truncated && (
-              <Alert type="warning" title="长内容仅展示前部，真实调用未改变" />
-            )}
-            {detail.error && (
-              <Alert type="error" title={detail.error.message} />
-            )}
-            <h3>输入</h3>
-            <pre className="trace-content">
-              {JSON.stringify(detail.input, null, 2) || '无'}
-            </pre>
-            <h3>输出</h3>
-            <pre className="trace-content">
-              {typeof detail.output === 'string'
-                ? detail.output
-                : JSON.stringify(detail.output, null, 2) || '等待返回'}
-            </pre>
-            {detail.material_change && (
-              <>
-                <h3>已保存变更（修改前 → 修改后）</h3>
-                <pre className="trace-content">
-                  {JSON.stringify(detail.material_change, null, 2)}
-                </pre>
-              </>
-            )}
-          </>
-        )}
+        {detail && <TraceDetail detail={detail} />}
       </Drawer>
     </main>
   );

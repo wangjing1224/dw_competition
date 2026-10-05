@@ -532,6 +532,28 @@ body {
   border-left: 3px solid #2563eb;
   padding-left: 10px;
 }
+/* 两个库共用的轨迹树：图标和展开箭头随节点内容垂直居中，不受标题留白影响。 */
+.library-trace-tree.ant-tree .ant-tree-treenode {
+  align-items: center;
+}
+.library-trace-tree.ant-tree .ant-tree-node-content-wrapper {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.library-trace-tree.ant-tree .ant-tree-node-content-wrapper .ant-tree-iconEle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.library-trace-tree.ant-tree .ant-tree-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.library-trace-tree.ant-tree .ant-tree-switcher {
+  align-self: center;
+}
 .trace-title {
   display: inline-flex;
   align-items: center;

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   mergeChanges,
   type SeenNode,
+  TraceDetail,
   TracePanel,
   TraceTree,
 } from '@/components/LibraryTrace';
@@ -20,14 +21,6 @@ import EntityLabel from '@/components/EntityLabel';
 import { ruleLabels } from '@/utils/displayLabels';
 
 export { mergeChanges } from '@/components/LibraryTrace';
-
-const statusLabels: Record<string, string> = {
-  running: '执行中',
-  succeeded: '已完成',
-  failed: '失败',
-  partial: '部分完成',
-  interrupted: '中断',
-};
 
 export default function ProgressPage() {
   const { projectId = '' } = useParams();
@@ -295,54 +288,7 @@ export default function ProgressPage() {
       >
         {detailError && <Failure error={detailError} />}
         {!detail && !detailError && <p>读取中…</p>}
-        {detail && (
-          <>
-            <Space wrap>
-              <Tag>{statusLabels[detail.node.status]}</Tag>
-              <code>{detail.node.tool_call_id}</code>
-            </Space>
-            {detail.truncated && (
-              <Alert
-                type="warning"
-                title="长内容仅展示前部，实际调用内容未改变"
-              />
-            )}
-            {detail.error && (
-              <Alert type="error" title={detail.error.message} />
-            )}
-            <h3>输入</h3>
-            <pre className="trace-content">
-              {JSON.stringify(detail.input, null, 2) || '无'}
-            </pre>
-            <h3>输出</h3>
-            {detail.output?.images && Array.isArray(detail.output.images) ? (
-              (detail.output.images as { url: string; path: string }[]).map(
-                (image) => (
-                  <img
-                    key={image.path}
-                    alt={image.path}
-                    src={image.url}
-                    style={{ maxWidth: '100%' }}
-                  />
-                ),
-              )
-            ) : (
-              <pre className="trace-content">
-                {typeof detail.output?.content === 'string'
-                  ? detail.output.content
-                  : JSON.stringify(detail.output, null, 2) || '等待返回'}
-              </pre>
-            )}
-            {detail.output?.rule_changes && (
-              <>
-                <h3>已提交规则变更</h3>
-                <pre className="trace-content">
-                  {JSON.stringify(detail.output.rule_changes, null, 2)}
-                </pre>
-              </>
-            )}
-          </>
-        )}
+        {detail && <TraceDetail detail={detail} />}
       </Drawer>
     </main>
   );

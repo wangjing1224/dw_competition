@@ -4,7 +4,7 @@ import {
   ExclamationCircleOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import { Card, Tag, Tree } from 'antd';
+import { Alert, Card, Space, Tag, Tree } from 'antd';
 import type { DataNode } from 'antd/es/tree';
 import type { ReactNode } from 'react';
 import type { TraceNode } from '@/services/ruleLibraries';
@@ -30,6 +30,91 @@ const statusLabels: Record<string, string> = {
   failed: '失败',
   interrupted: '中断',
 };
+
+// 两个库的接口保持独立，仅统一展示：规则输出包在 content 中，资料输出也可能直接是字符串。
+export function TraceDetail({
+  detail,
+}: {
+  detail: {
+    node: Pick<TraceNode, 'status' | 'tool_call_id'>;
+    input: unknown;
+    output: unknown;
+    error: { message: string } | null;
+    truncated: boolean;
+    material_change?: unknown;
+  };
+}) {
+  const output =
+    detail.output &&
+    typeof detail.output === 'object' &&
+    !Array.isArray(detail.output)
+      ? (detail.output as Record<string, unknown>)
+      : undefined;
+  const images = Array.isArray(output?.images)
+    ? output.images.filter(
+        (image): image is { url: string; path: string } =>
+          image !== null &&
+          typeof image === 'object' &&
+          typeof image.url === 'string' &&
+          typeof image.path === 'string',
+      )
+    : [];
+  const content =
+    typeof detail.output === 'string'
+      ? detail.output
+      : typeof output?.content === 'string'
+        ? output.content
+        : undefined;
+  return (
+    <>
+      <Space wrap>
+        <Tag>{statusLabels[detail.node.status] || detail.node.status}</Tag>
+        {detail.node.tool_call_id && <code>{detail.node.tool_call_id}</code>}
+      </Space>
+      {detail.truncated && (
+        <Alert type="warning" title="长内容仅展示前部，实际调用内容未改变" />
+      )}
+      {detail.error && <Alert type="error" title={detail.error.message} />}
+      <h3>输入</h3>
+      <pre className="trace-content">
+        {detail.input == null ? '无' : JSON.stringify(detail.input, null, 2)}
+      </pre>
+      <h3>输出</h3>
+      {(content !== undefined || images.length === 0) && (
+        <pre className="trace-content">
+          {content ??
+            (detail.output == null
+              ? '等待返回'
+              : JSON.stringify(detail.output, null, 2))}
+        </pre>
+      )}
+      {images.map((image) => (
+        <img
+          key={image.path}
+          alt={image.path}
+          src={image.url}
+          style={{ maxWidth: '100%' }}
+        />
+      ))}
+      {output?.rule_changes != null && (
+        <>
+          <h3>已提交规则变更</h3>
+          <pre className="trace-content">
+            {JSON.stringify(output.rule_changes, null, 2)}
+          </pre>
+        </>
+      )}
+      {detail.material_change != null && (
+        <>
+          <h3>已保存变更（修改前 → 修改后）</h3>
+          <pre className="trace-content">
+            {JSON.stringify(detail.material_change, null, 2)}
+          </pre>
+        </>
+      )}
+    </>
+  );
+}
 
 export function TracePanel({
   title,
@@ -108,6 +193,7 @@ export function TraceTree({
       }));
   return (
     <Tree
+      className="library-trace-tree"
       showIcon
       blockNode
       expandAction="click"
