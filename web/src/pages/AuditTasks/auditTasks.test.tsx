@@ -26,6 +26,7 @@ import type { Rule } from '@/services/ruleLibraries';
 import Create from './Create';
 import List from './List';
 import Progress from './Progress';
+import Inspector from './Progress/Inspector';
 import Report from './Report';
 import { highlightDetails } from './Report/presentation';
 import { FileErrors, StageMatrix } from './shared';
@@ -939,6 +940,31 @@ describe('审核工作区', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '执行记录' }));
     expect(await screen.findByText(/已加载 1 个独立节点/)).toBeInTheDocument();
+  });
+  it('一个核验事项展示全部关联规则的友好编号', async () => {
+    mockApi();
+    const check: Span = {
+      ...span('check'),
+      kind: 'evidence_check',
+      rule_ids: ['rule-1', 'rule-2'],
+      has_detail: false,
+    };
+    render(
+      <App>
+        <Inspector
+          task="audit-1"
+          file={file}
+          selection={{ type: 'span', id: 'check' }}
+          spans={[check]}
+          onClose={() => {}}
+          onSpan={() => {}}
+          onLocate={() => {}}
+          onAgent={() => {}}
+        />
+      </App>,
+    );
+    expect(await screen.findByText(/核验规则：规则 01、规则 02/)).toBeInTheDocument();
+    expect(screen.queryByText(/rule-1/)).not.toBeInTheDocument();
   });
   it('缺失正式结果不被误判成不匹配', async () => {
     mockApi((url) =>

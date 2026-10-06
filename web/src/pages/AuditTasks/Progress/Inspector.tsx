@@ -89,7 +89,7 @@ export default function Inspector({
   );
   const report = useRemote(
     async (signal) => {
-      if (selection.type !== 'draft' && !span?.rule_id) return null;
+      if (selection.type !== 'draft' && !span?.rule_ids?.length) return null;
       const data = await api<ReportData>(`/${task}/files/${file.file_id}`, {
         signal,
       });
@@ -97,7 +97,13 @@ export default function Inspector({
         throw new Error('报告归属不符，已阻止展示');
       return data;
     },
-    [task, file.file_id, file.report_revision, selection.type, span?.rule_id],
+    [
+      task,
+      file.file_id,
+      file.report_revision,
+      selection.type,
+      span?.rule_ids?.join('|'),
+    ],
   );
   const memberIds = node?.members || [];
   const verified =
@@ -150,13 +156,17 @@ export default function Inspector({
                 <span>{actors[span.actor] || span.actor}</span>
                 <small>{duration(span)}</small>
               </Space>
-              {span.rule_id && (
+              {!!span.rule_ids?.length && (
                 <p>
                   核验规则：
-                  {report.data
-                    ? ruleLabels(report.data.rules).get(span.rule_id) ||
-                      '关联规则，见技术信息'
-                    : '关联规则，见技术信息'}
+                  {span.rule_ids
+                    .map((id) =>
+                      report.data
+                        ? ruleLabels(report.data.rules).get(id) ||
+                          '关联规则，见技术信息'
+                        : '关联规则，见技术信息',
+                    )
+                    .join('、')}
                 </p>
               )}
               {!!span.target_file_ids?.length && (
@@ -216,7 +226,7 @@ export default function Inspector({
                           span_id: span.span_id,
                           session_id: span.session_id,
                           file_id: span.file_id,
-                          rule_id: span.rule_id,
+                          rule_ids: span.rule_ids,
                           target_file_ids: span.target_file_ids,
                         }}
                         empty="无"

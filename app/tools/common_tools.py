@@ -1,12 +1,23 @@
-"""各 Agent 共用的工具提供类；每个会话单独注入文件范围和解析快照。"""
+"""各Agent共用的检索、看图与轻量沙箱；文件工具按会话注入授权范围和解析快照。"""
 
+import ast
+import asyncio
+import json
+import math
+import os
+import signal
+import sys
+import tempfile
+import threading
+from contextlib import asynccontextmanager
 from string import Template
 from typing import Annotated, Callable
 
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import InjectedToolCallId, StructuredTool
 from pydantic import Field, StringConstraints
 
-from app.core.config import AppSettings
+from app.core.config import AppSettings, PythonToolSettings
 from app.models.common import StrictModel
 from app.models.documents import ParsedDocument, validate_asset_path
 from app.parsers.assets import AssetStore, file_asset_root
@@ -292,4 +303,257 @@ class CommonTool:
         ]
         if self.retrieval is not None:
             result.insert(0, self.search_tool())
+        result.append(build_python_tool(self.settings.python_tool))
         return result
+
+
+# 能力而非任意模块透传，避免借标准库的公共导入/文件函数绕过预检。
+EXPORTS = {
+    "math": tuple(name for name in dir(math) if not name.startswith("_")),
+    "decimal": (
+        "Decimal", "Context", "getcontext", "localcontext", "setcontext",
+        "ROUND_CEILING", "ROUND_DOWN", "ROUND_FLOOR", "ROUND_HALF_DOWN",
+        "ROUND_HALF_EVEN", "ROUND_HALF_UP", "ROUND_UP", "ROUND_05UP",
+    ),
+    "datetime": ("date", "datetime", "time", "timedelta", "timezone", "MINYEAR", "MAXYEAR", "UTC"),
+    "statistics": (
+        "mean", "fmean", "geometric_mean", "harmonic_mean", "median", "median_low",
+        "median_high", "median_grouped", "mode", "multimode", "quantiles", "pstdev",
+        "pvariance", "stdev", "variance", "correlation", "covariance", "linear_regression",
+    ),
+    "collections": ("Counter", "defaultdict", "deque", "OrderedDict", "ChainMap"),
+    "itertools": (
+        "accumulate", "chain", "combinations", "combinations_with_replacement", "compress",
+        "count", "cycle", "dropwhile", "filterfalse", "groupby", "islice", "pairwise",
+        "permutations", "product", "repeat", "starmap", "takewhile", "tee", "zip_longest",
+    ),
+    "json": ("loads", "dumps"),
+    "re": (
+        "compile", "escape", "findall", "finditer", "fullmatch", "match", "search", "split",
+        "sub", "subn", "ASCII", "IGNORECASE", "MULTILINE", "DOTALL", "VERBOSE", "NOFLAG",
+    ),
+    "string": (
+        "ascii_letters", "ascii_lowercase", "ascii_uppercase", "digits", "hexdigits",
+        "octdigits", "punctuation", "printable", "whitespace", "capwords",
+    ),
+}
+BUILTINS = (
+    "abs", "all", "any", "ascii", "bin", "bool", "chr", "dict", "divmod", "enumerate",
+    "filter", "float", "format", "frozenset", "hex", "int", "isinstance", "len", "list",
+    "map", "max", "min", "next", "oct", "ord", "pow", "print", "range", "repr", "reversed",
+    "round", "set", "slice", "sorted", "str", "sum", "tuple", "zip",
+    "Exception", "ValueError", "TypeError", "KeyError", "IndexError", "ZeroDivisionError",
+)
+DENIED_NAMES = {
+    "open", "input", "eval", "exec", "compile", "globals", "locals", "vars", "dir",
+    "getattr", "setattr", "delattr", "hasattr", "type", "object", "super", "help",
+    "breakpoint", "exit", "quit", "memoryview",
+}
+DENIED_ATTRIBUTES = {
+    "format", "format_map", "gi_frame", "gi_code", "gi_yieldfrom",
+    "cr_frame", "cr_code", "cr_await", "ag_frame", "ag_code", "ag_await",
+    "tb_frame", "tb_next", "f_back", "f_globals", "f_locals", "f_builtins", "f_code",
+}
+
+
+def validate_code(code: str, settings: PythonToolSettings) -> None:
+    """全量预检通过才启动进程；这里不是任意Python的安全证明。"""
+    if not code.strip():
+        raise ValueError("代码不能为空")
+    if len(code.encode("utf-8")) > settings.max_code_bytes:
+        raise ValueError(f"代码超过 {settings.max_code_bytes} 字节上限")
+    tree = ast.parse(code, filename="<sandbox>")
+    for node in ast.walk(tree):
+        line = getattr(node, "lineno", 1)
+        denied = None
+        if isinstance(node, ast.Import):
+            denied = next((alias.name for alias in node.names if alias.name not in EXPORTS), None)
+            if any((a.asname or a.name).startswith("_") for a in node.names):
+                denied = "私有导入别名"
+        elif isinstance(node, ast.ImportFrom):
+            if node.level or node.module not in EXPORTS:
+                denied = node.module or "相对导入"
+            else:
+                denied = next((a.name for a in node.names if a.name not in EXPORTS[node.module]), None)
+                if any((a.asname or a.name).startswith("_") for a in node.names):
+                    denied = "私有导入别名"
+        elif isinstance(node, ast.Name) and (node.id.startswith("_") or node.id in DENIED_NAMES):
+            denied = node.id
+        elif isinstance(node, ast.Attribute) and (
+            node.attr.startswith("_") or node.attr in DENIED_ATTRIBUTES
+            or isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
+            denied = node.attr
+        elif isinstance(node, (ast.ClassDef, ast.AsyncFunctionDef, ast.Await, ast.With, ast.AsyncWith, ast.Global, ast.Nonlocal)):
+            denied = type(node).__name__
+        elif isinstance(node, (ast.FunctionDef, ast.arg)):
+            name = node.name if isinstance(node, ast.FunctionDef) else node.arg
+            if name.startswith("_") or name in DENIED_NAMES:
+                denied = name
+        if denied:
+            raise PermissionError(f"第{line}行禁止的能力或标识：{denied}；仅支持已提供数据的内存处理")
+
+
+# 固定启动器仅在独立子进程执行，不在业务进程exec；不导入项目或第三方包。
+RUNNER = r'''
+import builtins, importlib, os, resource, signal, sys, traceback, types
+resource.setrlimit(resource.RLIMIT_CPU, (int(sys.argv[1]), int(sys.argv[1])))
+if sys.platform == "linux":
+    resource.setrlimit(resource.RLIMIT_AS, (int(sys.argv[2]), int(sys.argv[2])))
+resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
+signal.alarm(int(sys.argv[1]))
+os.environ.clear()
+exports = EXPORTS_VALUE
+modules = {}
+for name, members in exports.items():
+    module = importlib.import_module(name)
+    modules[name] = types.SimpleNamespace(**{key: getattr(module, key) for key in members})
+# datetime的C实现内部需要这两个模块；模型代码的直接导入仍被AST拒绝。
+internals = {name: importlib.import_module(name) for name in ("time", "_strptime")}
+def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if not level and name in internals:
+        return internals[name]
+    if level or name not in modules:
+        raise PermissionError("禁止导入：" + name)
+    return modules[name]
+safe = {name: getattr(builtins, name) for name in BUILTINS_VALUE}
+safe["__import__"] = safe_import
+try:
+    code = sys.stdin.buffer.read().decode("utf-8")
+    exec(compile(code, "<sandbox>", "exec"), {"__builtins__": safe, "__name__": "sandbox"})
+except BaseException as error:
+    frames = [frame for frame in traceback.extract_tb(error.__traceback__) if frame.filename == "<sandbox>"]
+    line = frames[-1].lineno if frames else getattr(error, "lineno", None)
+    location = ("第" + str(line) + "行 ") if line else ""
+    print(type(error).__name__ + ": " + location + str(error), file=sys.stderr)
+    sys.exit(1)
+'''.replace("EXPORTS_VALUE", repr(EXPORTS)).replace("BUILTINS_VALUE", repr(BUILTINS))
+
+
+class OutputLimitError(RuntimeError):
+    pass
+
+
+class SandboxUnavailable(RuntimeError):
+    pass
+
+
+_slots_lock = threading.Lock()
+_active = 0
+
+
+@asynccontextmanager
+async def execution_slot(limit: int):
+    """四类工厂共享进程级名额，不绑定特定事件循环或模型请求信号量。"""
+    global _active
+    while True:
+        with _slots_lock:
+            if _active < limit:
+                _active += 1
+                break
+        await asyncio.sleep(0.02)
+    try:
+        yield
+    finally:
+        with _slots_lock:
+            _active -= 1
+
+
+async def _execute_process(code: str, settings: PythonToolSettings, cwd: str):
+    """固定解释器、空工作目录、最小环境，有界读取并在任何出口回收进程组。"""
+    limit = settings.max_output_bytes
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-I", "-S", "-B", "-u", "-c", RUNNER,
+        str(math.ceil(settings.timeout_seconds)), str(settings.memory_mb * 1024 * 1024),
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE, cwd=cwd,
+        env={"LANG": "C.UTF-8"}, start_new_session=True,
+    )
+    used = 0
+
+    async def read(stream):
+        nonlocal used
+        parts = []
+        while chunk := await stream.read(4096):
+            used += len(chunk)
+            if used > limit:
+                raise OutputLimitError(f"输出超过 {limit} 字节上限")
+            parts.append(chunk)
+        return b"".join(parts).decode("utf-8", errors="replace")
+
+    async def write():
+        try:
+            process.stdin.write(code.encode("utf-8"))
+            await process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            process.stdin.close()
+
+    jobs = [asyncio.create_task(fn) for fn in (read(process.stdout), read(process.stderr), write(), process.wait())]
+    try:
+        out, err, _, rc = await asyncio.wait_for(asyncio.gather(*jobs), settings.timeout_seconds)
+        return rc, out, err
+    finally:
+        for job in jobs:
+            if not job.done():
+                job.cancel()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        await asyncio.gather(*jobs, return_exceptions=True)
+        await process.wait()
+
+
+class PythonSandbox:
+    def __init__(self, settings: PythonToolSettings):
+        self.settings = settings
+
+    async def execute(self, code: str):
+        s = self.settings
+        try:
+            validate_code(code, s)
+            if not s.enabled:
+                raise SandboxUnavailable("沙箱工具已禁用")
+            if sys.platform not in {"darwin", "linux"}:
+                raise SandboxUnavailable("当前轻量执行环境只支持macOS/Linux的进程资源限制")
+            async with execution_slot(s.max_concurrency):
+                with tempfile.TemporaryDirectory(prefix="dw-python-") as cwd:
+                    rc, out, err = await _execute_process(code, s, cwd)
+                    if rc:
+                        if rc in {-signal.SIGALRM, -signal.SIGXCPU}:
+                            raise TimeoutError(f"超过 {s.timeout_seconds:g} 秒执行上限")
+                        if rc < 0:
+                            return {"status": "error", "result": f"ProcessError: 执行进程被信号 {-rc} 终止"}
+                        return {"status": "error", "result": err.strip() or f"RuntimeError: 沙箱退出码 {rc}"}
+                    return {"status": "success", "result": out}
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            return {"status": "error", "result": f"TimeoutError: 超过 {s.timeout_seconds:g} 秒执行上限"}
+        except Exception as error:
+            return {"status": "error", "result": f"{type(error).__name__}: {error}"}
+
+
+class PythonInput(StrictModel):
+    code: str = Field(description="待执行的Python代码，不含Markdown围栏；数据直接写入代码，用print输出结果。")
+    tool_call_id: Annotated[str, InjectedToolCallId]
+
+
+def build_python_tool(settings: PythonToolSettings) -> StructuredTool:
+    sandbox = PythonSandbox(settings)
+
+    async def run_python(code: str, tool_call_id: Annotated[str, InjectedToolCallId]):
+        result = await sandbox.execute(code)
+        return ToolMessage(
+            name="run_python", tool_call_id=tool_call_id, status=result["status"],
+            content=json.dumps(result, ensure_ascii=False),
+        )
+
+    return StructuredTool.from_function(
+        coroutine=run_python, name="run_python", args_schema=PythonInput,
+        description=load_tool_description("run_python"),
+    )

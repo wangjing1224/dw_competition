@@ -21,6 +21,18 @@ rule_agent_max_steps: 8
 # 资料入库同上，整数>=2，默认8。
 evidence_ingestion_max_steps: 8
 
+# 四类业务Agent共用的轻量沙箱：代码预检后在独立Python进程执行，不依赖Docker。
+# macOS/Linux；只开放内存数据处理，非任意敌对代码的强安全边界。
+python_tool:
+  enabled: true
+  timeout_seconds: 5
+  # Linux虚拟内存上限；macOS不支持同等硬限制，此值不在macOS强制执行。
+  memory_mb: 256
+  max_code_bytes: 131072
+  max_output_bytes: 16384
+  # 同一后端进程四类调用方共享，不占用模型请求名额。
+  max_concurrency: 2
+
 # 文件调度和实际模型请求使用不同名额，等待子 Agent 时释放模型请求名额。
 audit:
   # 主审核每个阅读批次的模型调用轮数，正整数，默认8；含最后无工具收尾轮。

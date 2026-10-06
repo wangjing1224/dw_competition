@@ -174,6 +174,7 @@ async def test_invalid_rule_json_then_corrected_submit(env):
     )
     result = await extract(env, model, [parsed_file(1)])
     assert len(result.rules) == 1 and len(model.calls) == 3
+    assert model.calls[0][1].count("run_python") == 1
     feedback = next(m for m in model.calls[1][0] if m.type == "tool")
     assert feedback.status == "error" and feedback.tool_call_id == "bad-json"
     assert "JSON 解析失败" in feedback.content
@@ -1085,12 +1086,16 @@ async def test_small_window_batches_keep_complete_blocks_latest_view_and_progres
     assert all(option["max_tokens"] > 0 for option in model.options)
 
 
-def compaction_scenario(env, monkeypatch, *, summary=None):
+def compaction_scenario(env, monkeypatch, *, summary=None, second_read_size=14000):
     mock_counter(monkeypatch)
     original_builder = build_rule_tools
 
+    reads = 0
+
     async def load_mock_material():
-        return "仅用于压缩测试的已查材料：" + "X" * 14000
+        nonlocal reads
+        reads += 1
+        return "仅用于压缩测试的已查材料：" + "X" * (14000 if reads == 1 else second_read_size)
 
     tool = StructuredTool.from_function(
         coroutine=load_mock_material,
@@ -1105,7 +1110,8 @@ def compaction_scenario(env, monkeypatch, *, summary=None):
     parsed.sections[0].blocks[0].content = (
         "原文锚点-BEGIN:" + "D" * 30000 + ":原文锚点-END"
     )
-    settings = budget_env(env, 51_000, steps=2)
+    # 新提示词和工具Schema计入固定开销；仍由14K工具结果触发压缩。
+    settings = budget_env(env, 54_500, steps=2)
     write = tool_call(
         "submit_rule_delta",
         "saved-before-compaction",
@@ -1158,9 +1164,10 @@ async def test_compaction_reinvokes_same_batch_preserves_write_and_final_round(
 
 @pytest.mark.asyncio
 async def test_two_compactions_require_intervening_business_calls(env, monkeypatch):
-    settings, parsed, initial = compaction_scenario(env, monkeypatch)
+    # 第二次没有前次提交的回执，增加Mock材料保持末轮仍触发软阈值。
+    settings, parsed, initial = compaction_scenario(env, monkeypatch, second_read_size=16000)
     first = next(initial.replies)
-    settings = budget_env(settings, 51_000, steps=3)
+    settings = budget_env(settings, 54_500, steps=3)
     model = ScriptModel(
         [
             first,

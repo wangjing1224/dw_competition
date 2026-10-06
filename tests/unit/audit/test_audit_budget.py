@@ -76,7 +76,8 @@ async def test_main_batches_finish_all_structures_before_export(
     cfg = temp_settings.model_copy(
         update={
             "bid_chat_model": temp_settings.bid_chat_model.model_copy(
-                update={"context_window_tokens": 50_000, "tokenizer": "utf8"}
+                # UTF8测试计数器按字节；包含新增工具与提示词，仍不足以放两个18K结构。
+                update={"context_window_tokens": 65_000, "tokenizer": "utf8"}
             )
         }
     )
@@ -449,7 +450,7 @@ async def test_child_model_failure_returns_parent_tool_error_and_allows_retry(
     args = {
         "checks": [
             {
-                "rule_id": "rule-1",
+                "rule_ids": ["rule-1"],
                 "verification_request": "核对参数",
                 "file_ids": ["e-1"],
             }
@@ -505,7 +506,7 @@ async def test_subgraph_cancel_is_not_returned_as_retryable_tool_failure(
                         "args": {
                             "checks": [
                                 {
-                                    "rule_id": "rule-1",
+                                    "rule_ids": ["rule-1"],
                                     "verification_request": "核对",
                                     "file_ids": ["e-1"],
                                 }

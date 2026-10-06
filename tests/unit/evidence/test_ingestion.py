@@ -197,6 +197,7 @@ async def test_serial_sessions_keep_current_body_and_free_relations(settings):
     )
     result = await ingest(settings, model, [parsed(1), parsed(2)])
     assert len(result.materials) == 2
+    assert model.calls[0][1].count("run_python") == 1
     assert related_file_ids(result, "file-1") == ["file-2"]
     assert related_file_ids(result, "file-2") == ["file-1"]
     assert "file-2" not in str(model.calls[0][0])

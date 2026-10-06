@@ -151,7 +151,7 @@ async def test_model_failure_in_child_is_not_business_uncertainty(temp_settings)
                 {
                     "checks": [
                         {
-                            "rule_id": "rule-1",
+                            "rule_ids": ["rule-1"],
                             "verification_request": "确认分辨率",
                             "file_ids": ["e-1"],
                         }
@@ -180,12 +180,12 @@ async def test_delegate_one_hop_raw_content_and_call_id_idempotency(temp_setting
     args = {
         "checks": [
             {
-                "rule_id": "rule-1",
+                "rule_ids": ["rule-1"],
                 "verification_request": "确认分辨率",
                 "file_ids": ["e-1"],
             },
             {
-                "rule_id": "rule-1",
+                "rule_ids": ["rule-1"],
                 "verification_request": "确认数量",
                 "file_ids": ["e-3"],
             },
@@ -209,6 +209,56 @@ def test_one_hop_relations_do_not_expand_transitively():
     selected, relations, _ = evidence_view(audit_context().evidence_library, ["e-1"])
     assert selected == ["e-1", "e-2"]
     assert "e-2 → e-1" in relations
+
+
+@pytest.mark.asyncio
+async def test_multi_rule_check_uses_one_summary_only_session_and_compact_header(temp_settings, tmp_path):
+    context = audit_context()
+    context.rule_set.rules.append(context.rule_set.rules[0].model_copy(update={"rule_id": "rule-2"}))
+    body = "e-1.md摘要记载：设备型号ABC，分辨率640×480，支持请求的参数事实。"
+    child = SequenceModel([body])
+    retrieval = SimpleNamespace(search=AsyncMock())
+    ledger, records = SourceLedger(context.parsed_documents), []
+    tool = build_evidence_review_tool(
+        context=context, settings=temp_settings, model=child, retrieval=retrieval,
+        ledger=ledger, limiter=asyncio.Semaphore(1), trace_context={}, records=records,
+    )
+    args = {"checks": [{"rule_ids": ["rule-1", "rule-2"], "verification_request": "查明共同参数事实", "file_ids": ["e-1"]}]}
+    result = await tool.ainvoke(call(tool.name, args))
+    assert result.content == "## 资料核验结果1｜关联规则：rule-1、rule-2\n\n" + body
+    assert len(child.calls) == len(records) == 1
+    assert records[0]["rule_ids"] == ["rule-1", "rule-2"]
+    assert "rule-1" not in child.calls[0][0][1].content
+    assert child.bindings[0].count("run_python") == 1
+    retrieval.search.assert_not_called()
+    assert not ledger.sources  # 充分摘要不制造原文读取账本。
+    assert (await tool.ainvoke(call(tool.name, args))).content == result.content
+    assert len(child.calls) == 1
+    changed = {"checks": [{**args["checks"][0], "rule_ids": ["rule-2"]}]}
+    with pytest.raises(ValueError, match="不能用于不同"):
+        await tool.ainvoke(call(tool.name, changed))
+    report = ReportDocument(tmp_path / "draft.md", context.rule_set, ledger, version=2)
+    await report.apply("write", filled_report(context.rule_set, reason=body, version=2), None, "save")
+    assert report.finish()  # 无片段行的有依据报告仍可完成，结构和来源校验未放宽。
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ids", [[], ["rule-1", "rule-1"], [""], ["rule-1", "missing"]])
+async def test_invalid_multi_rule_check_rejected_before_any_child(temp_settings, ids):
+    context = audit_context()
+    child = SequenceModel([])
+    tool = build_evidence_review_tool(
+        context=context, settings=temp_settings, model=child,
+        retrieval=SimpleNamespace(search=AsyncMock()), ledger=SourceLedger(context.parsed_documents),
+        limiter=asyncio.Semaphore(1), trace_context={}, records=[],
+    )
+    args = {"checks": [
+        {"rule_ids": ["rule-1"], "verification_request": "合法的第一项", "file_ids": ["e-1"]},
+        {"rule_ids": ids, "verification_request": "身份错误的第二项", "file_ids": ["e-1"]},
+    ]}
+    with pytest.raises(ValueError):
+        await tool.ainvoke(call(tool.name, args))
+    assert not child.calls
 
 
 @pytest.mark.asyncio

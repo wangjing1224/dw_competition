@@ -160,7 +160,7 @@ export function TraceTree({
         selectable: node.has_detail,
         title: (
           <span className="trace-title">
-            <span>{node.title}</span>
+            <span>{node.name === 'run_python' ? '沙箱工具' : node.title}</span>
             <Tag
               color={
                 node.status === 'failed'

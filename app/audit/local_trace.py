@@ -167,13 +167,13 @@ def observed_session(function):
                 stack.enter_context(
                     scope(
                         "evidence_check",
-                        f"资料核验 · {meta.get('rule_id', '')}",
+                        f"资料核验事项 {meta.get('check_index', '')}",
                         input={
                             "verification_request": meta.get("verification_request"),
                             "file_ids": meta.get("target_file_ids", []),
                         },
                         actor=role,
-                        rule_id=meta.get("rule_id"),
+                        rule_ids=meta.get("rule_ids", []),
                         check_index=meta.get("check_index"),
                         target_file_ids=meta.get("target_file_ids", []),
                     )

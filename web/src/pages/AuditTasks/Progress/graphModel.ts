@@ -19,6 +19,7 @@ const tools: Record<string, string> = {
   view_image: '查看图片',
   request_evidence_review: '资料核验委派',
   report_document: '报告维护',
+  run_python: '沙箱工具',
 };
 export const failure = (status: string) =>
   ['failed', 'interrupted'].includes(status);
@@ -279,7 +280,7 @@ export function spanTitle(span: Span, spans: Span[]) {
     return `${span.actor === 'bid_agent' ? '主审核' : '资料核验'}会话 ${String(spans.filter((s) => s.kind === 'batch' && s.actor === span.actor).findIndex((s) => s.span_id === span.span_id) + 1).padStart(2, '0')}`;
   return span.title;
 }
-// 固定能力拓扑对应主审核的四个工具与资料子 Agent 的两个工具。
+// 固定能力拓扑对应主审核的五个工具与资料子 Agent 的三个工具。
 // 节点是能力，不是单次 span；实际调用仅更新成员、状态和次数，不改变布局。
 const agentTopology = [
   {
@@ -287,7 +288,7 @@ const agentTopology = [
     title: '主审核 Agent',
     actor: 'bid_agent',
     x: 30,
-    y: 180,
+    y: 260,
   },
   {
     id: 'main-search',
@@ -317,13 +318,22 @@ const agentTopology = [
     y: 260,
   },
   {
+    id: 'main-python',
+    title: '沙箱工具',
+    actor: 'bid_agent',
+    tool: 'run_python',
+    parent: 'main-agent',
+    x: 300,
+    y: 380,
+  },
+  {
     id: 'delegate',
     title: '资料核验委派',
     actor: 'bid_agent',
     tool: 'request_evidence_review',
     parent: 'main-agent',
     x: 300,
-    y: 380,
+    y: 500,
   },
   {
     id: 'evidence-agent',
@@ -331,7 +341,7 @@ const agentTopology = [
     actor: 'evidence_subagent',
     parent: 'delegate',
     x: 570,
-    y: 380,
+    y: 500,
   },
   {
     id: 'evidence-search',
@@ -340,7 +350,7 @@ const agentTopology = [
     tool: 'search_documents',
     parent: 'evidence-agent',
     x: 840,
-    y: 310,
+    y: 380,
   },
   {
     id: 'evidence-image',
@@ -349,7 +359,16 @@ const agentTopology = [
     tool: 'view_image',
     parent: 'evidence-agent',
     x: 840,
-    y: 450,
+    y: 500,
+  },
+  {
+    id: 'evidence-python',
+    title: '沙箱工具',
+    actor: 'evidence_subagent',
+    tool: 'run_python',
+    parent: 'evidence-agent',
+    x: 840,
+    y: 620,
   },
 ];
 export function agentGraph(spans: Span[], requestedSession?: string) {

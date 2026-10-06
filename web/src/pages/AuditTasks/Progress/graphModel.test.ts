@@ -73,7 +73,7 @@ const sample = () => [
   }),
   node('check1', 'evidence_check', 'delegate1', 'evidence_subagent', {
     check_index: 1,
-    rule_id: 'rule-147',
+    rule_ids: ['rule-147', 'rule-148'],
     session_id: 'inherited-main',
   }),
   node('child1', 'batch', 'check1', 'evidence_subagent'),
@@ -89,11 +89,21 @@ const sample = () => [
   }),
   node('check2', 'evidence_check', 'delegate2', 'evidence_subagent', {
     check_index: 1,
-    rule_id: 'rule-147',
+    rule_ids: ['rule-147'],
   }),
   node('child2', 'batch', 'check2', 'evidence_subagent'),
 ];
 describe('三视图的真实数据投影', () => {
+  it('主子沙箱分别聚合，高亮次数沿用实际调用', () => {
+    const graph = agentGraph([...sample(),
+      node('python-main', 'tool', 't', 'bid_agent', { tool_name: 'run_python', status: 'running' }),
+      node('python-child', 'tool', 'ct', 'evidence_subagent', { tool_name: 'run_python', status: 'failed' }),
+    ]);
+    expect(graph.spanToNode.get('python-main')).toBe('main-python');
+    expect(graph.spanToNode.get('python-child')).toBe('evidence-python');
+    expect(graph.nodes.find((n) => n.id === 'main-python')).toMatchObject({title: '沙箱工具', status: 'running', members: ['python-main']});
+    expect(graph.nodes.find((n) => n.id === 'evidence-python')).toMatchObject({status: 'failed', members: ['python-child']});
+  });
   it('不同状态共用固定流程坐标；completed 不覆盖 skipped', () => {
     const file = {
       ...testFile,
@@ -182,7 +192,7 @@ describe('三视图的真实数据投影', () => {
         active: true,
       }),
     );
-    expect(graph.nodes).toHaveLength(8);
+    expect(graph.nodes).toHaveLength(10);
     expect(graph.nodes.some((n) => n.id === 'cm')).toBe(false);
   });
   it('模型/轮次定位到所属会话，工具定位到所属聚合节点', () => {

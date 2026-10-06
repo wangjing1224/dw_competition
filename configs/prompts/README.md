@@ -57,7 +57,7 @@
 | `verification_request` | str，主Agent委派的具体核验要求，子Agent Human输入 | 不得为空，工具参数层校验 |
 | `file_ids` | str，工具起始文件ID列表连接成文本，不是原始list；子Agent核验范围入口 | 必须存在合法起始文件 |
 | `relations` | str，`evidence_view`渲染起始文件及直接邻接关系 | 无则“无直接关联” |
-| `evidence_files` | str，选中/关联资料按ID渲染的evidence_summary；定位线索不是核验依据 | 已选择有效资料才调用；图片路径按摘要与原文实际可读性使用 |
+| `evidence_files` | str，选中/关联资料按ID渲染的evidence_summary；事实充分时可直接依据摘要回答，标明依据类型 | 已选择有效资料才调用；摘要不等于已回读原件，缺项/冲突/视觉需求再补查 |
 | `current_step` / `max_steps` | int，节点在调用前计算的当前调用序号/上限 | 必填；Human提醒不能代替代码是否绑定工具的判断 |
 | `missing` | str，报告草稿检查发现的缺项或校验错误，经 `app/audit/session.py` 拼接 | 无则代码传“无”，不是让模型杜撰遗漏 |
 | `candidate_top_k` | int，`settings.retrieval.candidate_top_k`；每 query、每 scope 内向量和关键词各自的初始候选上限，两路融合后可能更多 | 由配置提供，不是工具参数 |
@@ -77,10 +77,16 @@
 
 ## 工具说明配置
 
-`tool_descriptions.yaml` 中六个字符串分别描述 `search_documents`、`view_image`、`submit_rule_delta`、
-`save_evidence_material`、`request_evidence_review`、`report_document`。通用检索/看图由四类Agent复用，
+`tool_descriptions.yaml` 中七个字符串分别描述 `search_documents`、`view_image`、`submit_rule_delta`、
+`save_evidence_material`、`request_evidence_review`、`report_document`、`run_python`。通用检索/看图/沙箱由四类Agent复用，
 其余分别由规则入库、资料入库、主审核使用。入参Field说明与Schema在 `app/tools/`、`app/models/` 中维护，
 返回结果由工具实现渲染；只改YAML不会改变权限、参数个数、返回字段或读写行为。
+
+Task34：`checks[].rule_ids` 关联一项事实涉及的全部规则；同一项非空去重并校验冻结规则，项间可以重用同一规则。
+这些ID只用于代码关联、记录及返回标题，不注入子Agent Human，主审仍须在 `verification_request` 提供实际标准。
+代码只拼“资料核验结果序号＋关联规则”标题和子正文，不重抄委派全文；不新增消息类型或共享事实缓存。
+主审已有可见事实充分时无需委派，子审详细摘要充分时无需原文检索；实际采纳原文/看图才登记真实来源键。
+System 管判断与取证策略，工具说明管能力/错误与 `code/print/status/result` 契约；轮次提醒沿用原时机。
 
 例如扩充检索使用说明，应改`search_documents`对应块字符串；扩充入参则需同步
 `app/tools/common_tools.py`中的输入模型、校验、工具实现与测试，不能仅在文字里承诺支持新参数。

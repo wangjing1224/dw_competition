@@ -177,6 +177,7 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 - `search_documents`：公共检索工具，规则侧按查询组回查当前文件及已完成的历史文件，不提前读取其他未来文件；补查不推进阅读游标。
 - `view_image`：通过统一图片路径查看当前或历史文件中的已登记图片；由 `CommonTool` 提供。
 - `submit_rule_delta`：一批 `add/merge/replace` 或项目简介更新；三个参数显式全为 `null` 时只读查看。
+- `run_python`：共用沙箱，处理已取得的数据、保留原始公式，需要推导或比较时采用真实执行结果。
 
 每条规则保存 `rule_id/provenance/category/requirement/priority/verification/reason/sources`。
 模型抽取时，`rule_id` 和 `provenance=ai_generated` 由系统赋值；人工新增、修订分别标记为
@@ -220,7 +221,7 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 资料的 `provenance` 只有 `ai_generated`（AI 整理）和 `human_modified`（人工修正），
 没有人工新增资料条目的模式。人工修正只表示内容被修改，不代表材料已核验真实有效。
 
-三个工具为 `search_documents`、`view_image`、`save_evidence_material`。
+四个工具为 `search_documents`、`view_image`、`save_evidence_material`、`run_python`。
 保存工具的 `material`、`file_ids` 必须显式填写且恰好一项为 null：写入当前文件完整结果，或查看指定历史文件/`"all"`。
 有变化才再次保存，不要求每个阅读批次重复提交；首次处理的文件必须有结果。保存失败保留进度，不伪装成人工核验结论。
 结果在 `data/parsed/evidence/{bidder_id}.json`，执行进度在同目录 `{bidder_id}.progress.json`。
@@ -239,7 +240,9 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 - 路由逐文件独立、有界并发，仅输出匹配状态与理由，不生成投标摘要。能放下时读全文，超长时只读连续完整结构前缀，并明确未读范围。
 - `not_matched`、`uncertain` 不进入审核或投标索引，但仍保存正式 JSON，并生成项目适用性说明的 Markdown/Word；模型报错不是 `uncertain`。
 - 匹配文件独立建立 `bid-{task_id}-{file_id}` 原文索引并运行主 Agent，不等待其他文件。System 放完整规则和报告模板，Human 放当前文件原文/结构批次、简洁资料目录及已保存报告。
-- 主 Agent 使用公共检索、看图、资料委派和报告工具。资料核验子 Agent 只看到核验要求、所选文件及一层关联文件的详细摘要，使用公共检索/看图，直接返回核验正文。
+- 主 Agent 使用公共检索、看图、资料委派、报告和沙箱工具。资料核验子 Agent 只看到核验要求、所选文件及一层关联文件的详细摘要，使用公共检索/看图/沙箱，直接返回核验正文。
+- 已展示的摘要事实充分时可直接采用，标明“摘要记载”；事实缺失、冲突或需核对视觉信息时才补查，不为片段ID强制检索。主审初始仍只有简洁目录，并非全库详细摘要。摘要不等于已读原件或验证真实性。
+- `request_evidence_review` 的每个 check 使用非空、项内去重的 `rule_ids`，可为多条规则取得同一范围的共同事实；正式报告仍逐条使用 `rule_id`。子 Agent 不接收规则ID，所需标准写在核验请求正文。代码在返回首部添加事项序号及关联规则，不重复整段委派请求；一层授权、串行执行和同调用重放机制保持不变。
 - 每份文件一份 Markdown 报告，通过 `report_document` 的 `read/write/edit` 维护；路径由代码绑定，模板单独放在 `configs/prompts/templates/audit_report_template.md`，不是工具参数。
 - 报告一级标题由主 Agent 根据当前文件撰写，保存为 JSON 的 `report_title`，Word 直接使用，不额外调用模型。未进入主 Agent 的文件使用“文件名＋项目适用性说明”；旧结果没有标题时按文件名生成展示标题。
 - 原文分批串行完成；同批压缩不推进阅读游标、不重置轮数。倒数第二轮提醒保存，最后一轮全部解绑工具。报告完整且原文读完才导出，不再机械补“步数上限，需人工复核”。
@@ -304,6 +307,24 @@ Markdown 生成失败时不继续生成 Word。部分文件执行失败时批次
 所有文件均有结果但存在导出失败时为 `completed_with_report_error`，审核“不符合”不等于执行异常。
 来源预览使用本次冻结解析版本，不承诺精确句子定位。所有 GET 只读，不触发模型、解析、建索引或报告重建。
 新工作台暂不提供重跑、取消、人工编辑报告或重导出；`python -m app.reports` 只面向早期 audit_context.json 格式，不适用于新批次。
+
+### 共用轻量沙箱工具
+
+`run_python` 对模型只有一个 `code` 输入，内联待处理数据并用 `print` 输出；返回仅含
+`status: success | error` 与字符串 `result`。成功为标准输出，失败为语法、运行、越权或超限原因。
+错误作为 ToolMessage 反馈，不增加轮次或隐藏重试。计算只是用途之一，也支持文本、正则、JSON、排序与集合处理。
+
+实现统一放在 `app/tools/common_tools.py`，由 `CommonTool.tools()` 提供。
+规则提取、资料入库、主审核及资料核验沿用公共工具入口，不再各自单独添加沙箱工具。
+执行前整体 AST 检查；只开放受限内置函数和标准库能力，拒绝文件、网络、系统命令、环境变量、
+动态执行和反射等代码。通过后在当前 Python 解释器的独立 `-I -S` 子进程运行，临时空目录、最小环境，
+不加载项目和第三方包，不需要 Docker 或额外服务。超时、输出超限和取消均终止并回收进程。
+
+`configs/model.yaml::python_tool` 默认启用，5秒、128KiB代码、16KiB输出、同后端进程最多2个执行。
+`memory_mb: 256` 仅在 Linux 用 `RLIMIT_AS` 限制虚拟内存；macOS 不承诺同等内存硬隔离。
+当前支持 macOS/Linux。**这是可信测试环境的轻量防误用措施，不是可运行任意敌对代码的强安全沙箱**，
+独立进程仍以服务用户身份运行；不要将工具公开给不可信用户。
+可离线验证：`uv run pytest tests/unit/tools/test_python_tool.py -q`，不请求业务模型、不启动项目。
 
 ### Agent 收尾判定
 

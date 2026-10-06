@@ -153,6 +153,17 @@ class AuditSettings(ConfigModel):
     model_concurrency: int = Field(default=3, ge=1)
 
 
+class PythonToolSettings(ConfigModel):
+    """轻量独立Python进程的资源限额，不改变模型预算。"""
+
+    enabled: bool = True
+    timeout_seconds: float = Field(default=5, gt=0, le=30)
+    memory_mb: int = Field(default=256, ge=64, le=512, strict=True)
+    max_code_bytes: int = Field(default=131_072, gt=0, le=131_072, strict=True)
+    max_output_bytes: int = Field(default=16_384, gt=0, le=65_536, strict=True)
+    max_concurrency: int = Field(default=2, ge=1, le=4, strict=True)
+
+
 class ParsingSettings(ConfigModel):
     """只控制解析资源，不承担 Agent Token 预算。视觉调用须显式启用。"""
 
@@ -196,6 +207,7 @@ class AppSettings(ConfigModel):
     storage: StorageSettings
     runtime: RuntimeSettings
     audit: AuditSettings = Field(default_factory=AuditSettings)
+    python_tool: PythonToolSettings = Field(default_factory=PythonToolSettings)
 
     @model_validator(mode="after")
     def validate_budget_adoption(self):

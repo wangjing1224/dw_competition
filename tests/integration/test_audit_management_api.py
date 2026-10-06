@@ -719,7 +719,7 @@ async def test_concurrent_children_keep_file_session_and_parent_scope(env):
                 {
                     "checks": [
                         {
-                            "rule_id": "rule-1",
+                            "rule_ids": ["rule-1"],
                             "verification_request": "核实精度100的证明依据",
                             "file_ids": [env.sources[index][1]],
                         }
@@ -756,7 +756,7 @@ async def test_concurrent_children_keep_file_session_and_parent_scope(env):
         assert len(checks) == progress["activity"]["evidence_checks"] == 1
         check = checks[0]
         assert check["target_file_ids"] == [env.sources[index][1]]
-        assert check["rule_id"] == "rule-1"
+        assert check["rule_ids"] == ["rule-1"]
         parent = nodes[check["parent_span_id"]]
         assert parent["tool_name"] == "request_evidence_review"
         for node in nodes.values():

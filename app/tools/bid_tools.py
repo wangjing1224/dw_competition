@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from langchain_core.tools import InjectedToolCallId, StructuredTool
 from langgraph.errors import NodeCancelledError
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.agents.evidence_subagent import build_evidence_messages
 from app.audit.context import evidence_view, scope_for
@@ -17,12 +17,13 @@ from app.tools.common_tools import CommonTool
 
 
 class EvidenceCheck(StrictModel):
-    rule_id: str = Field(
-        min_length=1, description="引用当前规则 ID，仅由系统关联，不进入子 Agent。"
+    rule_ids: list[str] = Field(
+        min_length=1,
+        description="本事项关联的当前冻结规则ID列表，非空且项内不重复；仅由系统关联，不自动将规则正文送给子Agent。",
     )
     verification_request: str = Field(
         min_length=1,
-        description="一个明确核验事项，写清待核声明、主体/对象、编号/数值及判断标准。",
+        description="一个明确的共同事实核验事项，写清对象/版本、待核事实、完整判断标准、已有事实与依据和必须返回项；不能用关联ID代替标准正文。",
     )
     file_ids: list[str] = Field(
         min_length=1,
@@ -30,12 +31,19 @@ class EvidenceCheck(StrictModel):
         description="当前资料目录中的非空起始文件 ID 列表；系统补充一层直接关系文件。",
     )
 
+    @field_validator("rule_ids")
+    @classmethod
+    def unique_rules(cls, value):
+        if any(not key.strip() for key in value) or len(set(value)) != len(value):
+            raise ValueError("rule_ids必须是非空、项内不重复的规则ID列表")
+        return value
+
 
 class EvidenceReviewInput(StrictModel):
     checks: list[EvidenceCheck] = Field(
         min_length=1,
         max_length=10,
-        description="核验请求列表，每项含 rule_id、verification_request、file_ids；同一 rule_id 可重复，结果按顺序返回。",
+        description="核验事项列表，每项含rule_ids、verification_request、file_ids，独立子会话并按顺序返回；同一规则可关联不同事项，项间不自动共享结果。",
     )
     tool_call_id: Annotated[str, InjectedToolCallId]
 
@@ -60,7 +68,7 @@ def build_evidence_review_tool(
     ):
         outputs = []
         # 先验证整批身份，避免后项越权时前项已耗费模型调用。
-        if any(check.rule_id not in known_rules for check in checks):
+        if any(not set(check.rule_ids) <= known_rules for check in checks):
             raise ValueError("委派引用未知规则")
         for check in checks:
             evidence_view(context.evidence_library, check.file_ids)
@@ -94,7 +102,7 @@ def build_evidence_review_tool(
                     **trace_context,
                     "metadata": {
                         **(trace_context.get("metadata") or {}),
-                        "rule_id": check.rule_id,
+                        "rule_ids": check.rule_ids,
                         "check_index": number,
                         "child_session": uuid4().hex,
                         "verification_request": check.verification_request,
@@ -140,8 +148,8 @@ def build_evidence_review_tool(
                 ledger.sources.update(child_ledger.sources)
                 cache[key] = (check.model_dump(), content)
             outputs.append(
-                f"## 资料核验结果{number}｜{check.rule_id}\n\n"
-                f"- 核验事项：{check.verification_request}\n- 起始资料：{'、'.join(check.file_ids)}\n\n{cache[key][1]}"
+                f"## 资料核验结果{number}｜关联规则：{'、'.join(check.rule_ids)}\n\n"
+                f"{cache[key][1]}"
             )
         return "\n\n".join(outputs)
 

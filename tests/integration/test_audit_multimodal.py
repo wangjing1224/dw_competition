@@ -106,7 +106,7 @@ async def test_delegate_search_image_and_report_without_extra_llm(
                 {
                     "checks": [
                         {
-                            "rule_id": "rule-1",
+                            "rule_ids": ["rule-1"],
                             "verification_request": "核实12台全部交付的声明",
                             "file_ids": ["e-1"],
                         }

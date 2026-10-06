@@ -21,9 +21,11 @@ class ReportModel:
         self.rules, self.fail_file = rules, fail_file
         self.completion = completion
         self.calls = []
+        self.bindings = []
         self.active = self.peak = 0
 
     def bind_tools(self, tools):
+        self.bindings.append([t.name for t in tools])
         return self
 
     async def ainvoke(self, messages, **kwargs):
@@ -62,6 +64,7 @@ async def test_each_file_uses_independent_messages_and_report(
     assert not result.file_errors
     assert [r.file.file_id for r in result.file_results] == ["bid-1", "bid-2"]
     assert len(model.calls) == 4
+    assert all(names.count("run_python") == 1 for names in model.bindings)
     assert model.peak == 2
     for messages in model.calls:
         assert ("bid-1.md" in messages[1].content) != (
