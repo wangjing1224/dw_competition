@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import EvidenceProgress from '@/pages/EvidenceLibraries/Progress';
 import RuleProgress from '@/pages/RuleLibraries/Progress';
 import type { TraceNode } from '@/services/ruleLibraries';
-import { TraceDetail, TraceTree } from '.';
+import { SourceFileList, TraceDetail, TraceTree } from '.';
 
 vi.mock('@umijs/max', () => ({
   Link: ({ to, children }: { to: string; children: ReactNode }) => (
@@ -53,6 +53,160 @@ const image = {
   path: 'file-1/images/1.png',
   url: '/api/bidders/bidder-1/files/file-1/preview?image_name=1.png&version=abc',
 };
+
+describe('规则库与资料库公共来源文件列表', () => {
+  it.each([
+    '抽取',
+    '整理',
+  ] as const)('%s 状态共用条目排版、处理中高亮和解析状态', (activity) => {
+    const { container } = render(
+      <SourceFileList
+        activity={activity}
+        files={[
+          [undefined, 'pending'],
+          ['processing', 'partial'],
+          ['completed', 'parsed'],
+          ['failed', 'unsupported'],
+        ].map(([status, parseStatus], index) => ({
+          file_id: `file-${index + 1}`,
+          file_name: `文件${index + 1}.docx`,
+          source_path: `材料/文件${index + 1}.docx`,
+          status,
+          parse_status: parseStatus as string,
+        }))}
+      />,
+    );
+    expect(container.querySelectorAll('.file-progress-list')).toHaveLength(1);
+    const files = container.querySelectorAll('.file-progress');
+    expect(files).toHaveLength(4);
+    expect(
+      within(files[0] as HTMLElement).getByText(`等待${activity}`),
+    ).toBeInTheDocument();
+    expect(files[1]).toHaveClass('active');
+    expect(
+      within(files[1] as HTMLElement).getByText(`${activity}中`),
+    ).toBeInTheDocument();
+    expect(within(files[2] as HTMLElement).getByText('已完成')).toHaveClass(
+      'ant-tag-green',
+    );
+    expect(within(files[3] as HTMLElement).getByText('失败')).toHaveClass(
+      'ant-tag-red',
+    );
+    for (const text of ['等待解析', '部分可读', '完成', '不支持']) {
+      expect(screen.getByText(`解析：${text}`)).toBeInTheDocument();
+    }
+    expect(screen.queryByText('file-1')).not.toBeInTheDocument();
+    expect(screen.getByText('文件1.docx').closest('strong')).not.toBeNull();
+  });
+
+  it.each([
+    [
+      '规则库',
+      RuleProgress,
+      '/api/projects/project-1',
+      'rule_ready',
+      '来源文件列表',
+    ],
+    [
+      '资料库',
+      EvidenceProgress,
+      '/api/bidders/bidder-1',
+      'evidence_ready',
+      '资料文件列表',
+    ],
+  ] as const)('%s 处理页复用来源列表，资料长文件名左对齐换行且预览仍可用', async (_, Progress, base, status, label) => {
+    const file = {
+      file_id: 'file-1',
+      file_name: '技术人员及项目经理相关资质与证明材料（附件一）.docx',
+      source_path:
+        '人员资格/技术人员及项目经理相关资质与证明材料（附件一）.docx',
+      parse_status: 'partial',
+      extraction_status: 'completed',
+      ingestion_status: 'completed',
+    };
+    const fetch = vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        url.endsWith('/preview')
+          ? {
+              ...file,
+              parse_version: 'v1',
+              markdown: '资料解析正文',
+              warnings: [],
+              images: [],
+            }
+          : url.includes('/progress?')
+            ? {
+                display_name: '文件展示测试',
+                status,
+                phase: 'completed',
+                document_count: 1,
+                completed_file_ids: [file.file_id],
+                saved_rule_count: 0,
+                saved_material_count: 1,
+                files: [file],
+                recent_rules: [],
+                recent_materials: [],
+                trace: {
+                  changes: [],
+                  next_cursor: 0,
+                  trace_status: 'completed',
+                  has_more: false,
+                },
+              }
+            : { rule_set: { rules: [] } },
+    }));
+    vi.stubGlobal('fetch', fetch);
+    render(
+      <>
+        <style>{readFileSync('src/global.less', 'utf8')}</style>
+        <Progress />
+      </>,
+    );
+    await screen.findByText(file.file_name);
+    const panel = screen.getByRole('region', { name: label });
+    expect(panel).toHaveClass('trace-panel-scroll');
+    expect(
+      panel.querySelectorAll('.file-progress-list > .file-progress'),
+    ).toHaveLength(1);
+    expect(within(panel).getByText(file.source_path)).toBeInTheDocument();
+    expect(within(panel).getByText('已完成')).toBeInTheDocument();
+    expect(within(panel).getByText('解析：部分可读')).toBeInTheDocument();
+    expect(
+      within(panel).getByText(file.file_name).closest('strong'),
+    ).not.toBeNull();
+    if (base.startsWith('/api/bidders')) {
+      const button = within(panel).getByRole('button', {
+        name: file.file_name,
+      });
+      expect(button).toHaveAttribute('type', 'button');
+      // jsdom 的原生 button 默认居中会覆盖普通作者声明；检查实际匹配的 CSS 规则，
+      // 不为测试给生产样式添加 !important，也不将这里当作浏览器像素验证。
+      const nameRule = Array.from(document.styleSheets)
+        .flatMap((sheet) => Array.from(sheet.cssRules))
+        .find(
+          (rule) =>
+            rule instanceof CSSStyleRule &&
+            rule.selectorText === '.file-progress-name',
+        ) as CSSStyleRule;
+      expect(button.matches(nameRule.selectorText)).toBe(true);
+      expect(nameRule.style.getPropertyValue('text-align')).toBe('left');
+      expect(getComputedStyle(button).whiteSpace).toBe('normal');
+      expect(getComputedStyle(button).overflowWrap).toBe('anywhere');
+      expect(getComputedStyle(button).padding).toBe('0px');
+      fireEvent.click(button);
+      const preview = await screen.findByRole('dialog');
+      expect(
+        await within(preview).findByText('资料解析正文'),
+      ).toBeInTheDocument();
+      expect(
+        fetch.mock.calls.some(
+          ([url]) => url === `${base}/files/file-1/preview`,
+        ),
+      ).toBe(true);
+    }
+  });
+});
 
 describe('规则库与资料库公共轨迹展示', () => {
   it.each([

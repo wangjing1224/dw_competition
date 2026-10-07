@@ -7,7 +7,8 @@ import {
 import { Alert, Card, Space, Tag, Tree } from 'antd';
 import type { DataNode } from 'antd/es/tree';
 import type { ReactNode } from 'react';
-import type { TraceNode } from '@/services/ruleLibraries';
+import EntityLabel from '@/components/EntityLabel';
+import type { Source, TraceNode } from '@/services/ruleLibraries';
 export type SeenNode = { seq: number; node: TraceNode };
 export function mergeChanges(
   previous: Record<string, SeenNode>,
@@ -134,6 +135,74 @@ export function TracePanel({
         {children}
       </section>
     </Card>
+  );
+}
+
+// 两库仅在页面适配各自的处理状态字段，共用文件名、路径、状态和解析结果展示。
+export function SourceFileList({
+  files,
+  activity,
+  onPreview,
+}: {
+  files: (Source & { parse_status: string; status?: string })[];
+  activity: '抽取' | '整理';
+  onPreview?: (fileId: string) => void;
+}) {
+  const labels: Record<string, string> = {
+    pending: `等待${activity}`,
+    processing: `${activity}中`,
+    completed: '已完成',
+    failed: '失败',
+  };
+  const parseLabels: Record<string, string> = {
+    pending: '等待解析',
+    parsed: '完成',
+    partial: '部分可读',
+    ocr_required: '需识图',
+    manual_review: '需人工处理',
+    unsupported: '不支持',
+    failed: '失败',
+  };
+  return (
+    <div className="file-progress-list">
+      {files.map((file) => (
+        <div
+          key={file.file_id}
+          className={`file-progress ${file.status === 'processing' ? 'active' : ''}`}
+        >
+          <strong>
+            {onPreview ? (
+              <button
+                type="button"
+                className="file-progress-name"
+                onClick={() => onPreview(file.file_id)}
+              >
+                <EntityLabel id={file.file_id}>{file.file_name}</EntityLabel>
+              </button>
+            ) : (
+              <EntityLabel id={file.file_id}>{file.file_name}</EntityLabel>
+            )}
+          </strong>
+          <small>{file.source_path}</small>
+          <Space wrap>
+            <Tag
+              color={
+                file.status === 'completed'
+                  ? 'green'
+                  : file.status === 'failed'
+                    ? 'red'
+                    : 'blue'
+              }
+            >
+              {labels[file.status || 'pending'] || file.status}
+            </Tag>
+          </Space>
+          <small>
+            解析：{parseLabels[file.parse_status] || file.parse_status}
+          </small>
+        </div>
+      ))}
+    </div>
   );
 }
 

@@ -1,11 +1,12 @@
 import EntityLabel from '@/components/EntityLabel';
 import { fileLabel } from '@/utils/displayLabels';
 import { Link, useParams } from '@umijs/max';
-import { Alert, Button, Card, Drawer, Empty, Space, Steps, Tag } from 'antd';
+import { Alert, Button, Card, Drawer, Empty, Steps } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   mergeChanges,
   type SeenNode,
+  SourceFileList,
   TraceDetail,
   TracePanel,
   TraceTree,
@@ -176,37 +177,14 @@ export default function Progress() {
           title={`来源文件 · ${data?.document_count || 0}`}
           label="资料文件列表"
         >
-          {data?.files.map((file) => (
-            <div
-              key={file.file_id}
-              className={`file-progress ${file.ingestion_status === 'processing' ? 'active' : ''}`}
-            >
-              <Button type="link" onClick={() => setPreviewFile(file.file_id)}>
-                <EntityLabel id={file.file_id}>{file.file_name}</EntityLabel>
-              </Button>
-              <small>{file.source_path}</small>
-              <Space wrap>
-                <Tag
-                  color={
-                    file.ingestion_status === 'completed'
-                      ? 'green'
-                      : file.ingestion_status === 'failed'
-                        ? 'red'
-                        : 'blue'
-                  }
-                >
-                  {
-                    {
-                      pending: '等待整理',
-                      processing: '整理中',
-                      completed: '已完成',
-                      failed: '失败',
-                    }[file.ingestion_status]
-                  }
-                </Tag>
-              </Space>
-            </div>
-          ))}
+          <SourceFileList
+            files={(data?.files || []).map((file) => ({
+              ...file,
+              status: file.ingestion_status,
+            }))}
+            activity="整理"
+            onPreview={setPreviewFile}
+          />
         </TracePanel>
         <TracePanel
           title="Agent 执行轨迹"

@@ -1,10 +1,11 @@
 import { NodeIndexOutlined } from '@ant-design/icons';
 import { Link, useParams } from '@umijs/max';
-import { Alert, Button, Card, Drawer, Empty, Space, Steps, Tag } from 'antd';
+import { Alert, Button, Card, Drawer, Empty, Space, Steps } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import {
   mergeChanges,
   type SeenNode,
+  SourceFileList,
   TraceDetail,
   TracePanel,
   TraceTree,
@@ -193,52 +194,13 @@ export default function ProgressPage() {
           title={`来源文件 · ${data?.document_count || 0}`}
           label="来源文件列表"
         >
-          <div className="file-progress-list">
-            {data?.files.map((file) => (
-              <div
-                key={file.file_id}
-                className={`file-progress ${file.extraction_status === 'processing' ? 'active' : ''}`}
-              >
-                <strong>
-                  <EntityLabel id={file.file_id}>{file.file_name}</EntityLabel>
-                </strong>
-                <small>{file.source_path}</small>
-                <Space wrap>
-                  <Tag
-                    color={
-                      file.extraction_status === 'completed'
-                        ? 'green'
-                        : file.extraction_status === 'failed'
-                          ? 'red'
-                          : 'blue'
-                    }
-                  >
-                    {
-                      {
-                        pending: '等待抽取',
-                        processing: '抽取中',
-                        completed: '已完成',
-                        failed: '失败',
-                      }[file.extraction_status || 'pending']
-                    }
-                  </Tag>
-                </Space>
-                <small>
-                  解析：
-                  {(
-                    {
-                      pending: '等待解析',
-                      parsed: '完成',
-                      partial: '部分可读',
-                      ocr_required: '需识图',
-                      manual_review: '需人工处理',
-                      unsupported: '不支持',
-                    } as Record<string, string>
-                  )[file.parse_status] || file.parse_status}
-                </small>
-              </div>
-            ))}
-          </div>
+          <SourceFileList
+            files={(data?.files || []).map((file) => ({
+              ...file,
+              status: file.extraction_status,
+            }))}
+            activity="抽取"
+          />
         </TracePanel>
         <TracePanel
           label="Agent 执行轨迹内容"
