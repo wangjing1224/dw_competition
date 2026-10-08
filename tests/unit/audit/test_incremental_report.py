@@ -10,6 +10,7 @@ from app.audit.session import run_session
 from app.audit.sources import SourceLedger
 from app.reports.markdown_report import TITLE_PLACEHOLDER, ReportDocument
 from app.tools.report_tools import report_tool
+from app.prompts.loader import load_tool_description
 from tests.helpers.audit import (
     SequenceModel,
     audit_context,
@@ -103,6 +104,43 @@ async def test_save_confirmed_part_and_query_an_independent_part_in_same_turn(
     final_tools = [m for m in model.calls[-1][0] if m.type == "tool"]
     assert final_tools[0].content == feedback.content  # 不重写历史Tool状态。
     assert final_tools[-1].content.startswith("## 当前草稿状态\n已填写规则 2/2")
+
+
+@pytest.mark.asyncio
+async def test_summary_duplicate_is_invalid_and_actual_tool_fewshot_repairs(tmp_path, temp_settings):
+    import json
+
+    context = audit_context()
+    report = ReportDocument(tmp_path / "draft.md", context.rule_set,
+                            SourceLedger(context.parsed_documents), version=2)
+    body = filled_report(context.rule_set, version=2)
+    # 先保存有效明细，将两个综述区块恢复成工具示例的实际当前状态。
+    start = body.index("## 总体总结")
+    end = body.index("## ", body.index("## 重点问题") + 3)
+    original = body[:start] + "## 总体总结\n\n待填写。\n\n## 重点问题\n\n待填写。\n\n" + body[end:]
+    await report.apply("write", original, None, "prepare")
+    from app.tools.report_tools import ReportEdit
+    # 错误仍然保存为无效稿，不能放松校验或自动消除重复章节。
+    await report.apply("edit", None, [ReportEdit(
+        old_text="## 总体总结\n\n待填写。",
+        new_text="## 总体总结\n\n已确认。\n\n## 重点问题\n\n无重点问题。",
+    )], "bad")
+    with pytest.raises(ValueError):
+        report.finish()
+    # 当前已知错误直接精确编辑，不需要增加一轮read。
+    await report.apply("edit", None, [ReportEdit(
+        old_text="## 总体总结\n\n已确认。\n\n## 重点问题\n\n无重点问题。",
+        new_text="## 总体总结\n\n待填写。",
+    )], "undo-bad")
+    example = next(line for line in load_tool_description("report_document").splitlines()
+                   if line.startswith('{"action":'))
+    params = json.loads(example)
+    receipt = await report.apply(params["action"], params["content"],
+                                [ReportEdit(**edit) for edit in params["edits"]], "good")
+    assert report.finish()
+    assert "无重点问题。" in report.read() and "待填写" not in report.read()
+    assert body[end:] == report.read()[report.read().index("## ", report.read().index("## 重点问题") + 3):]
+    assert "已填写规则 1/1" in receipt
 
 
 @pytest.mark.asyncio

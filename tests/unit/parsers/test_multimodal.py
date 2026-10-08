@@ -270,6 +270,45 @@ async def test_vision_cached_and_no_base64_persisted(setup_parser):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reply,expected_status", [
+    ({"status": "readable", "content": "编号123。右下角水印：AI生成，仅供示例。", "reason": ""}, "parsed"),
+    ({"status": "partial", "content": "标题：样本。页脚：[无法辨认]。", "reason": "页脚其余小字无法辨认"}, "partial"),
+    ({"status": "readable", "content": "编号123；金额10元", "reason": ""}, "parsed"),
+])
+async def test_f3_prompt_loaded_and_transcription_preserved_without_new_fields(
+    setup_parser, reply, expected_status
+):
+    # 仅测试Mock返回后的保存/渲染，不将白图夹具当作真实OCR效果验证。
+    assets, path, settings = setup_parser
+    native = ImageParser().parse(reference(path), path, assets=assets)
+    model = FakeModel([reply])
+    result = await vision.enrich_document(native, assets, model=model)
+    prompt = model.calls[0][0].content
+    assert "逐图检查边角、页脚和水印" in prompt
+    assert "标识本身不导致 partial 或 skipped" in prompt
+    image = result.sections[0].blocks[0].images[0]
+    assert image.transcription == reply["content"]
+    assert image.read_status == reply["status"]
+    assert result.parse_status == expected_status
+    assert reply["content"] in render_document(result)
+    if reply["reason"]:
+        assert image.warning == reply["reason"]
+    # 已有缓存机制包含完整提示词；新规范不是沿用旧转写的同一个缓存键。
+    old_prompt = "\n".join(
+        line for line in prompt.splitlines()
+        if not line.startswith(("逐图检查边角", "局部看不清时保留其余"))
+    ) + "\n"
+    raw = assets.read_image(image)
+    assert vision._cache_key(prompt, settings, [raw]) != vision._cache_key(old_prompt, settings, [raw])
+    # 原有机制仅缓存readable/skipped；partial再次解析会重试，不扩张缓存范围。
+    retry = reply["status"] == "partial"
+    second_model = FakeModel([reply] if retry else [])
+    second = await vision.enrich_document(native, assets, model=second_model)
+    assert len(second_model.calls) == int(retry)
+    assert second.sections[0].blocks[0].images[0].transcription == reply["content"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "reply",
     [

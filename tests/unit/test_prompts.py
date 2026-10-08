@@ -1,8 +1,28 @@
 """Prompt 配置路径、System/Human 模板和工具说明测试。"""
 
+import json
+
 import pytest
 
 from app.prompts.loader import load_tool_description, render_prompt
+
+
+def test_parser_image_prompt_keeps_visible_marks_without_authenticity_judgment():
+    from app.parsers.vision import ImageReading
+
+    prompt = render_prompt("parser_image_transcription")
+    assert "边角、页脚和水印" in prompt
+    assert "样本、示例、AI生成、作废或效力声明" in prompt
+    assert "本图实际可见内容" in prompt and "不由文件名、上下文或其他图片补造" in prompt
+    assert "标识本身不导致 partial 或 skipped" in prompt
+    assert "未见标识不等于已确认非AI生成" in prompt
+    assert "保留其余已确认内容及具体读取限制" in prompt
+    assert "图中的位置" in prompt
+    # F3仅补充转写要求；输出字段、状态集合、JSON转义及表格约束仍用原契约。
+    example = json.loads(next(line for line in prompt.splitlines() if line.startswith('{"status":')))
+    assert set(example) == set(ImageReading.model_fields) == {"status", "content", "reason"}
+    assert example["status"].split("|") == ["readable", "partial", "unreadable", "skipped"]
+    assert "rowspan/colspan" in prompt and "单个合法 JSON 对象" in prompt
 
 
 def test_evidence_ingestion_prompt_separates_business_relations_from_similarity():
@@ -134,7 +154,7 @@ def test_audit_strategy_keeps_scope_and_does_not_force_per_round_saves():
     assert "同主体、对象、版本和来源范围" in system
     assert "不为填写来源ID重新检索" in system
     assert "每轮核验后，只要" not in system
-    assert "无需逐条单开保存轮" in system
+    assert "多个互不冲突的修改优先合并在一次edit中" in system
     assert "解析转写不等于" in system
     child = render_prompt("evidence_subagent")
     assert "完整 chunk_id" in child and "版本后缀" in child
@@ -146,8 +166,8 @@ def test_incremental_report_guidance_preserves_dependencies_and_fixed_round_limi
     prompt = render_prompt(
         "bid_agent", rule_view="规则", report_markdown_contract="模板"
     )
-    assert "同轮 tool_calls" in prompt and "不要等全部规则查完" in prompt
-    assert "不能预测工具返回" in prompt
+    assert "同次响应的tool_calls" in prompt and "不等待全部事项结束" in prompt
+    assert "不能使用同轮尚未返回的B结果写稿" in prompt
     reminder = render_prompt(
         "bid_agent_last_tool_round",
         current_step=7,
@@ -236,9 +256,9 @@ def test_summary_policy_and_sandbox_protocol_are_separate():
     assert "优先使用本次给出的详细摘要" in child and "不需要片段ID" in child
     assert "仅为定位线索" not in child and "不能只复述摘要" not in child
     for text in (main, child):
-        assert "run_python 实际成功结果" in text
+        assert "### run_python" in text and "采用成功执行的实际结果" in text
         assert "用print" not in text and "status为success" not in text
-    final = render_prompt("evidence_subagent_finalize", current_step=3, max_steps=3)
+    final = render_prompt("evidence_subagent_finalize", current_step=4, max_steps=4)
     assert "已无工具" in final and "摘要充分时可据此回答" in final
     assert "待主审处理" in final
     contract = render_prompt("audit_report_template")
@@ -252,10 +272,76 @@ def test_summary_policy_and_sandbox_protocol_are_separate():
 def test_ingestion_preserves_formula_roles_and_operation_semantics():
     rule = render_prompt("rule_extraction", rule_view="规则")
     material = render_prompt("evidence_ingestion", current_material="无", history_view="历史")
-    assert "全部必要条件" in rule and "材料顺序本身不决定效力" in rule
+    assert "全部必要条件" in rule and "文件顺序本身不决定效力" in rule
     assert "互斥条件" in rule
     assert "不能决定有争议原文的效力或自行修改招标门槛" in rule
     assert "不用某个例子算出的数字替代适用公式" in rule
     assert "签发角色和证明范围" in material and "原填值" in material
     assert "实际成功结果" in rule and "实际成功结果" in material
     assert "按预算加载" not in material
+
+
+@pytest.mark.parametrize("name,variables,tool_names", [
+    ("bid_agent", {"rule_view": "规则", "report_markdown_contract": "模板"},
+     ["search_documents", "view_image", "request_evidence_review", "report_document", "run_python"]),
+    ("evidence_subagent", {}, ["search_documents", "view_image", "run_python"]),
+    ("rule_extraction", {"rule_view": "规则"},
+     ["search_documents", "view_image", "submit_rule_delta", "run_python"]),
+    ("evidence_ingestion", {"current_material": "当前", "history_view": "历史"},
+     ["search_documents", "view_image", "save_evidence_material", "run_python"]),
+])
+def test_tool_norms_only_list_role_tools_once(name, variables, tool_names):
+    import re
+
+    system = render_prompt(name, **variables)
+    assert system.count("## 工具使用规范") == 1
+    assert re.findall(r"^### (.+)$", system, re.M) == ["通用规则", *tool_names]
+    assert "同名工具多次调用" in system and "系统顺序执行" in system
+    assert "不以打印预设答案冒充验证" in system
+    assert "不同调用不共享变量" in system
+    assert "4.2" not in system and "${" not in system
+    for name in tool_names:
+        assert load_tool_description(name)
+
+
+def test_task35_strategy_scope_facts_and_templates():
+    main = render_prompt("bid_agent", rule_view="规则", report_markdown_contract="模板")
+    assert "不赋予你直接读取资料图片的权限" in main
+    assert "全部checks、起始ID和目标" in main
+    assert "不为重复确认或补来源ID再次委派" in main
+    assert "不删掉来源后仍保留冒称已核" in main
+    assert "报告结论数量由代码统计" in main
+    assert "明细已收束后" in main and "不固定各阶段占几轮" in main
+    assert "较弱下界不能当成精确实际值" in main
+    assert "即使另一理由已经足以判不符合" in main
+    child = render_prompt("evidence_subagent")
+    assert "完整来源键紧邻该事实" in child
+    assert "混合依据分别标明" in child
+    assert "主审交接事实保留交接身份" in child
+    rule = render_prompt("rule_extraction", rule_view="规则")
+    assert "不承担独立评分" in rule and "不因位于评分章节一并排除" in rule
+    assert "表格、清单、附件" in rule and "未确定的适用范围" in rule
+    evidence = render_prompt("evidence_ingestion", current_material="无", history_view="历史")
+    for text in ("总数一致", "未注明", "部分对应", "逐图保留", "同一产品", "不为减少联查"):
+        assert text in evidence
+    delegated = load_tool_description("request_evidence_review")
+    assert "任一check身份非法则本批均未启动" in delegated
+    assert "其他check可能已执行" in delegated
+    assert "全部checks、起始ID和目标" not in delegated  # 恢复策略留在System。
+
+
+def test_report_tool_edit_fewshot_is_valid_and_not_in_template():
+    import json
+
+    description = load_tool_description("report_document")
+    example = next(line for line in description.splitlines() if line.startswith('{"action":'))
+    edits = json.loads(example)
+    current = "## 总体总结\n\n待填写。\n\n## 重点问题\n\n待填写。"
+    for edit in edits["edits"]:
+        assert current.count(edit["old_text"]) == 1
+        current = current.replace(edit["old_text"], edit["new_text"])
+    assert "待填写" not in current
+    assert current.count("## 总体总结") == current.count("## 重点问题") == 1
+    template = render_prompt("audit_report_template")
+    assert example not in template
+    assert "仅采用充分摘要，省略片段来源行" in template

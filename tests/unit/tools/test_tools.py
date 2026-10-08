@@ -212,6 +212,29 @@ def test_one_hop_relations_do_not_expand_transitively():
 
 
 @pytest.mark.asyncio
+async def test_delegate_invalid_later_check_starts_none_then_corrected_batch_runs(temp_settings):
+    context = audit_context()
+    model = SequenceModel(["事实一", "事实二"])
+    records = []
+    tool = build_evidence_review_tool(
+        context=context, settings=temp_settings, model=model,
+        retrieval=SimpleNamespace(search=AsyncMock()), ledger=SourceLedger(context.parsed_documents),
+        limiter=asyncio.Semaphore(1), trace_context={}, records=records,
+    )
+    args = {"checks": [
+        {"rule_ids": ["rule-1"], "verification_request": "资料事项一", "file_ids": ["e-1"]},
+        {"rule_ids": ["rule-1"], "verification_request": "资料事项二", "file_ids": ["bid-1"]},
+    ]}
+    with pytest.raises(ValueError):
+        await tool.ainvoke(call(tool.name, args))
+    assert not model.calls and not records
+    args["checks"][1]["file_ids"] = ["e-3"]
+    result = await tool.ainvoke(call(tool.name, args))
+    assert len(model.calls) == len(records) == 2
+    assert "事实一" in result.content and "事实二" in result.content
+
+
+@pytest.mark.asyncio
 async def test_multi_rule_check_uses_one_summary_only_session_and_compact_header(temp_settings, tmp_path):
     context = audit_context()
     context.rule_set.rules.append(context.rule_set.rules[0].model_copy(update={"rule_id": "rule-2"}))

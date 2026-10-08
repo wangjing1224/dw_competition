@@ -217,6 +217,58 @@ async def run_tool_test(
 
 
 @pytest.mark.asyncio
+async def test_evidence_four_rounds_three_tool_opportunities_and_one_final(temp_settings):
+    executed = []
+
+    async def work(number: int):
+        executed.append(number)
+        return str(number)
+
+    tool = StructuredTool.from_function(coroutine=work, description="独立工具测试")
+    model = SequenceModel([
+        AIMessage(content="", tool_calls=[{"name": "work", "id": f"call-{i}", "args": {"number": i}}])
+        for i in range(1, 4)
+    ] + ["核验已结束"])
+    assert temp_settings.audit.evidence_agent_max_steps == 4
+    await run_tool_test(temp_settings, model, [tool], role="evidence_subagent",
+                        max_steps=temp_settings.audit.evidence_agent_max_steps)
+    assert executed == [1, 2, 3]
+    assert len(model.calls) == 4 and len(model.bindings) == 3
+    assert "当前第3轮，共4轮" in model.calls[2][0][-1].content
+    assert "最后一个工具轮" in model.calls[2][0][-1].content
+    assert "当前第4轮，共4轮，已无工具" in model.calls[3][0][-1].content
+    assert [m.type for m in model.calls[1][0]] == ["system", "human", "ai", "tool"]
+
+
+@pytest.mark.asyncio
+async def test_same_named_and_distinct_tools_close_in_one_round(temp_settings):
+    executed = []
+
+    async def run_python(code: str):
+        executed.append(("python", code))
+        return {"status": "success", "result": code}
+
+    async def search_documents(query: str):
+        executed.append(("search", query))
+        return "测试查询结果"
+
+    tools = [StructuredTool.from_function(coroutine=fn, description="测试工具")
+             for fn in (run_python, search_documents)]
+    model = SequenceModel([
+        AIMessage(content="", tool_calls=[
+            {"name": "run_python", "id": "py-one", "args": {"code": "独立输入一"}},
+            {"name": "run_python", "id": "py-two", "args": {"code": "独立输入二"}},
+            {"name": "search_documents", "id": "search", "args": {"query": "独立事项三"}},
+        ]), "已取得结果",
+    ])
+    await run_tool_test(temp_settings, model, tools, role="evidence_subagent", max_steps=4)
+    assert len(model.calls) == 2  # 可以提前结束，不跑满4轮。
+    assert executed == [("python", "独立输入一"), ("python", "独立输入二"), ("search", "独立事项三")]
+    assert [m.tool_call_id for m in model.calls[1][0] if m.type == "tool"] == ["py-one", "py-two", "search"]
+    assert [m.type for m in model.calls[1][0]] == ["system", "human", "ai", "tool", "tool", "tool"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["bid_agent", "evidence_subagent"])
 async def test_tool_errors_and_invalid_json_are_closed_then_corrected(
     temp_settings, role

@@ -703,7 +703,8 @@ async def test_real_budget_splits_whole_blocks_and_allows_unchanged_last_batch(
     small = settings.model_copy(
         update={
             "evidence_classification_model": settings.evidence_classification_model.model_copy(
-                update={"context_window_tokens": 45000}
+                # Task35工具规范增大固定输入；仍只能装一个24KB完整结构，不能装两个。
+                update={"context_window_tokens": 55000}
             )
         }
     )

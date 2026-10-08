@@ -38,8 +38,8 @@ audit:
   # 主审核每个阅读批次的模型调用轮数，正整数，默认8；含最后无工具收尾轮。
   # 同批压缩续跑不清零，一轮可调用多个工具；不再读取旧的轮次环境变量。
   bid_agent_max_steps: 15
-  # 资料核验子 Agent 每个会话的模型调用轮数，正整数，默认3；同样含收尾轮。
-  evidence_agent_max_steps: 3
+  # 资料核验子 Agent 每个会话的模型调用轮数，正整数，默认4；3个工具轮＋1个无工具收尾轮。
+  evidence_agent_max_steps: 4
   # 同一审核任务同时处理文件数，整数>=1，默认2；不等于模型HTTP并发数。
   file_concurrency: 2
   # 审核Chat共享的请求名额，整数>=1，默认3；不控制Embedding/Rerank并发。

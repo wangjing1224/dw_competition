@@ -106,6 +106,8 @@ class RetrievalService:
             top_n=final_k,
         )
         by_id = {item.chunk.chunk_id: item for item in merged}
+        # 百炼可能仅用临时清理/分窗副本打分。这里只按原ID回链，绝不返回窗口副本。
+        # 本地Rerank仍接收原始全文；索引、解析版本和引用正文均不因重排而修改。
         results: list[SearchResult] = []
         for rank, item in enumerate(reranked):
             recall = by_id[item.document_id]

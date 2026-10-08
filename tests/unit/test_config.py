@@ -139,7 +139,7 @@ def test_audit_steps_keep_defaults_when_yaml_omits_them(monkeypatch, omit_audit)
     monkeypatch.setattr(config, "_load_yaml", load_yaml)
     audit = get_settings().audit
     assert audit.bid_agent_max_steps == 8
-    assert audit.evidence_agent_max_steps == 3
+    assert audit.evidence_agent_max_steps == 4
 
 
 @pytest.mark.parametrize("field", ["bid_agent_max_steps", "evidence_agent_max_steps"])

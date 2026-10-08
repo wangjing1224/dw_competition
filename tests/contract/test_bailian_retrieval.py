@@ -364,7 +364,7 @@ async def test_instances_share_concurrency_and_shutdown_closes_owned_client(
 
 
 @pytest.mark.asyncio
-async def test_rerank_all_scores_remapped_to_original_candidate_ids_across_batches():
+async def test_rerank_rolling_top_k_remaps_original_ids_without_merging_scores():
     sizes = []
 
     def respond(request):
@@ -373,7 +373,7 @@ async def test_rerank_all_scores_remapped_to_original_candidate_ids_across_batch
         texts = body["input"]["documents"]
         sizes.append(len(texts))
         assert body["parameters"] == {
-            "top_n": len(texts),
+            "top_n": 3,
             "instruct": "Rank relevant tender evidence.",
         }
         assert body["input"]["query"] == "采购"
@@ -382,8 +382,8 @@ async def test_rerank_all_scores_remapped_to_original_candidate_ids_across_batch
             json={
                 "output": {
                     "results": [
-                        {"index": i, "relevance_score": int(text) / 1000}
-                        for i, text in reversed(list(enumerate(texts)))
+                        {"index": i, "relevance_score": int(text) / 1000 - len(sizes)}
+                        for i, text in sorted(enumerate(texts), key=lambda item: int(item[1]), reverse=True)[:3]
                     ]
                 }
             },
@@ -402,25 +402,28 @@ async def test_rerank_all_scores_remapped_to_original_candidate_ids_across_batch
             "chunk-499",
             "chunk-498",
         ]
-        assert sizes == [500, 1]
+        assert sizes == [500, 4]
+        assert results[0].score == 0.5 - 2  # 只用最后同一批的分数，不能沿用前批较高分。
         assert await backend.score("采购", []) == []
 
 
 @pytest.mark.asyncio
-async def test_rerank_duplicate_texts_are_not_collapsed_and_estimate_only_batches():
+async def test_rerank_duplicate_texts_keep_unique_ids_and_window_all_content():
     sizes = []
-    long_text = "中" * 25000  # byte估算大于7万，不应假冒精确token上限把整表硬拒绝
+    long_text = "中" * 25000 + "尾部"
 
     def respond(request):
-        texts = json.loads(request.content)["input"]["documents"]
+        body = json.loads(request.content)
+        texts = body["input"]["documents"]
         sizes.append(len(texts))
-        assert all(text == long_text for text in texts)
+        assert all(len(text.encode()) <= cloud.RERANK_DOCUMENT_TARGET for text in texts)
         return httpx.Response(
             200,
             json={
                 "output": {
                     "results": [
-                        {"index": i, "relevance_score": 0.9} for i in range(len(texts))
+                        {"index": i, "relevance_score": 0.9 if "尾部" in texts[i] else 0.1}
+                        for i in sorted(range(len(texts)), key=lambda i: "尾部" not in texts[i])[:body["parameters"]["top_n"]]
                     ]
                 }
             },
@@ -430,8 +433,269 @@ async def test_rerank_duplicate_texts_are_not_collapsed_and_estimate_only_batche
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         backend = cloud.BailianRerankBackend(rerank_settings(), client=client)
         results = await RerankModel(rerank_settings(), backend).rerank("采购", docs)
-    assert sizes == [1, 1, 1]
+    assert sizes == [4, 4, 4, 3]  # 三条分别选代表，最后合并原候选，不按内容去重。
     assert [r.document_id for r in results] == ["0", "1", "2"]
+    assert all(doc.text == long_text for doc in docs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count,k,capacity,batches", [
+    (20, 10, 12, [12] * 5),
+    (20, 10, 11, [11] * 10),
+    (30, 10, 25, [25, 15]),
+    (8, 10, 12, [8]),
+    (0, 10, 12, []),
+])
+async def test_rolling_top_k_fills_budget_consumes_candidates_and_terminates(
+    monkeypatch, count, k, capacity, batches
+):
+    cfg = rerank_settings(instruction="i")
+    # 每条100字节，query/instruct各1字节；按字节而非固定候选减K。
+    monkeypatch.setattr(cloud, "RERANK_BATCH_TOKEN_TARGET", capacity * 102)
+    observed, seen = [], set()
+
+    def respond(request):
+        body = json.loads(request.content)
+        texts, limit = body["input"]["documents"], body["parameters"]["top_n"]
+        values = [int(text[:3]) for text in texts]
+        observed.append(len(texts))
+        seen.update(values)
+        assert sum(len(t.encode()) + 2 for t in texts) <= capacity * 102
+        order = sorted(range(len(texts)), key=lambda i: values[i], reverse=True)[:limit]
+        return httpx.Response(200, json={"output": {"results": [
+            {"index": i, "relevance_score": values[i] - len(observed) * 100}
+            for i in order
+        ]}})
+
+    docs = [RerankDocument(document_id=f"id-{i}", text=str(i).zfill(3).ljust(100, "x")) for i in range(count)]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        backend = cloud.BailianRerankBackend(cfg, client=client)
+        results = await RerankModel(cfg, backend).rerank("q", docs, top_n=k)
+    assert observed == batches
+    assert seen == set(range(count))
+    assert [r.document_id for r in results] == [f"id-{i}" for i in reversed(range(max(count-k, 0), count))]
+    assert all(r.score == int(r.document_id[3:]) - len(batches) * 100 for r in results)
+
+
+def test_scoring_cleanup_is_structural_and_preserves_real_merges_nested_tables():
+    original = (
+        '对象a rowspan="1" ≤ 2 kg\n<table><tr><td rowspan="01" colspan="1">'
+        '<table><tr><td colspan="2">≥3 mg</td></tr></table>'
+        '</td><td rowspan="2">0.25%</td></tr><tr><td>尾</td></tr></table>'
+    )
+    cleaned = cloud._clean_scoring_text(original)
+    assert '对象a rowspan="1" ≤ 2 kg' in cleaned
+    assert 'rowspan="01"' not in cleaned and 'colspan="1"' not in cleaned
+    assert 'colspan="2"' in cleaned and 'rowspan="2"' in cleaned
+    assert cleaned.count("<table>") == 2 and "≥3 mg" in cleaned and "0.25%" in cleaned
+    plain = '普通文本 rowspan="1"; colspan="1"; 1 < 2'
+    assert cloud._clean_scoring_text(plain) == plain
+
+
+def test_table_windows_retain_headers_units_tail_and_spanning_context():
+    rows = ['<tr><th>对象</th><th>数值（mg）</th></tr>']
+    for i in range(40):
+        rows.append(f'<tr><td rowspan="2">对象-{i}</td><td>数值-{i} ≤ 3</td></tr>')
+        rows.append(f'<tr><td>后行-{i} ≥ 2</td></tr>')
+    original = '采购清单\n<table>' + ''.join(rows) + '</table>'
+    windows = cloud._scoring_windows(original, 1800)
+    assert len(windows) > 2
+    assert all(len(w.encode()) <= 1800 for w in windows)
+    assert all("采购清单" in w and "数值（mg）" in w for w in windows)
+    for i in range(40):
+        assert any(f"数值-{i} ≤ 3" in w for w in windows)
+        assert any(f"后行-{i} ≥ 2" in w and f"对象-{i}" in w for w in windows)
+    assert "后行-39" in windows[-1]
+
+
+def test_huge_row_cell_nested_table_and_plaintext_are_windowed_without_dropping_tail():
+    cell = "连续说明。" * 2000 + "最终条件 ≥ 22 kg"
+    table = (
+        '<table><tr><th>编号</th><th>记录内容（kg）</th></tr>'
+        '<tr><td>实体A</td><td>' + cell +
+        '<table><tr><th>子项</th><th>单位</th></tr><tr><td>嵌套末行</td><td>mg</td></tr></table>'
+        '</td></tr></table>'
+    )
+    windows = cloud._scoring_windows(table, 2000)
+    assert len(windows) > 2 and all(len(w.encode()) <= 2000 for w in windows)
+    assert any("最终条件 ≥ 22 kg" in w for w in windows)
+    assert any("嵌套末行" in w and "子项" in w and "实体A" in w for w in windows)
+    assert all("行2 / 列2" in w for w in windows if "连续说明" in w)
+    text = "无分隔符" * 3000 + "TAIL"
+    pieces = cloud._scoring_windows(text, 800)
+    assert "".join(w.split('\n', 1)[1] for w in pieces) == text
+
+
+def test_row_headers_are_not_mistaken_for_a_huge_repeated_column_header():
+    table = '<table><tr><th>名称</th><th>值</th></tr>' + ''.join(
+        f'<tr><th>行对象-{i}</th><td>数据-{i}</td></tr>' for i in range(100)
+    ) + '</table>'
+    windows = cloud._scoring_windows(table, 1500)
+    assert len(windows) > 1 and all(len(w.encode()) <= 1500 for w in windows)
+    for i in range(100):
+        assert any(f"行对象-{i}" in w and f"数据-{i}" in w for w in windows)
+
+
+@pytest.mark.asyncio
+async def test_windows_use_rolling_k_one_then_compare_originals(monkeypatch):
+    cfg = rerank_settings(instruction="i")
+    monkeypatch.setattr(cloud, "RERANK_DOCUMENT_TARGET", 400)
+    monkeypatch.setattr(cloud, "RERANK_BATCH_TOKEN_TARGET", 850)
+    requests = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        texts = body["input"]["documents"]
+        requests.append(texts)
+        limit = body["parameters"]["top_n"]
+        order = sorted(range(len(texts)), key=lambda i: "TAIL_TARGET" not in texts[i])[:limit]
+        return httpx.Response(200, json={"output": {"results": [
+            {"index": i, "relevance_score": (1 if "TAIL_TARGET" in texts[i] else 0) - len(requests)}
+            for i in order
+        ]}})
+
+    docs = [RerankDocument(document_id="long", text="正文" * 1500 + " TAIL_TARGET"),
+            RerankDocument(document_id="other", text="irrelevant")]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        results = await RerankModel(cfg, cloud.BailianRerankBackend(cfg, client=client)).rerank("q", docs, 1)
+    assert len(requests) > 3
+    assert all(len(batch) >= 2 for batch in requests)
+    assert any("TAIL_TARGET" in t for t in requests[-1])
+    assert results[0].document_id == "long"
+    assert results[0].score == 1 - len(requests)
+
+
+@pytest.mark.asyncio
+async def test_query_and_unshrinkable_context_fail_before_http(monkeypatch):
+    cfg = rerank_settings(instruction="i")
+    calls = []
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: calls.append(req))) as client:
+        model = RerankModel(cfg, cloud.BailianRerankBackend(cfg, client=client))
+        with pytest.raises(ModelCallError, match="未截断查询"):
+            await model.rerank("q" * 4001, [RerankDocument(document_id="x", text="ok")])
+        monkeypatch.setattr(cloud, "RERANK_DOCUMENT_TARGET", 200)
+        text = '<table><tr><th>' + '长必要表头' * 100 + '</th></tr><tr><td>数据</td></tr></table>'
+        with pytest.raises(ModelCallError, match="必要表头"):
+            await model.rerank("q", [RerankDocument(document_id="x", text=text)])
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_single_document_target_reserves_query_and_instruction():
+    query = "q" * 4000
+    cfg = rerank_settings(instruction="i" * 2000)
+    original = "正文" * 6000 + "TAIL"
+    seen = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        texts = body["input"]["documents"]
+        seen.extend(texts)
+        assert all(len(text.encode()) + 6000 <= cloud.RERANK_DOCUMENT_TARGET for text in texts)
+        return httpx.Response(200, json={"output": {"results": [
+            {"index": 0, "relevance_score": 1.0}
+        ]}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        backend = cloud.BailianRerankBackend(cfg, client=client)
+        result = await backend.select_top_k(
+            query, [RerankDocument(document_id="long", text=original)], 1
+        )
+    assert result == [("long", 1.0)]
+    assert any("TAIL" in text for text in seen)
+
+
+@pytest.mark.asyncio
+async def test_shrink_all_representations_before_first_comparison(monkeypatch):
+    cfg = rerank_settings(instruction="i")
+    monkeypatch.setattr(cloud, "RERANK_BATCH_TOKEN_TARGET", 2200)
+    calls = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        texts, k = body["input"]["documents"], body["parameters"]["top_n"]
+        calls.append((texts, k))
+        assert sum(len(text.encode()) + 2 for text in texts) <= 2200
+        return httpx.Response(200, json={"output": {"results": [
+            {"index": i, "relevance_score": 1 / (i + 1)} for i in range(k)
+        ]}})
+
+    docs = [RerankDocument(document_id=f"id-{i}", text=f"object{i} " + "value " * 200) for i in range(20)]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        result = await RerankModel(cfg, cloud.BailianRerankBackend(cfg, client=client)).rerank("q", docs, 10)
+    assert len(result) == len({r.document_id for r in result}) == 10
+    # 先处理全部20个候选，再进入候选间比较；没有比较后缩窗而忘记已淘汰候选。
+    first_comparison = next(i for i, (_, k) in enumerate(calls) if k == 10)
+    assert first_comparison >= 20
+    assert all(k == 10 for _, k in calls[first_comparison:])
+    assert all(len(texts) > 10 for texts, k in calls[first_comparison:])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["duplicate", "out_of_range", "missing", "nan", "bool_index"])
+async def test_top_k_response_validation_uses_full_batch_index_range(fault):
+    items = [{"index": 2, "relevance_score": 0.9}, {"index": 0, "relevance_score": 0.8}]
+    if fault == "duplicate":
+        items[1]["index"] = 2
+    elif fault == "out_of_range":
+        items[0]["index"] = 3
+    elif fault == "missing":
+        items.pop()
+    elif fault == "nan":
+        items[0]["relevance_score"] = float("nan")
+    else:
+        items[0]["index"] = True
+    cfg = rerank_settings()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, text=json.dumps({"output": {"results": items}}))
+    )) as client:
+        with pytest.raises(ModelCallError):
+            await RerankModel(cfg, cloud.BailianRerankBackend(cfg, client=client)).rerank(
+                "q", [RerankDocument(document_id=str(i), text=str(i)) for i in range(3)], 2
+            )
+
+
+def test_invalid_parameter_does_not_automatically_mean_length_error():
+    assert "constraint=unknown" in cloud._safe_length_diagnostic({
+        "code": "InvalidParameter", "message": "invalid model or parameter PRIVATE_TEXT"
+    })
+    diagnostic = cloud._safe_length_diagnostic({"error": {
+        "message": "query token length exceeds maximum PRIVATE_TEXT", "input_tokens": 4100,
+        "max_tokens": 4000, "document": "PRIVATE_TEXT", "api_key": "secret",
+    }})
+    assert "constraint=query_length" in diagnostic and "4100" in diagnostic
+    assert "PRIVATE_TEXT" not in diagnostic and "secret" not in diagnostic
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("degrade", [False, True])
+async def test_mid_rolling_failure_never_returns_partial_top_k(monkeypatch, degrade, caplog):
+    cfg = rerank_settings(instruction="i", allow_degradation=degrade)
+    monkeypatch.setattr(cloud, "RERANK_MAX_ITEMS", 3)
+    count = 0
+    caplog.set_level(logging.INFO)
+
+    def respond(request):
+        nonlocal count
+        count += 1
+        if count == 2:
+            return httpx.Response(400, json={"request_id": "len-safe", "code": "InvalidParameter",
+                "message": "document token length exceeds maximum PRIVATE_DOC secret-test-key"})
+        return httpx.Response(200, json={"output": {"results": [{"index": 2, "relevance_score": 0.9}]}})
+
+    docs = [RerankDocument(document_id=f"id-{i}", text=f"PRIVATE_DOC {i}") for i in range(5)]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        model = RerankModel(cfg, cloud.BailianRerankBackend(cfg, client=client))
+        if degrade:
+            result = await model.rerank("q", docs, 1)
+            assert [(r.document_id, r.score) for r in result] == [("id-0", None)]
+        else:
+            with pytest.raises(ModelCallError, match="constraint=document_length") as caught:
+                await model.rerank("q", docs, 1)
+            assert "PRIVATE_DOC" not in str(caught.value)
+    assert count == 2
+    assert "PRIVATE_DOC" not in caplog.text and "secret-test-key" not in caplog.text
+    assert "utf8_bytes_proxy" in caplog.text
 
 
 @pytest.mark.asyncio

@@ -314,6 +314,11 @@ class RerankModel:
             return []
         limit = min(top_n or self.settings.top_n, len(documents))
         try:
+            if isinstance(self.backend, BailianRerankBackend):
+                return [
+                    RerankResult(document_id=document_id, score=score)
+                    for document_id, score in await self.backend.select_top_k(query, documents, limit)
+                ]
             scores = await self.backend.score(query, documents)
             if len(scores) != len(documents) or any(
                 not math.isfinite(score) for score in scores

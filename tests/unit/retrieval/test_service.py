@@ -2,6 +2,8 @@
 
 import numpy as np
 import pytest
+import httpx
+import json
 
 from app.core.config import get_settings
 from app.llm.rerank_model import RerankResult
@@ -84,6 +86,65 @@ async def test_search_returns_only_current_bidder(monkeypatch):
 
     assert [item.chunk_id for item in results] == ["chunk-a"]
     assert results[0].bidder_id == "bidder-a"
+
+
+@pytest.mark.asyncio
+async def test_bailian_windows_only_change_scoring_copy_not_index_or_source(temp_settings, monkeypatch):
+    from app.llm import bailian_retrieval as cloud
+    from app.llm.rerank_model import RerankModel
+    from tests.contract.test_bailian_retrieval import rerank_settings
+
+    cfg = rerank_settings(instruction="rank")
+    settings = temp_settings.model_copy(update={"rerank_model": cfg})
+    monkeypatch.setattr(cloud, "RERANK_DOCUMENT_TARGET", 1800)
+    content = '<table><tr><th>字段</th><th>数值</th></tr>' + ''.join(
+        f'<tr><td rowspan="1">field-{i}</td><td colspan="1">{i} kg</td></tr>' for i in range(120)
+    ) + '</table>TAIL_MARKER'
+    chunk = IndexChunk(
+        chunk_id="chunk-a-vabc", file_id="file-a", bidder_id="bidder-a", data_role="evidence_material",
+        file_name="资料.md", source_path="资料.md", section="参数表", content=content,
+        parse_status="parsed", block_kind="table", parse_version="file-a/versions/abc/document.md",
+        image_paths=["file-a/versions/abc/images/1.png"],
+    )
+    original = chunk.model_dump()
+    loaded = LoadedIndex(IndexManifest(dimension=2, chunk_count=1, embedding_model="test", embedding_fingerprint="test"),
+                         [chunk], np.asarray([[1.0, 0.0]], dtype=np.float32), {})
+    seen = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        texts = body["input"]["documents"]
+        seen.extend(texts)
+        i = next((i for i, text in enumerate(texts) if "TAIL_MARKER" in text), 0)
+        return httpx.Response(200, json={"output": {"results": [{"index": i, "relevance_score": 0.8}]}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        service = RetrievalService(FakeEmbedding(), RerankModel(cfg, cloud.BailianRerankBackend(cfg, client=client)),
+                                   settings, indexes={"scope": loaded})
+        result = (await service.search("参数", IndexFilter(scope_id="scope", bidder_id="bidder-a",
+                   data_role="evidence_material", file_ids=["file-a"])))[0]
+    assert result.content == result.source.quote == content
+    assert result.chunk_id == chunk.chunk_id and result.parse_version == chunk.parse_version
+    assert result.image_paths == chunk.image_paths and result.truncated is False
+    assert chunk.model_dump() == original
+    assert any("TAIL_MARKER" in text for text in seen)
+    assert all(len(text.encode()) <= 1800 and 'rowspan="1"' not in text for text in seen)
+
+
+@pytest.mark.asyncio
+async def test_non_bailian_backend_receives_untouched_html(temp_settings):
+    from app.llm.rerank_model import RerankDocument, RerankModel
+
+    text = '<table><tr><td rowspan="1" colspan="2">全文</td></tr></table>'
+    class LocalBackend:
+        async def score(self, query, documents):
+            assert documents[0].text == text
+            return [0.5]
+
+    results = await RerankModel(temp_settings.rerank_model, LocalBackend()).rerank(
+        "q", [RerankDocument(document_id="local", text=text)], 1
+    )
+    assert results[0].document_id == "local"
 
 
 @pytest.mark.asyncio

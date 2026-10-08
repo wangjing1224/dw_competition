@@ -148,7 +148,7 @@ class AuditSettings(ConfigModel):
     """主/子审核 Agent 的有界循环。"""
 
     bid_agent_max_steps: int = Field(default=8, gt=0)
-    evidence_agent_max_steps: int = Field(default=3, gt=0)
+    evidence_agent_max_steps: int = Field(default=4, gt=0)
     file_concurrency: int = Field(default=2, ge=1)
     model_concurrency: int = Field(default=3, ge=1)
 
