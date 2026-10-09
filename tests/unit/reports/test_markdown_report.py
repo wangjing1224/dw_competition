@@ -1,5 +1,7 @@
 """报告标题可由模型修改，业务章节和完成校验仍由代码约束。"""
 
+from unittest.mock import Mock
+
 import pytest
 
 from app.audit.sources import SourceLedger
@@ -168,7 +170,7 @@ async def test_invalid_draft_read_and_edit_use_status_prefix_without_saving_head
         report.finish()
 
     # 状态首部不属于正文，不得被当作一次成功编辑。
-    with pytest.raises(ValueError, match="未唯一命中"):
+    with pytest.raises(ValueError, match="匹配0处"):
         await report.apply(
             "edit",
             None,
@@ -188,3 +190,82 @@ async def test_invalid_draft_read_and_edit_use_status_prefix_without_saving_head
     )
     assert repaired.startswith("## 当前草稿状态\n已填写规则 1/1")
     assert report.finish()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason,edits,index,count,hint", [
+    ('按"现行版"登记。', [('按“现行版”登记。', '新句')], 0, 0, "引号、空白、换行"),
+    ("甲  乙", [("甲 乙", "新句")], 0, 0, "引号、空白、换行"),
+    ("甲\n乙", [("甲 乙", "新句")], 0, 0, "引号、空白、换行"),
+    ("重复；重复", [("重复", "新句")], 0, 2, "相邻标题或上下文"),
+    ("A；重复；重复", [("A", "B"), ("重复", "新句"), ("B", "C")], 1, 2, "相邻标题或上下文"),
+    ("A", [("A", "B"), ("A", "C"), ("B", "D")], 1, 0, "前项替换影响"),
+])
+async def test_edit_failure_locates_first_item_without_publishing_candidate(
+    tmp_path, monkeypatch, reason, edits, index, count, hint
+):
+    from app.llm.agent_tracing import tool_error_text
+
+    context = audit_context()
+    report = ReportDocument(
+        tmp_path / "draft.md", context.rule_set, SourceLedger(context.parsed_documents)
+    )
+    before = filled_report(context.rule_set, reason=reason)
+    await report.apply("write", before, None, "initial")
+    write = Mock()
+    with monkeypatch.context() as patch:
+        patch.setattr("app.reports.markdown_report.atomic_write", write)
+        with pytest.raises(ValueError) as error:
+            await report.apply(
+                "edit", None,
+                [ReportEdit(old_text=old, new_text=new) for old, new in edits],
+                "failed-edit",
+            )
+    message = tool_error_text(error.value)
+    assert f"edits[{index}].old_text（第{index + 1}项，共{len(edits)}项）" in message
+    assert f"匹配{count}处" in message and hint in message
+    assert ("未找到完全一致的原文" if count == 0 else "不能唯一定位") in message
+    assert "内存候选稿" in message and "整批未保存，磁盘仍为调用前版本" in message
+    write.assert_not_called()
+    assert report.read() == before and report.write_error == str(error.value)
+    assert "未解决的保存错误" in await report.apply("read", None, None, "read")
+    with pytest.raises(ValueError, match="保存错误"):
+        report.finish()
+    await report.apply("write", before, None, "repair")
+    assert report.finish()
+
+
+@pytest.mark.asyncio
+async def test_edit_sequence_and_empty_replacement_remain_supported(tmp_path):
+    context = audit_context()
+    report = ReportDocument(
+        tmp_path / "draft.md", context.rule_set, SourceLedger(context.parsed_documents)
+    )
+    before = filled_report(context.rule_set, reason="A；删除这句。")
+    await report.apply("write", before, None, "initial")
+    edits = [
+        ReportEdit(old_text="审核说明：A", new_text="审核说明：B"),
+        ReportEdit(old_text="审核说明：B", new_text="审核说明：C"),
+        ReportEdit(old_text="；删除这句。", new_text=""),
+    ]
+    saved = await report.apply("edit", None, edits, "sequential")
+    assert "完成3处替换" in saved
+    assert report.read() == before.replace("A；删除这句。", "C")
+    assert report.finish().categories[0].rules[0].summary.reason == "C"
+
+
+@pytest.mark.asyncio
+async def test_repeated_pending_placeholder_needs_unique_context(tmp_path):
+    context = audit_context()
+    report = ReportDocument(tmp_path / "draft.md", context.rule_set, SourceLedger(context.parsed_documents))
+    before = report.read()
+    matches = before.count("待填写。")
+    assert matches > 1
+    with pytest.raises(ValueError, match=f"匹配{matches}处，不能唯一定位"):
+        await report.apply("edit", None, [ReportEdit(old_text="待填写。", new_text="已确认。")], "ambiguous")
+    assert report.read() == before
+    await report.apply("edit", None, [ReportEdit(
+        old_text="## 总体总结\n\n待填写。", new_text="## 总体总结\n\n已确认。"
+    )], "specific")
+    assert report.read().count("待填写。") == matches - 1
+    assert "## 总体总结\n\n已确认。" in report.read()

@@ -365,33 +365,50 @@ def validate_code(code: str, settings: PythonToolSettings) -> None:
     tree = ast.parse(code, filename="<sandbox>")
     for node in ast.walk(tree):
         line = getattr(node, "lineno", 1)
-        denied = None
+        reason = None
         if isinstance(node, ast.Import):
             denied = next((alias.name for alias in node.names if alias.name not in EXPORTS), None)
-            if any((a.asname or a.name).startswith("_") for a in node.names):
-                denied = "私有导入别名"
+            if denied:
+                reason = f"禁止导入模块 {denied!r}；仅支持白名单中开放的成员"
+            private = next(((a.asname or a.name) for a in node.names if (a.asname or a.name).startswith("_")), None)
+            if private:
+                reason = f"导入名称或别名 {private!r} 触发当前下划线命名限制；请使用普通名称，导入仍须在白名单内"
         elif isinstance(node, ast.ImportFrom):
             if node.level or node.module not in EXPORTS:
-                denied = node.module or "相对导入"
+                reason = f"禁止导入模块 {('.' * node.level + (node.module or ''))!r}；仅支持白名单内的绝对导入"
             else:
                 denied = next((a.name for a in node.names if a.name not in EXPORTS[node.module]), None)
-                if any((a.asname or a.name).startswith("_") for a in node.names):
-                    denied = "私有导入别名"
+                if denied:
+                    reason = f"模块 {node.module!r} 未开放成员 {denied!r}"
+                private = next(((a.asname or a.name) for a in node.names if (a.asname or a.name).startswith("_")), None)
+                if private:
+                    reason = f"导入名称或别名 {private!r} 触发当前下划线命名限制；请使用普通名称，成员仍须在白名单内"
         elif isinstance(node, ast.Name) and (node.id.startswith("_") or node.id in DENIED_NAMES):
-            denied = node.id
+            reason = (
+                f"标识符 {node.id!r} 触发当前下划线命名限制；可改为 item 等普通变量名"
+                if node.id.startswith("_")
+                else f"禁止使用标识符 {node.id!r}；仅支持已提供数据的内存处理，不开放外部访问或动态执行等受限能力"
+            )
         elif isinstance(node, ast.Attribute) and (
             node.attr.startswith("_") or node.attr in DENIED_ATTRIBUTES
             or isinstance(node.ctx, (ast.Store, ast.Del))
         ):
-            denied = node.attr
+            if node.attr.startswith("_") or node.attr in DENIED_ATTRIBUTES:
+                reason = f"禁止访问私有或反射属性/方法 {node.attr!r}"
+            else:
+                reason = f"不支持属性赋值或删除：{node.attr!r}"
         elif isinstance(node, (ast.ClassDef, ast.AsyncFunctionDef, ast.Await, ast.With, ast.AsyncWith, ast.Global, ast.Nonlocal)):
-            denied = type(node).__name__
+            reason = f"当前不支持语法 {type(node).__name__}"
         elif isinstance(node, (ast.FunctionDef, ast.arg)):
             name = node.name if isinstance(node, ast.FunctionDef) else node.arg
             if name.startswith("_") or name in DENIED_NAMES:
-                denied = name
-        if denied:
-            raise PermissionError(f"第{line}行禁止的能力或标识：{denied}；仅支持已提供数据的内存处理")
+                reason = (
+                    f"函数或形参 {name!r} 触发当前下划线命名限制；请使用普通名称"
+                    if name.startswith("_")
+                    else f"函数或形参不能使用受限标识符 {name!r}"
+                )
+        if reason:
+            raise PermissionError(f"第{line}行：{reason}。本次代码未执行。")
 
 
 # 固定启动器仅在独立子进程执行，不在业务进程exec；不导入项目或第三方包。

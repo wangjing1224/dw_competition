@@ -68,6 +68,59 @@ async def test_permission_checks_before_start(monkeypatch, code):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("code,reason", [
+    ("for _ in range(2): pass", "标识符 '_' 触发当前下划线命名限制"),
+    ("_value = 1", "标识符 '_value' 触发当前下划线命名限制"),
+    ("def _fn(): pass", "函数或形参 '_fn' 触发当前下划线命名限制"),
+    ("def fn(_arg): pass", "函数或形参 '_arg' 触发当前下划线命名限制"),
+    ("import math as _math", "导入名称或别名 '_math'"),
+    ("from decimal import Decimal as _decimal", "导入名称或别名 '_decimal'"),
+    ("import os", "禁止导入模块 'os'"),
+    ("from . import math", "禁止导入模块 '.'"),
+    ("from json import load", "模块 'json' 未开放成员 'load'"),
+    ("print((1).__class__)", "禁止访问私有或反射属性/方法 '__class__'"),
+    ("print('{}'.format(1))", "禁止访问私有或反射属性/方法 'format'"),
+    ("item.value = 1", "不支持属性赋值或删除：'value'"),
+    ("del item.value", "不支持属性赋值或删除：'value'"),
+    ("class Example: pass", "当前不支持语法 ClassDef"),
+    ("async def fn(): pass", "当前不支持语法 AsyncFunctionDef"),
+    ("await fn()", "当前不支持语法 Await"),
+    ("with item: pass", "当前不支持语法 With"),
+    ("async with item: pass", "当前不支持语法 AsyncWith"),
+    ("global value", "当前不支持语法 Global"),
+    ("nonlocal value", "当前不支持语法 Nonlocal"),
+    ("open('file')", "禁止使用标识符 'open'"),
+    ("def eval(item): pass", "函数或形参不能使用受限标识符 'eval'"),
+])
+async def test_preflight_errors_explain_actual_restriction(monkeypatch, code, reason):
+    execute = AsyncMock()
+    monkeypatch.setattr(common_tools, "_execute_process", execute)
+    result = await PythonSandbox(PythonToolSettings()).execute("\n\n" + code)
+    assert set(result) == {"status", "result"} and result["status"] == "error"
+    assert result["result"].startswith(f"PermissionError: 第3行：{reason}")
+    if code == "for _ in range(2): pass":
+        assert result["result"] == (
+            f"PermissionError: 第3行：{reason}；可改为 item 等普通变量名。本次代码未执行。"
+        )
+    assert "本次代码未执行" in result["result"]
+    if "命名限制" not in result["result"]:
+        assert "普通变量名" not in result["result"]
+    execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_documented_python_examples_execute_with_their_expected_outputs():
+    from app.prompts.loader import load_tool_description
+
+    examples = [json.loads(line) for line in load_tool_description("run_python").splitlines() if line.startswith("{")]
+    assert len(examples) == 4
+    sandbox = PythonSandbox(PythonToolSettings())
+    for request, expected in zip(examples[::2], examples[1::2]):
+        assert set(request) == {"code"}
+        assert await sandbox.execute(request["code"]) == expected
+
+
+@pytest.mark.asyncio
 async def test_syntax_runtime_output_and_timeout_errors():
     sandbox = PythonSandbox(PythonToolSettings(timeout_seconds=0.5, max_output_bytes=256))
     for code, error in [
@@ -82,6 +135,7 @@ async def test_syntax_runtime_output_and_timeout_errors():
     assert partial["status"] == "error"
     assert "ZeroDivisionError" in partial["result"] and "第2行" in partial["result"]
     assert "partial output" not in partial["result"]
+    assert "本次代码未执行" not in partial["result"]
 
 
 @pytest.mark.asyncio

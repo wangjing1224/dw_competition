@@ -133,7 +133,7 @@ async def test_summary_duplicate_is_invalid_and_actual_tool_fewshot_repairs(tmp_
         new_text="## 总体总结\n\n待填写。",
     )], "undo-bad")
     example = next(line for line in load_tool_description("report_document").splitlines()
-                   if line.startswith('{"action":'))
+                   if line.startswith('{"action":"edit"'))
     params = json.loads(example)
     receipt = await report.apply(params["action"], params["content"],
                                 [ReportEdit(**edit) for edit in params["edits"]], "good")

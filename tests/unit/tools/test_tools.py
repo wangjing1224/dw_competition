@@ -1,14 +1,18 @@
 """公共读取授权、委派会话和通用报告编辑工具。"""
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from pydantic import ValidationError
 
 from app.audit.context import evidence_view, scope_for
 from app.audit.sources import SourceLedger
+from app.llm.agent_tracing import tool_error_text
+from app.prompts.loader import load_tool_description
 from app.reports.markdown_report import ReportDocument, parse_report
 from app.retrieval.models import SearchResult
 from app.tools.bid_tools import build_evidence_review_tool
@@ -308,7 +312,7 @@ async def test_report_tool_atomic_edit_idempotency_and_source_validation(tmp_pat
         await tool.ainvoke(call(tool.name, edit, "edit-1"))
     ).content == result.content
     before = report.read()
-    with pytest.raises(ValueError, match="未唯一命中"):
+    with pytest.raises(ValueError, match="匹配0处"):
         await tool.ainvoke(
             call(
                 tool.name,
@@ -347,6 +351,69 @@ async def test_report_tool_atomic_edit_idempotency_and_source_validation(tmp_pat
     assert report.read() == invalid
     with pytest.raises(ValueError, match="未实际读取"):
         report.finish()
+
+
+@pytest.mark.asyncio
+async def test_missing_edit_old_text_rejects_entire_call_then_corrects(tmp_path):
+    context = audit_context()
+    report = ReportDocument(tmp_path / "draft.md", context.rule_set, SourceLedger(context.parsed_documents))
+    tool = report_tool(report)
+    before = report.read()
+    args = {"action": "edit", "content": None, "edits": [
+        {"old_text": before.splitlines()[0], "new_text": "# 新标题"},
+        {"new_text": "## 总体总结\n\n已保存的事实。"},
+    ]}
+    with pytest.raises(ValidationError) as error:
+        await tool.ainvoke(call(tool.name, args, "bad"))
+    assert "edits.1.old_text" in tool_error_text(error.value)
+    assert report.read() == before and not report.receipts
+    args["edits"][1]["old_text"] = "## 总体总结\n\n待填写。"
+    result = await tool.ainvoke(call(tool.name, args, "corrected"))
+    assert "完成2处替换" in result.content
+    assert "# 新标题" in report.read() and "已保存的事实。" in report.read()
+
+
+@pytest.mark.asyncio
+async def test_documented_report_examples_read_and_edit_exact_current_text(tmp_path):
+    context = audit_context()
+    report = ReportDocument(tmp_path / "draft.md", context.rule_set, SourceLedger(context.parsed_documents), version=2)
+    text = filled_report(context.rule_set, version=2, reason='备注：按"现行版"登记。')
+    text = text.replace("文件审核完成，详见分类结论。", "待填写。")
+    text = text.replace("无重点问题。", "待填写。")
+    await report.apply("write", text, None, "initial")
+    tool = report_tool(report)
+    examples = [json.loads(line) for line in tool.description.splitlines() if line.startswith("{")]
+    response = await tool.ainvoke(call(tool.name, examples[0], "read"))
+    assert text in response.content and report.read() == text
+    for index, example in enumerate(examples[1:]):
+        response = await tool.ainvoke(call(tool.name, example, f"edit-{index}"))
+        assert "草稿已保存" in response.content
+    assert report.finish()
+    assert report.read().count("## 总体总结") == report.read().count("## 重点问题") == 1
+    assert '备注：记录标注为"现行版"，其他版本另列。' in report.read()
+
+
+@pytest.mark.asyncio
+async def test_extra_check_field_starts_no_child_and_documented_shape_recovers(temp_settings):
+    context = audit_context()
+    context.rule_set.rules.append(context.rule_set.rules[0].model_copy(update={"rule_id": "rule-2"}))
+    model, records = SequenceModel(["本批交付与验收事实。"]), []
+    tool = build_evidence_review_tool(
+        context=context, settings=temp_settings, model=model,
+        retrieval=SimpleNamespace(search=AsyncMock()), ledger=SourceLedger(context.parsed_documents),
+        limiter=asyncio.Semaphore(1), trace_context={}, records=records,
+    )
+    args = json.loads(next(line for line in load_tool_description(tool.name).splitlines() if line.startswith("{")))
+    # 文档假设的file-1映射到夹具内真实授权资料，规则保留原示例的两条关联。
+    args["checks"][0]["file_ids"] = ["e-1"]
+    bad = {"checks": [args["checks"][0], {**args["checks"][0], "verification_request_note": "额外说明"}]}
+    with pytest.raises(ValidationError) as error:
+        await tool.ainvoke(call(tool.name, bad, "bad"))
+    assert "checks.1.verification_request_note" in tool_error_text(error.value)
+    assert not model.calls and not records
+    response = await tool.ainvoke(call(tool.name, args, "corrected"))
+    assert "rule-1、rule-2" in response.content and len(model.calls) == len(records) == 1
+    assert "本批交付与验收事实。" in response.content
 
 
 @pytest.mark.asyncio

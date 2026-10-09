@@ -1,10 +1,12 @@
 """Prompt 配置路径、System/Human 模板和工具说明测试。"""
 
 import json
+import re
+from string import Template
 
 import pytest
 
-from app.prompts.loader import load_tool_description, render_prompt
+from app.prompts.loader import load_prompt, load_tool_description, render_prompt
 
 
 def test_parser_image_prompt_keeps_visible_marks_without_authenticity_judgment():
@@ -196,7 +198,7 @@ def test_evidence_delegation_separates_criteria_claims_and_verified_facts():
         assert prompt.count(heading) == 1
     assert "不增加工具参数" in prompt
     assert "不以规则ID代替标准正文" in prompt
-    assert "申报值保留申报性质" in prompt
+    assert "原填或申报值保留其身份" in prompt
     assert "明确反证不能被一般承诺" in prompt
     assert "不要求每条规则单独委派" in prompt
 
@@ -265,7 +267,7 @@ def test_summary_policy_and_sandbox_protocol_are_separate():
     assert "允许规则结果没有任何片段来源行" in contract
     assert "计算结果不登记成文档来源" in contract
     description = load_tool_description("run_python")
-    assert "只有code" in description and "仅status与result" in description
+    assert "只有code" in description and "只含status和result" in description
     assert "共同前提" not in description and "规则结论" not in description
 
 
@@ -320,7 +322,7 @@ def test_task35_strategy_scope_facts_and_templates():
     assert "主审交接事实保留交接身份" in child
     rule = render_prompt("rule_extraction", rule_view="规则")
     assert "不承担独立评分" in rule and "不因位于评分章节一并排除" in rule
-    assert "表格、清单、附件" in rule and "未确定的适用范围" in rule
+    assert "表格、清单、附件" in rule and "条件本身已明确而对象绑定尚未确认" in rule
     evidence = render_prompt("evidence_ingestion", current_material="无", history_view="历史")
     for text in ("总数一致", "未注明", "部分对应", "逐图保留", "同一产品", "不为减少联查"):
         assert text in evidence
@@ -334,7 +336,7 @@ def test_report_tool_edit_fewshot_is_valid_and_not_in_template():
     import json
 
     description = load_tool_description("report_document")
-    example = next(line for line in description.splitlines() if line.startswith('{"action":'))
+    example = next(line for line in description.splitlines() if line.startswith('{"action":"edit"'))
     edits = json.loads(example)
     current = "## 总体总结\n\n待填写。\n\n## 重点问题\n\n待填写。"
     for edit in edits["edits"]:
@@ -344,4 +346,159 @@ def test_report_tool_edit_fewshot_is_valid_and_not_in_template():
     assert current.count("## 总体总结") == current.count("## 重点问题") == 1
     template = render_prompt("audit_report_template")
     assert example not in template
-    assert "仅采用充分摘要，省略片段来源行" in template
+    assert "采用摘要身份，不补造片段行" in template
+
+
+@pytest.mark.parametrize("name,count", [
+    ("save_evidence_material", 3), ("report_document", 3),
+    ("request_evidence_review", 1), ("run_python", 2),
+])
+def test_every_documented_call_uses_the_exposed_tool_schema(
+    name, count, temp_settings, tmp_path
+):
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.audit.sources import SourceLedger
+    from app.reports.markdown_report import ReportDocument
+    from app.tools.bid_tools import build_evidence_review_tool
+    from app.tools.common_tools import build_python_tool
+    from app.tools.evidence_ingestion_tools import EvidenceSession, build_evidence_ingestion_tools
+    from app.tools.report_tools import report_tool
+    from tests.helpers.audit import SequenceModel, audit_context
+
+    context = audit_context()
+    ledger = SourceLedger(context.parsed_documents)
+    session = EvidenceSession(
+        library=context.evidence_library, current=context.parsed_documents["e-3"],
+        history={key: context.parsed_documents[key] for key in ("e-1", "e-2")},
+        settings=temp_settings, counter=None,
+    )
+    tools = [
+        *build_evidence_ingestion_tools(session),
+        report_tool(ReportDocument(tmp_path / "draft.md", context.rule_set, ledger)),
+        build_evidence_review_tool(
+            context=context, settings=temp_settings, model=SequenceModel([]),
+            retrieval=SimpleNamespace(), ledger=ledger, limiter=asyncio.Semaphore(1),
+            trace_context={}, records=[],
+        ),
+        build_python_tool(temp_settings.python_tool),
+    ]
+    tool = next(tool for tool in tools if tool.name == name)
+    samples = [json.loads(line) for line in tool.description.splitlines() if line.startswith("{")]
+    calls = [sample for sample in samples if "status" not in sample]
+    assert len(calls) == count
+    schema = tool.tool_call_schema.model_json_schema()
+    assert "tool_call_id" not in schema["properties"]
+    for payload in calls:
+        assert set(payload) == set(schema["properties"])
+        tool.tool_call_schema.model_validate(payload)
+        injected = {"tool_call_id": "sample-call"} if "tool_call_id" in tool.args_schema.model_fields else {}
+        tool.args_schema.model_validate({**payload, **injected})
+
+
+@pytest.mark.parametrize("name,variables,headings", [
+    ("rule_extraction", {"rule_view"}, ["准入与粒度", "分类和等级", "工具使用规范", "依据与项目简介", "阅读与结束"]),
+    ("bid_agent", {"rule_view", "report_markdown_contract"}, [
+        "职责与边界", "工具使用规范", "事实采用与核验边界", "负面理由与适用性",
+        "资料核验交接", "依据与来源保存", "成果与收尾", "本次完整规则（业务数据）",
+    ]),
+    ("evidence_subagent", set(), ["工具使用规范", "事实与支持范围", "核验返回"]),
+    ("audit_report_template", set(), [
+        "内容要求", "内部格式", "事实、判断与建议", "重点问题与处理建议",
+        "来源填写（按实际使用的依据）", "草稿与完成",
+    ]),
+])
+def test_task36_keeps_template_variables_and_section_structure(name, variables, headings):
+    source = load_prompt(name)
+    assert set(Template(source).get_identifiers()) == variables
+    # 示例围栏中的标题是正文示例，不作为System章节重复计数。
+    outside_examples = re.sub(r"^```[^\n]*\n.*?^```\s*$", "", source, flags=re.M | re.S)
+    assert re.findall(r"^## (.+)$", outside_examples, re.M) == headings
+    rendered = render_prompt(name, **{key: f"输入:{key}" for key in variables})
+    assert "${" not in rendered
+    assert all(rendered.count(f"输入:{key}") == 1 for key in variables)
+
+
+def test_task36_rule_coverage_replaces_general_guidance_without_changing_admission():
+    prompt = render_prompt("rule_extraction", rule_view="规则")
+    assert "覆盖以已保存requirement中的实际条件为准" in prompt
+    assert "项目简介或reason提过" in prompt
+    assert "例外与触发条件属于规则的一部分" in prompt
+    assert "仅简介变化且无未保存的有效要求时可只更新简介" in prompt
+    assert "背景、纯评分或范围外事项按准入边界处理" in prompt
+    assert "已确认无变化的主题沿用，不每轮重新扫描全库" in prompt
+    assert "不按每个单元格机械拆分" in prompt
+    assert "应replace为更正后的适用条款" in prompt
+    assert "效力未知的冲突说明双方依据" in prompt
+    assert "提取可由投标内容或证明材料核验的独立要求，保留适用对象" not in prompt
+
+
+def test_task36_main_child_handoff_and_evidence_boundaries_are_synchronized():
+    # 仅验证装载和保护提示词边界，不模拟或声称模型已给出正确业务判断。
+    main = render_prompt("bid_agent", rule_view="规则", report_markdown_contract="契约")
+    child = render_prompt("evidence_subagent")
+    common = "采用或交接派生事实时，说明对象/版本、单位、输入范围、已做的去重/替换/排除、最终范围及实际成功结果。"
+    for prompt in (main, child):
+        assert prompt.count(common) == 1
+        assert "数量相同也不自动证明成员相同" in prompt
+        assert "不能从数量2再扣一次B" in prompt
+        assert "不用汇总值补造成员" in prompt
+        assert "确定派生事实前，明确输入对象" not in prompt
+    assert "同一checks内的子会话不共享新结果" in main
+    assert "将事实与来源组织成同一次明细保存" in main
+    assert "不因主审未亲自读取而漏填，也不声称主审亲自看图" in main
+    assert "未完成的必要处理说明具体输入或执行缺口" in child
+    assert "不自动证明真实主体不具资格" in main
+    assert "不推导真实主体没有该资质" in child
+    assert "不能把测试/展示副本的处理归责于投标人" in main
+    assert "子返回的“未取得支持”不是“已反证”" in main
+    assert "存在明确反证时也一并返回" in child
+    assert "未受影响的充分事实仍可采用" in main
+    assert "相关核验尚未进行或仅因工具失败未完成，则保留待填写" in main
+    assert "未完成的读取或工具失败另说明执行缺口" in child
+    assert "不能用“人工复核”填满尚未核验的块" in main
+    assert "整条规则由主审判断" in child
+    template = render_prompt("audit_report_template")
+    assert "无法证明不等于已证明违反，也不等于已符合" in template
+    assert "未受这些限制影响的明确反证仍按规则判断" in template
+    assert "互换依据类型仍按事实判断" in template
+
+
+@pytest.mark.parametrize("example_index", [0, 1])
+def test_complete_report_examples_use_existing_parser_and_real_source_keys(example_index):
+    from types import SimpleNamespace
+
+    from app.audit.sources import SourceLedger
+    from app.reports.markdown_report import parse_report
+    from tests.helpers.audit import audit_context, filled_report
+
+    template = render_prompt("audit_report_template")
+    examples = [block for block in re.findall(r"^```markdown\n(.*?)^```", template, re.M | re.S) if block.startswith("### 〈本项真实rule_id〉")]
+    assert len(examples) == 2
+    context = audit_context()
+    context.rule_set.rules[0].requirement = "检验记录须填写本批批次及样品编号。"
+    parsed = context.parsed_documents["e-1"]
+    parsed.document.file_name = "检验记录"
+    ledger = SourceLedger(context.parsed_documents)
+    key = "evidence-chunk-v1"
+    if example_index == 0:
+        ledger.chunk_read(SimpleNamespace(
+            source=SimpleNamespace(file_id="e-1", section="检验记录完整相关表"),
+            parse_version=parsed.markdown_path, page_numbers=[], chunk_id=key,
+            content="本批次B01，样品编号栏未填写；实际提交相关字段未作脱敏或删节。",
+        ))
+    block = examples[example_index].replace("〈本项真实rule_id〉", "rule-1")
+    block = block.replace("〈随上述事实返回的完整真实chunk_id〉", key)
+    text = filled_report(context.rule_set, version=2).split("### rule-1", 1)[0] + block
+    decision, missing = parse_report(text, context.rule_set, ledger, version=2, final=True)
+    assert not missing
+    rule = decision.categories[0].rules[0]
+    assert rule.result == ["non_compliant", "compliant"][example_index]
+    assert rule.summary.evidence_chunk_ids == ([key] if example_index == 0 else [])
+    if example_index == 0:
+        for invalid in (text.replace(key, "unknown-chunk"), text.replace("资料片段：", "投标片段：")):
+            with pytest.raises(ValueError, match="未实际读取、类型不符或越权"):
+                parse_report(invalid, context.rule_set, ledger, version=2, final=True)
+    else:
+        assert not ledger.sources and "摘要记载" in rule.summary.observation

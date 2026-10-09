@@ -2,18 +2,21 @@
 
 from dataclasses import replace
 from io import BytesIO
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from PIL import Image
+from pydantic import ValidationError
 
 from app.agents.evidence_ingestion_agent import prepare_evidence_request
 from app.evidence.context import related_file_ids
 from app.evidence.ingestion import ingest_evidence_documents
 from app.evidence.storage import load_library, progress_path, write_library
 from app.llm.token_counter import get_token_counter
+from app.llm.agent_tracing import tool_error_text
 from app.models.documents import (
     DocumentRef,
     ParsedBlock,
@@ -29,6 +32,7 @@ from app.models.evidence import (
     SaveEvidenceMaterialInput,
 )
 from app.parsers.assets import AssetStore, file_asset_root
+from app.prompts.loader import load_tool_description
 from app.retrieval.models import IndexFilter, SearchResult
 from app.tools.common_tools import CommonTool
 from app.tools.evidence_ingestion_tools import (
@@ -180,6 +184,53 @@ def session(settings, current, history=(), library=None):
 def test_tool_rejects_ambiguous_or_invalid_parameters(payload):
     with pytest.raises(ValueError):
         SaveEvidenceMaterialInput.model_validate(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change,fields", [
+    ({"relations": None}, ["material.relations"]),
+    ({"relation": []}, ["material.relations", "material.relation"]),
+    ({"relations": [{"relation": "同批验收", "file_id": "file-1"}]}, ["material.relations.0"]),
+])
+async def test_bad_relation_shape_rejects_before_write_then_corrects(settings, change, fields):
+    first, second = parsed(1), parsed(2)
+    library = library_for(first, second)
+    library.materials = [EvidenceMaterial(file_id="file-1", **material())]
+    s = session(settings, second, [first], library)
+    tool = build_evidence_ingestion_tools(s)[0]
+    value = {key: item for key, item in material().items() if key != "relations"}
+    # None denotes omission in this test; the other variants exercise a typo/object.
+    value.update({key: item for key, item in change.items() if item is not None})
+    before = s.library.model_dump()
+    with pytest.raises(ValidationError) as error:
+        await tool.ainvoke(call(tool.name, {"material": value, "file_ids": None}, "bad"))
+    feedback = tool_error_text(error.value)
+    assert all(field in feedback for field in fields)
+    assert s.library.model_dump() == before
+    assert load_library("bidder-1", settings) is None and not s.cached_submissions
+    corrected = {"material": material(relations=[["同批验收", "file-1"]]), "file_ids": None}
+    await tool.ainvoke(call(tool.name, corrected, "corrected"))
+    assert load_library("bidder-1", settings) == s.library
+    assert s.library.materials[-1].relations == [("同批验收", "file-1")]
+
+
+@pytest.mark.asyncio
+async def test_documented_evidence_examples_save_and_read_in_authorized_sessions(settings):
+    examples = [json.loads(line) for line in load_tool_description("save_evidence_material").splitlines() if line.startswith("{")]
+    first, second = parsed(1), parsed(2)
+    initial = session(settings, first)
+    await build_evidence_ingestion_tools(initial)[0].ainvoke(call("save_evidence_material", examples[0], "first"))
+    library = library_for(first, second)
+    library.materials = initial.library.materials
+    s = session(settings, second, [first], library)
+    tool = build_evidence_ingestion_tools(s)[0]
+    await tool.ainvoke(call(tool.name, examples[1], "second"))
+    before = load_library("bidder-1", settings)
+    response = await tool.ainvoke(call(tool.name, examples[2], "read"))
+    assert before == load_library("bidder-1", settings)
+    assert s.library.materials[1].relations == [("同批次验收记录", "file-1")]
+    assert examples[0]["material"]["evidence_summary"] in response.content
+    assert examples[1]["material"]["evidence_summary"] not in response.content
 
 
 @pytest.mark.asyncio

@@ -76,8 +76,8 @@ async def test_main_batches_finish_all_structures_before_export(
     cfg = temp_settings.model_copy(
         update={
             "bid_chat_model": temp_settings.bid_chat_model.model_copy(
-                # UTF8测试计数器按字节；包含新增工具与提示词，仍不足以放两个18K结构。
-                update={"context_window_tokens": 65_000, "tokenizer": "utf8"}
+                # UTF8按字节计；容纳Task36提示词/工具示例，仍只容纳一个18K结构。
+                update={"context_window_tokens": 80_000, "tokenizer": "utf8"}
             )
         }
     )
@@ -85,7 +85,7 @@ async def test_main_batches_finish_all_structures_before_export(
     result = await LangGraphAuditExecutor(cfg, model_bundle(model)).run(context)
     assert not result.file_errors
     starts = [msgs for msgs in model.calls if not any(m.type == "tool" for m in msgs)]
-    assert len(starts) > 1
+    assert len(starts) == 4
     for i in range(4):
         assert sum(f"STRUCTURE-{i}-BEGIN" in msgs[1].content for msgs in starts) == 1
         assert sum(f"STRUCTURE-{i}-END" in msgs[1].content for msgs in starts) == 1
