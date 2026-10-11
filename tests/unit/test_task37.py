@@ -111,8 +111,91 @@ def test_candidate_initial_input_and_tool_example_match_validator(temp_settings)
     assert validate_candidates(filled) == 1
     with pytest.raises(ValueError):
         validate_candidates(CANDIDATE_TEMPLATE)
-    # 不以修复重复检索为由移除有真实缺口时需要的读取能力。
-    assert "search_documents" in [t.name for t in active_rule_tools(tools, "extract")]
+    # 候选只读取本批输入，检索补查交给合并阶段。
+    assert "search_documents" not in [t.name for t in active_rule_tools(tools, "extract")]
+
+
+@pytest.mark.parametrize("phase", ["extract", "merge"])
+@pytest.mark.parametrize("handoff", ["", "压缩后的工作交接"])
+def test_rule_phase_search_binding_matches_system_and_human(temp_settings, phase, handoff):
+    from app.rules.extractor import _batch_context, build_document_units
+
+    session = candidate_session(temp_settings)
+    session.phase, session.batch_index = phase, 1
+    tools = [
+        *build_rule_tools(session),
+        *CommonTool(parsed_documents={session.current.document.file_id: session.current}, settings=temp_settings).tools(),
+    ]
+    context = _batch_context(
+        session=session, units=build_document_units(session.current), start=0, end=1,
+        tools=tools, settings=temp_settings, model_calls=3 if handoff else 0, handoff=handoff,
+    )
+    names = {t["function"]["name"] for t in context.bindings["tools"]}
+    expected = {"rule_candidates"} if phase == "extract" else {"submit_rule_delta", "search_documents"}
+    assert names == expected | {"view_image", "run_python"}
+    system, human = (m.content for m in context.messages[:2])
+    assert ("### search_documents" in system) == (phase == "merge")
+    if phase == "extract":
+        assert "本阶段不开放search_documents" in system
+        assert "具体缺口" in system and "候选说明" in system
+    else:
+        assert "本工具仅在合并阶段开放" in system
+    assert "候选阶段不开放search_documents" in human
+    assert "仅在finish交接后的合并阶段" in human
+    assert "不允许查询尚未轮到的其他文件" in human
+    assert session.current.sections[0].blocks[0].content in human
+    if handoff:
+        assert "检索回查仅在合并阶段" in human
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("search_args", [
+    {"querylist": [{"queries": ["期限"], "file_ids": ["tender-1"]}]},
+    {"chunklist": [{"chunk_id": "real-chunk", "file_id": "tender-1", "before": 1, "after": 1}]},
+])
+async def test_candidate_search_rejected_until_next_merge_round(temp_settings, search_args):
+    from app.graph.rule_graph import build_rule_graph
+    from app.rules.extractor import _batch_context, build_document_units
+
+    session = candidate_session(temp_settings)
+    session.batch_index = 1
+    searches = []
+
+    async def search_documents(querylist=None, chunklist=None):
+        searches.append((querylist, chunklist))
+        return "合并阶段实际补查内容"
+
+    search = StructuredTool.from_function(
+        coroutine=search_documents, args_schema=SearchDocumentsInput, description="检索测试替身",
+    )
+    tools = [search if t.name == "search_documents" else t for t in build_rule_tools(session)]
+    model = SequenceModel([
+        AIMessage(content="", tool_calls=[
+            tool_response("search_documents", search_args, "before-finish").tool_calls[0],
+            *candidate_response("90日。").tool_calls,
+            tool_response("search_documents", search_args, "same-round-after-finish").tool_calls[0],
+        ]),
+        tool_response("search_documents", search_args, "merge-search"),
+        "阶段权限验证结束",
+    ])
+    context = _batch_context(
+        session=session, units=build_document_units(session.current), start=0, end=1,
+        tools=tools, settings=temp_settings,
+    )
+    graph = build_rule_graph(
+        model=model, tools=tools, session=session, max_steps=temp_settings.rule_agent_max_steps,
+        controller=make_controller(temp_settings.rule_extraction_model),
+    )
+    result = await graph.ainvoke({"messages": list(context.messages), "model_calls": 0})
+    replies = {m.tool_call_id: m for m in result["messages"] if m.type == "tool"}
+    for call_id in ("before-finish", "same-round-after-finish"):
+        assert replies[call_id].status == "error"
+        assert "本轮未授权工具 search_documents" in replies[call_id].content
+    assert replies["merge-search"].status == "success"
+    assert len(searches) == 1 and session.phase == "merge"
+    assert "search_documents" not in model.bindings[0]
+    assert "search_documents" in model.bindings[1]
+    assert session.model_calls == len(model.calls) == 3
 
 
 @pytest.mark.asyncio
@@ -392,6 +475,8 @@ async def test_r_graph_phase_snapshot_and_next_file_reset(temp_settings, monkeyp
     assert len(result.rules) == 2
     assert "submit_rule_delta" not in model.bindings[0] and "rule_candidates" not in model.bindings[1]
     assert "rule_candidates" in model.bindings[3]
+    assert "search_documents" not in model.bindings[0] and "search_documents" not in model.bindings[3]
+    assert "search_documents" in model.bindings[1]
     assert all(p.candidate_draft == CANDIDATE_TEMPLATE for p in progress if p.batch_index == 0)
     tools = [m for m in model.calls[1][0] if m.type == "tool"]
     assert next(m for m in tools if m.tool_call_id == "hidden").status == "error"
@@ -462,6 +547,7 @@ async def test_r_same_file_batches_and_rebuild_preserve_candidate(temp_settings,
     assert progress[-1].batch_index == 2 and progress[-1].next_unit_index == 2
     assert "要求：90日。" in model.calls[3][0][1].content
     assert "### rule-1" not in model.calls[3][0][1].content
+    assert "search_documents" not in model.bindings[3]
     # 压缩重建使用当前稿、当前阶段，不重置调用轮数；提取仍不展示旧库。
     s = candidate_session(temp_settings)
     s.candidate_draft, s.batch_index = CANDIDATES, 2

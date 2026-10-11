@@ -288,8 +288,10 @@ def test_ingestion_preserves_formula_roles_and_operation_semantics():
     ("bid_agent", {"rule_view": "规则", "report_markdown_contract": "模板"},
      ["search_documents", "view_image", "request_evidence_review", "report_document", "run_python"]),
     ("evidence_subagent", {}, ["search_documents", "view_image", "run_python"]),
+    ("rule_extraction", {"stage_instructions": load_prompt("rule_candidate_stage")},
+     ["view_image", "run_python", "rule_candidates"]),
     ("rule_extraction", {"stage_instructions": load_prompt("rule_merge_stage")},
-     ["search_documents", "view_image", "run_python", "submit_rule_delta"]),
+     ["view_image", "run_python", "submit_rule_delta", "search_documents"]),
     ("evidence_ingestion", {"current_material": "当前", "history_view": "历史"},
      ["search_documents", "view_image", "save_evidence_material", "run_python"]),
 ])

@@ -21,8 +21,8 @@ class SubmitRuleToolInput(SubmitRuleDeltaInput):
 
 
 def active_rule_tools(tools, phase):
-    hidden = "submit_rule_delta" if phase == "extract" else "rule_candidates"
-    return [tool for tool in tools if tool.name != hidden]
+    hidden = {"submit_rule_delta", "search_documents"} if phase == "extract" else {"rule_candidates"}
+    return [tool for tool in tools if tool.name not in hidden]
 
 
 @dataclass
