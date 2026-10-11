@@ -89,7 +89,8 @@ async def test_candidate_invalid_saved_and_zero_candidates(temp_settings):
     assert validate_candidates(s.candidate_draft) == 0
 
 
-def test_candidate_initial_input_and_tool_example_match_validator(temp_settings):
+@pytest.mark.asyncio
+async def test_candidate_initial_input_and_tool_example_match_validator(temp_settings):
     from app.rules.extractor import _batch_context, build_document_units
 
     session = candidate_session(temp_settings)
@@ -104,11 +105,22 @@ def test_candidate_initial_input_and_tool_example_match_validator(temp_settings)
     )
     assert CANDIDATE_TEMPLATE in context.messages[1].content
     assert example in context.messages[1].content
-    # 仅填初始模板占位即可通过，不依赖测试脚本预先知道隐藏的标题语法。
-    filled = CANDIDATE_TEMPLATE.replace("候选简介：待填写。", "候选简介：期限要求。")
+    # 从真实Human提取完整草稿，直接edit；无需先read或预先知道隐藏格式。
+    visible_draft = re.search(
+        r"^# 当前文件候选草稿\n.*?(?=\n\n## 已完成历史文件目录)",
+        context.messages[1].content, re.M | re.S,
+    )[0]
+    assert visible_draft == CANDIDATE_TEMPLATE
+    filled = visible_draft.replace("候选简介：待填写。", "候选简介：期限要求。")
     filled = filled.replace("要求：待填写。", "要求：90日。")
     filled = filled.replace("候选说明：待填写。", "候选说明：本文件期限条款。")
     assert validate_candidates(filled) == 1
+    result = await candidate_tool.ainvoke({
+        "action": "edit", "edits": [{"old_text": visible_draft, "new_text": filled}],
+    })
+    assert "结构校验通过，候选1项" in result
+    assert session.candidate_draft == filled and session.phase == "extract"
+    session.persist.assert_awaited_once()
     with pytest.raises(ValueError):
         validate_candidates(CANDIDATE_TEMPLATE)
     # 候选只读取本批输入，检索补查交给合并阶段。
@@ -138,11 +150,17 @@ def test_rule_phase_search_binding_matches_system_and_human(temp_settings, phase
     if phase == "extract":
         assert "本阶段不开放search_documents" in system
         assert "具体缺口" in system and "候选说明" in system
+        assert "首轮已有充分事实时直接edit" in system
     else:
         assert "本工具仅在合并阶段开放" in system
+        assert "不按候选主题把同一份正文再搜索一遍" in system
+    assert "## 当前业务状态与完整候选草稿" in human
+    assert human.count(session.candidate_draft) == 1
     assert "候选阶段不开放search_documents" in human
     assert "仅在finish交接后的合并阶段" in human
     assert "不允许查询尚未轮到的其他文件" in human
+    assert "此处仅声明访问权限，不代表需要重新检索已给出的正文" in human
+    assert "合并阶段可全文回查当前文件" not in human
     assert session.current.sections[0].blocks[0].content in human
     if handoff:
         assert "检索回查仅在合并阶段" in human

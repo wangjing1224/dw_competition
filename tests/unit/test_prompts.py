@@ -83,6 +83,35 @@ def test_rule_system_and_input_are_separate():
     assert "file-1" in human
 
 
+def test_rule_candidate_start_reuses_visible_draft_and_keeps_read_for_recovery():
+    system = render_prompt(
+        "rule_extraction", stage_instructions=load_prompt("rule_candidate_stage")
+    )
+    assert "#### 本批起步" in system
+    assert "首轮已有充分事实时直接edit" in system
+    assert "old_text逐字取自Human中的当前稿" in system
+    assert "无需先read获取模板或确认草稿初始化" in system
+    assert "只有无法确定当前待修改文本时才read" in system
+    assert "不要求首轮强行保存尚未确认的条件" in system
+    assert "后续以成功保存的编辑及工具返回为准" in system
+
+
+def test_rule_merge_search_targets_unseen_information_not_repeated_self_search():
+    system = render_prompt(
+        "rule_extraction", stage_instructions=load_prompt("rule_merge_stage")
+    )
+    assert "检索不是进入合并阶段的固定步骤" in system
+    assert "已提供但尚未整理" in system and "尚未展示" in system
+    assert "不按候选主题把同一份正文再搜索一遍" in system
+    assert "不为确认提取结果或取得片段ID重复检索" in system
+    # 保留确有缺口时读取当前文件、授权历史和相邻片段的能力。
+    assert "当前文件只给出部分内容且缺少必要上下文" in system
+    assert "需读取当前上下文未提供的授权历史原文" in system
+    assert "用chunklist在其所属授权file_id内定向读取" in system
+    assert "不为重复确认相同事实继续换同义词自搜" in system
+    assert "不在当前文件反复检索另一文件的正文" in system
+
+
 def test_missing_prompt_variable_fails_fast():
     with pytest.raises(KeyError):
         render_prompt("rule_extraction")
