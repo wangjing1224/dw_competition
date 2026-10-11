@@ -22,7 +22,11 @@ CATEGORY_LABELS = {
 PRIORITY_LABELS = {"critical": "关键", "important": "重要", "normal": "普通"}
 VERIFICATION_LABELS = {"bid_only": "投标文件内核验", "evidence_check": "投标方资料核验"}
 
-CANDIDATE_TEMPLATE = "# 当前文件候选草稿\n\n候选简介：待填写。\n\n## 候选清单\n\n待填写。\n"
+CANDIDATE_ITEM_TEMPLATE = "### 候选 1\n\n要求：待填写。\n\n候选说明：待填写。"
+CANDIDATE_TEMPLATE = (
+    "# 当前文件候选草稿\n\n候选简介：待填写。\n\n## 候选清单\n\n"
+    f"{CANDIDATE_ITEM_TEMPLATE}\n"
+)
 
 
 def validate_candidates(text):
@@ -49,14 +53,27 @@ def validate_candidates(text):
     numbers = set()
     for header, body in zip(headers[2:], bodies[2:], strict=True):
         match = re.fullmatch(r"### 候选 ([1-9]\d*)", header)
-        if not match or match[1] in numbers:
-            raise ValueError("候选标题须为唯一的 ### 候选 正整数")
+        if not match:
+            raise ValueError(
+                f"候选标题格式错误：{header!r}。标题只能写“### 候选 正整数”，如“### 候选 1”；"
+                "编号后不能附名称，标题与要求之间也不能另起名称行。"
+                "所有同类条目一起修正，保留原有要求和候选说明正文。"
+                f"正确条目结构如下（待填写须替换为实际内容）：\n```markdown\n{CANDIDATE_ITEM_TEMPLATE}\n```"
+            )
+        if match[1] in numbers:
+            raise ValueError(f"候选编号重复：{header}；每项使用不同的正整数编号")
         numbers.add(match[1])
         fields = re.fullmatch(r"要求：(.+?)\n+候选说明：(.+)", body, re.DOTALL)
         if not fields or not all(filled(v) for v in fields.groups()) or any(
             re.search(r"^(要求|候选说明|来源文件)：", v, re.MULTILINE) for v in fields.groups()
         ):
-            raise ValueError(f"{header}只填写唯一且非空的要求、候选说明")
+            example = CANDIDATE_ITEM_TEMPLATE.replace("### 候选 1", header, 1)
+            raise ValueError(
+                f"{header}正文须按顺序只填写唯一且非空的要求、候选说明；"
+                "标题后直接写要求，不另起名称行，不重复字段，也不保留待填写占位。"
+                "保留已提取正文，只修正不合要求的结构。"
+                f"正确条目结构如下（待填写须替换为实际内容）：\n```markdown\n{example}\n```"
+            )
     return len(numbers)
 
 

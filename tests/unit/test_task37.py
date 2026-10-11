@@ -21,7 +21,7 @@ from app.reports.markdown_report import ReportDocument, parse_report
 from app.retrieval.models import IndexChunk, IndexManifest
 from app.retrieval.service import RetrievalService
 from app.retrieval.store import LoadedIndex
-from app.rules.context import CANDIDATE_TEMPLATE, rule_working_context, validate_candidates
+from app.rules.context import CANDIDATE_ITEM_TEMPLATE, CANDIDATE_TEMPLATE, rule_working_context, validate_candidates
 from app.tools.common_tools import CommonTool, SearchDocumentsInput
 from app.tools.report_tools import ReportEdit, ReportSavePolicy, report_tool
 from app.tools.rule_tools import RuleSession, active_rule_tools, build_rule_tools
@@ -87,6 +87,71 @@ async def test_candidate_invalid_saved_and_zero_candidates(temp_settings):
     await s.candidates("edit", [CandidateEdit(old_text="还未整理", new_text=zero)])
     await s.candidates("finish")
     assert validate_candidates(s.candidate_draft) == 0
+
+
+def test_candidate_initial_input_and_tool_example_match_validator(temp_settings):
+    from app.rules.extractor import _batch_context, build_document_units
+
+    session = candidate_session(temp_settings)
+    session.batch_index = 1
+    tools = build_rule_tools(session)
+    candidate_tool = next(t for t in tools if t.name == "rule_candidates")
+    example = re.search(r"```markdown\n(.*?)\n```", candidate_tool.description, re.S)[1]
+    assert example == CANDIDATE_ITEM_TEMPLATE
+    context = _batch_context(
+        session=session, units=build_document_units(session.current), start=0, end=1,
+        tools=tools, settings=temp_settings,
+    )
+    assert CANDIDATE_TEMPLATE in context.messages[1].content
+    assert example in context.messages[1].content
+    # 仅填初始模板占位即可通过，不依赖测试脚本预先知道隐藏的标题语法。
+    filled = CANDIDATE_TEMPLATE.replace("候选简介：待填写。", "候选简介：期限要求。")
+    filled = filled.replace("要求：待填写。", "要求：90日。")
+    filled = filled.replace("候选说明：待填写。", "候选说明：本文件期限条款。")
+    assert validate_candidates(filled) == 1
+    with pytest.raises(ValueError):
+        validate_candidates(CANDIDATE_TEMPLATE)
+    # 不以修复重复检索为由移除有真实缺口时需要的读取能力。
+    assert "search_documents" in [t.name for t in active_rule_tools(tools, "extract")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_heading", [
+    "### 1. 期限要求",
+    "### 候选 1 期限要求",
+    "### 候选 1\n期限要求",
+])
+async def test_candidate_format_feedback_repairs_observed_variants_in_one_edit(
+    temp_settings, bad_heading,
+):
+    session = candidate_session(temp_settings)
+    tool = next(t for t in build_rule_tools(session) if t.name == "rule_candidates")
+    invalid = CANDIDATES.replace("### 候选 1", bad_heading)
+    feedback = await tool.ainvoke({
+        "action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": invalid}],
+    })
+    assert "结构待修正" in feedback and session.candidate_draft == invalid
+    assert "不另起名称行" in feedback or "不能另起名称行" in feedback
+    example = re.search(r"```markdown\n(.*?)\n```", feedback, re.S)[1]
+    assert example == CANDIDATE_ITEM_TEMPLATE
+    with pytest.raises(ValueError, match="正确条目结构"):
+        await tool.ainvoke({"action": "finish"})
+    assert session.phase == "extract"
+    # 按返回的结构仅修标题，不必read、重写业务正文或再猜一轮格式。
+    result = await tool.ainvoke({
+        "action": "edit",
+        "edits": [{"old_text": bad_heading, "new_text": example.splitlines()[0]}],
+    })
+    assert "结构校验通过，候选1项" in result
+    assert session.candidate_draft == CANDIDATES
+    await tool.ainvoke({"action": "finish"})
+    assert session.phase == "merge"
+
+
+def test_candidate_duplicate_number_has_specific_feedback():
+    duplicate = CANDIDATES + "\n" + CANDIDATES.split("## 候选清单\n\n", 1)[1]
+    with pytest.raises(ValueError, match="候选编号重复：### 候选 1"):
+        validate_candidates(duplicate)
 
 
 def make_report(tmp_path, count=1):
