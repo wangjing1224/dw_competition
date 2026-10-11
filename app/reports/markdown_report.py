@@ -11,6 +11,7 @@ from app.models.tasks import (
 )
 from app.parsers.assets import atomic_write
 from app.reports.styles import category_label
+from app.tools.common_tools import apply_text_edits
 
 RESULTS = {
     "符合": "compliant",
@@ -289,29 +290,7 @@ class ReportDocument:
                 if action not in {"write", "edit"}:
                     raise ValueError("未知报告操作")
                 candidate = content if action == "write" else self.read()
-                for index, edit in enumerate(edits or []):
-                    matches = candidate.count(edit.old_text)
-                    if matches != 1:
-                        reason = (
-                            "未找到完全一致的原文。"
-                            if matches == 0
-                            else "不能唯一定位。"
-                        )
-                        guidance = (
-                            "请核对当前原文的引号、空白、换行及前项替换影响；"
-                            "需要时 read 获取当前稿后重建本批 edits。"
-                            if matches == 0
-                            else "请加入相邻标题或上下文，使该项在按顺序替换后的"
-                            "候选稿中仅命中一次。"
-                        )
-                        raise ValueError(
-                            f"edits[{index}].old_text（第{index + 1}项，共{len(edits)}项）："
-                            f"匹配{matches}处，{reason}\n"
-                            "匹配基于本批前面各项替换后的内存候选稿；"
-                            "整批未保存，磁盘仍为调用前版本。\n"
-                            + guidance
-                        )
-                    candidate = candidate.replace(edit.old_text, edit.new_text, 1)
+                candidate = apply_text_edits(candidate, edits or [])
                 restored = []
                 if self.version in (2, 3):
                     from app.reports.report_parser_v2 import restore_category_headings

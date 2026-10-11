@@ -21,7 +21,7 @@ from app.reports.markdown_report import ReportDocument, parse_report
 from app.retrieval.models import IndexChunk, IndexManifest
 from app.retrieval.service import RetrievalService
 from app.retrieval.store import LoadedIndex
-from app.rules.context import CANDIDATE_ITEM_TEMPLATE, CANDIDATE_TEMPLATE, rule_working_context, validate_candidates
+from app.rules.context import CANDIDATE_ITEM_TEMPLATE, CANDIDATE_TEMPLATE, candidate_status, rule_working_context, validate_candidates
 from app.tools.common_tools import CommonTool, SearchDocumentsInput
 from app.tools.report_tools import ReportEdit, ReportSavePolicy, report_tool
 from app.tools.rule_tools import RuleSession, active_rule_tools, build_rule_tools
@@ -55,7 +55,7 @@ async def test_candidates_atomic_edit_finish_and_phase(temp_settings):
     assert "OLD_PROFILE_SENTINEL" not in rule_working_context(s)
     assert "submit_rule_delta" not in [t.name for t in active_rule_tools(tools, s.phase)]
     tool = next(t for t in tools if t.name == "rule_candidates")
-    assert set(convert_to_openai_tool(tool)["function"]["parameters"]["properties"]) == {"action", "edits", "return_view"}
+    assert set(convert_to_openai_tool(tool)["function"]["parameters"]["properties"]) == {"action", "edits"}
     await tool.ainvoke({"action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": CANDIDATES}]})
     assert s.phase == "extract" and validate_candidates(s.candidate_draft) == 1
     with pytest.raises(ValueError, match="匹配0处"):
@@ -77,10 +77,67 @@ async def test_candidates_atomic_edit_finish_and_phase(temp_settings):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("view", ["changed", "all", None])
+async def test_candidate_return_view_disabled_in_real_tool_schema(temp_settings, view):
+    session = candidate_session(temp_settings)
+    tool = next(t for t in build_rule_tools(session) if t.name == "rule_candidates")
+    with pytest.raises(ValidationError, match="return_view"):
+        await tool.ainvoke({
+            "action": "edit", "return_view": view,
+            "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": CANDIDATES}],
+        })
+    assert session.candidate_draft == CANDIDATE_TEMPLATE
+    session.persist.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_candidate_edit_returns_receipt_read_and_finish_keep_full_draft(temp_settings):
+    session = candidate_session(temp_settings)
+    tool = next(t for t in build_rule_tools(session) if t.name == "rule_candidates")
+    long_requirement = "业务正文不应重复回显。" * 600
+    draft = CANDIDATES.replace("90日。", long_requirement)
+    result = await tool.ainvoke({
+        "action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": draft}],
+    })
+    assert session.candidate_draft == draft
+    assert result == "候选稿已保存，尚未交接。\n" + candidate_status(session)
+    assert len(result) < 300
+    assert "业务正文不应重复回显" not in result and "期限要求" not in result
+    # 用已成功保存的edits继续定位，不需要每次写完再read补回显。
+    result = await tool.ainvoke({
+        "action": "edit", "edits": [{"old_text": "候选简介：期限要求。", "new_text": "候选简介：本文件要求。"}],
+    })
+    assert "结构校验通过，候选1项" in result and "候选简介" not in result
+    draft = draft.replace("候选简介：期限要求。", "候选简介：本文件要求。")
+    assert session.candidate_draft == draft
+    read = await tool.ainvoke({"action": "read"})
+    assert read == candidate_status(session) + "\n\n" + draft
+    assert "OLD_PROFILE_SENTINEL" not in read
+    handed = await tool.ainvoke({"action": "finish"})
+    assert draft in handed and "OLD_PROFILE_SENTINEL" in handed
+    assert session.phase == "merge"
+
+
+@pytest.mark.asyncio
+async def test_candidate_edit_persist_error_keeps_original_error_and_draft(temp_settings):
+    session = candidate_session(temp_settings)
+    tool = next(t for t in build_rule_tools(session) if t.name == "rule_candidates")
+    session.persist.side_effect = OSError("候选稿写入失败")
+    with pytest.raises(OSError, match="候选稿写入失败"):
+        await tool.ainvoke({
+            "action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": CANDIDATES}],
+        })
+    assert session.candidate_draft == CANDIDATE_TEMPLATE and session.phase == "extract"
+    assert session.candidate_error == "候选稿写入失败"
+
+
+@pytest.mark.asyncio
 async def test_candidate_invalid_saved_and_zero_candidates(temp_settings):
     s = candidate_session(temp_settings)
     result = await s.candidates("edit", [CandidateEdit(old_text=CANDIDATE_TEMPLATE, new_text="还未整理")])
     assert "结构待修正" in result and s.candidate_draft == "还未整理"
+    assert result == "候选稿已保存，尚未交接。\n" + candidate_status(s)
+    assert "还未整理" not in result
     with pytest.raises(ValueError):
         await s.candidates("finish")
     zero = "# 当前文件候选草稿\n\n候选简介：本批只有采购背景，未含内容核验要求。\n\n## 候选清单\n\n无候选。"
@@ -150,7 +207,7 @@ def test_rule_phase_search_binding_matches_system_and_human(temp_settings, phase
     if phase == "extract":
         assert "本阶段不开放search_documents" in system
         assert "具体缺口" in system and "候选说明" in system
-        assert "首轮已有充分事实时直接edit" in system
+        assert "首轮直接edit" in system
     else:
         assert "本工具仅在合并阶段开放" in system
         assert "不按候选主题把同一份正文再搜索一遍" in system
@@ -253,6 +310,55 @@ def test_candidate_duplicate_number_has_specific_feedback():
     duplicate = CANDIDATES + "\n" + CANDIDATES.split("## 候选清单\n\n", 1)[1]
     with pytest.raises(ValueError, match="候选编号重复：### 候选 1"):
         validate_candidates(duplicate)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacements,index,count", [
+    ([("90日", "80日"), ("90日", "70日")], 1, 0),
+    ([("日", "天")], 0, 2),
+    ([("### 候选 96", "### 候选 90"), ("### 候选 96", "### 候选 91")], 1, 0),
+])
+async def test_candidate_edit_uses_report_feedback_and_rolls_back_whole_batch(
+    temp_settings, replacements, index, count,
+):
+    session = candidate_session(temp_settings)
+    session.candidate_draft = CANDIDATES + "\n### 候选 96\n\n要求：30日。\n\n候选说明：补充期限。\n"
+    before = session.candidate_draft
+    tool = next(t for t in build_rule_tools(session) if t.name == "rule_candidates")
+    with pytest.raises(ValueError) as error:
+        await tool.ainvoke({"action": "edit", "edits": [
+            {"old_text": old, "new_text": new} for old, new in replacements
+        ]})
+    message = str(error.value)
+    assert f"edits[{index}].old_text（第{index + 1}项，共{len(replacements)}项）" in message
+    assert f"匹配{count}处" in message
+    assert "前面各项替换后的内存候选稿" in message
+    assert "整批未保存，磁盘仍为调用前版本" in message
+    assert session.candidate_draft == before and session.candidate_error == message
+    session.persist.assert_not_awaited()
+    if count == 0:
+        assert "前项替换影响" in message
+    else:
+        assert "相邻标题或上下文" in message
+
+
+@pytest.mark.asyncio
+async def test_candidate_edit_chain_deletion_and_discontinuous_numbers(temp_settings):
+    session = candidate_session(temp_settings)
+    extra = "\n### 候选 96\n\n要求：30日。\n\n候选说明：补充期限。\n"
+    session.candidate_draft = CANDIDATES + extra
+    assert validate_candidates(session.candidate_draft) == 2
+    result = await session.candidates("edit", [
+        CandidateEdit(old_text="90日", new_text="80日"),
+        CandidateEdit(old_text="80日", new_text="70日"),
+        CandidateEdit(old_text=CANDIDATES.split("## 候选清单\n\n")[1].replace("90日", "70日"), new_text=""),
+    ])
+    assert "结构校验通过，候选1项" in result
+    assert "### 候选 96" in session.candidate_draft
+    assert "### 候选 1" not in session.candidate_draft
+    session.persist.assert_awaited_once()
+    await session.candidates("finish")
+    assert session.phase == "merge"
 
 
 def make_report(tmp_path, count=1):
@@ -503,6 +609,107 @@ async def test_r_graph_phase_snapshot_and_next_file_reset(temp_settings, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_r_twelve_calls_share_phase_budget_and_keep_final_round_unbound(temp_settings, monkeypatch):
+    from app.rules.extractor import extract_rule_set
+    from app.storage.database import initialize_database
+    from tests.unit.rules.test_rule_agent import ScriptModel, parsed_file as rule_file, tool_call, submit_args, add_operation
+
+    monkeypatch.setattr("app.storage.database.database_path", lambda: temp_settings.storage.database_path)
+    initialize_database(temp_settings.storage.database_path)
+    assert temp_settings.rule_agent_max_steps == 12
+    model = ScriptModel([
+        candidate_response("期限90日。"),
+        *[AIMessage(content="", tool_calls=[
+            tool_call("submit_rule_delta", f"read-{step}", submit_args()),
+        ]) for step in range(2, 11)],
+        AIMessage(content="", tool_calls=[
+            tool_call("submit_rule_delta", "write-round-11", submit_args([add_operation()], view="changed")),
+        ]),
+        AIMessage(content="本批已保存"),
+    ])
+    result = await extract_rule_set(
+        "project-1", [rule_file(1)], model, retrieval_service=SimpleNamespace(settings=temp_settings),
+        settings=temp_settings,
+    )
+    assert len(result.rules) == 1 and len(model.calls) == 12
+    assert "rule_candidates" in model.calls[0][1]
+    assert all("submit_rule_delta" in names and "rule_candidates" not in names for _, names in model.calls[1:11])
+    assert model.calls[-1][1] == []
+    assert "11" in model.calls[-2][0][-1].content
+    assert "12" in model.calls[-1][0][-1].content
+    assert not any("尚未finish" in str(m.content) for m in model.calls[-1][0])
+    assert any(m.type == "tool" and m.tool_call_id == "candidate-finish" for m in model.calls[-1][0])
+
+
+@pytest.mark.parametrize("phase", ["extract", "merge"])
+@pytest.mark.parametrize("step", range(1, 13))
+def test_r_candidate_reminder_only_at_seventh_round_before_finish(temp_settings, phase, step):
+    from app.agents.rule_agent import prepare_rule_request
+
+    session = candidate_session(temp_settings)
+    session.phase = phase
+    messages = [SystemMessage(content="system"), HumanMessage(content="本批原文")]
+    context = prepare_rule_request(
+        {"messages": messages, "model_calls": step - 1},
+        tools=build_rule_tools(session), max_steps=12,
+        model_settings=temp_settings.rule_extraction_model, session=session,
+    )
+    reminder = context.messages[len(messages):]
+    if step == 7 and phase == "extract":
+        assert len(reminder) == 1 and reminder[0].type == "human"
+        assert "含本轮还剩 5 个工具轮" in reminder[0].content
+        assert "尚未finish" in reminder[0].content
+        assert "同轮先edit再finish" in reminder[0].content
+        assert "# 当前文件候选草稿" not in reminder[0].content
+    elif step >= 11:
+        assert len(reminder) == 1
+        assert ("最后一个可调用工具" if step == 11 else "本轮不提供工具") in reminder[0].content
+    else:
+        assert not reminder
+    assert len(messages) == 2
+    assert bool(context.bindings) == (step < 12)
+
+
+def test_r_candidate_reminder_not_repeated_after_prepare_or_later_rounds(temp_settings):
+    from app.agents.rule_agent import prepare_rule_request
+
+    session = candidate_session(temp_settings)
+    kwargs = dict(tools=build_rule_tools(session), max_steps=12,
+                  model_settings=temp_settings.rule_extraction_model, session=session)
+    state = {"messages": [SystemMessage(content="system"), HumanMessage(content="本批原文")], "model_calls": 6}
+    context = prepare_rule_request(state, **kwargs)
+    # 同轮压缩续跑不重复追加；下一轮仍未finish，也不再发提前提醒。
+    resumed = prepare_rule_request(
+        {**state, "messages": list(context.messages), "prepared_step": 7}, **kwargs,
+    )
+    assert resumed.messages == context.messages
+    for step in (8, 9, 10):
+        context = prepare_rule_request(
+            {"messages": list(context.messages), "model_calls": step - 1}, **kwargs,
+        )
+        assert sum("尚未finish" in str(m.content) for m in context.messages) == 1
+        assert len(context.messages) == 3
+
+
+@pytest.mark.parametrize("max_steps", [2, 6, 8, 15])
+def test_r_candidate_reminder_respects_configured_budget(temp_settings, max_steps):
+    from app.agents.rule_agent import prepare_rule_request
+
+    session = candidate_session(temp_settings)
+    reminded = []
+    for step in range(1, max_steps + 1):
+        context = prepare_rule_request(
+            {"messages": [SystemMessage(content="system"), HumanMessage(content="本批原文")],
+             "model_calls": step - 1},
+            tools=build_rule_tools(session), max_steps=max_steps,
+            model_settings=temp_settings.rule_extraction_model, session=session,
+        )
+        if "尚未finish" in str(context.messages[-1].content):
+            reminded.append(step)
+    assert reminded == ([max_steps - 5] if max_steps > 6 else [])
+
+
+@pytest.mark.asyncio
 async def test_r_finish_order_failed_edit_and_no_extra_merge_round(temp_settings):
     from app.graph.rule_graph import build_rule_graph
     from app.rules.extractor import _check_batch_completion
@@ -575,7 +782,7 @@ async def test_r_same_file_batches_and_rebuild_preserve_candidate(temp_settings,
                                            tools=build_rule_tools(s), settings=temp_settings, model_calls=3, handoff="真实历史交接")
         assert CANDIDATES in rebuilt.messages[1].content
         assert ("OLD_PROFILE_SENTINEL" in rebuilt.messages[1].content) == (phase == "merge")
-        assert "第 4/8 轮" in rebuilt.messages[1].content
+        assert f"第 4/{temp_settings.rule_agent_max_steps} 轮" in rebuilt.messages[1].content
 
 
 @pytest.mark.asyncio

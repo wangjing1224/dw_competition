@@ -1,4 +1,4 @@
-"""各Agent共用的检索、看图与轻量沙箱；文件工具按会话注入授权范围和解析快照。"""
+"""各Agent共用的检索、看图与轻量沙箱，以及文本编辑内部实现。"""
 
 import ast
 import asyncio
@@ -26,6 +26,31 @@ from app.prompts.loader import load_tool_description
 from app.retrieval.models import IndexFilter, SearchResult
 
 QueryText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+def apply_text_edits(text, edits):
+    """仅在内存副本按顺序精确替换；调用方全部成功后自行原子保存。"""
+    candidate = text
+    for index, edit in enumerate(edits):
+        matches = candidate.count(edit.old_text)
+        if matches != 1:
+            reason = "未找到完全一致的原文。" if matches == 0 else "不能唯一定位。"
+            guidance = (
+                "请核对当前原文的引号、空白、换行及前项替换影响；"
+                "需要时 read 获取当前稿后重建本批 edits。"
+                if matches == 0
+                else "请加入相邻标题或上下文，使该项在按顺序替换后的"
+                "候选稿中仅命中一次。"
+            )
+            raise ValueError(
+                f"edits[{index}].old_text（第{index + 1}项，共{len(edits)}项）："
+                f"匹配{matches}处，{reason}\n"
+                "匹配基于本批前面各项替换后的内存候选稿；"
+                "整批未保存，磁盘仍为调用前版本。\n"
+                + guidance
+            )
+        candidate = candidate.replace(edit.old_text, edit.new_text, 1)
+    return candidate
 
 
 class DocumentSearchGroup(StrictModel):

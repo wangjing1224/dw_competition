@@ -17,6 +17,7 @@ from app.services.bidder_service import BidderService
 from app.services.project_service import ProjectService
 from app.storage.database import initialize_database
 from app.storage.file_store import FileStore
+from tests.helpers.audit import candidate_response
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "test-datas"
 
@@ -83,7 +84,7 @@ class AuditModel:
         for heading in headings:
             if heading.startswith("### rule-"):
                 parts.extend(
-                    [heading, "结论：人工复核\n实际发现：已核对报价和技术响应，部分条件尚不能确认。\n审核说明：需结合原件核对具体响应条件。"]
+                    [heading, "核验状态：已完成\n进度说明：本条必要材料已核对。\n结论：人工复核\n实际发现：已核对报价和技术响应，部分条件尚不能确认。\n审核说明：需结合原件核对具体响应条件。"]
                 )
             elif heading == "## 总体总结" or heading == "### 分类总结":
                 parts.extend([heading, "存在待完善项，需要复核。"])
@@ -125,12 +126,17 @@ async def test_mock_dataset_new_libraries_through_route_agent_and_reports(
 
     class RuleModel:
         submitted = False
+        tool_names = ()
 
         def bind_tools(self, tools):
+            self.tool_names = tuple(tool.name for tool in tools)
             return self
 
         async def ainvoke(self, messages, **kwargs):
             assert kwargs["max_tokens"] > 0
+            # 跟随真实两阶段绑定，不在提取阶段直接调用尚未授权的提交工具。
+            if "rule_candidates" in self.tool_names:
+                return candidate_response("探测器分辨率不得低于640x480；投标文件必须填写投标总价。")
             if self.submitted:
                 return AIMessage(content="处理完毕")
             self.submitted = True

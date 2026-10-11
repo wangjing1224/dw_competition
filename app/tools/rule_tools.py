@@ -14,6 +14,7 @@ from app.retrieval.service import RetrievalService
 from app.rules.context import CANDIDATE_TEMPLATE, build_rule_view, candidate_status, rule_working_context, validate_candidates
 from app.rules.merger import apply_rule_delta_operations
 from app.rules.policies import handle_rule_limit_exceeded
+from app.tools.common_tools import apply_text_edits
 
 
 class SubmitRuleToolInput(SubmitRuleDeltaInput):
@@ -63,7 +64,7 @@ class RuleSession:
             self.candidate_draft, self.phase = previous
             raise
 
-    async def candidates(self, action, edits=None, return_view="changed"):
+    async def candidates(self, action, edits=None):
         if self.phase != "extract":
             raise ValueError("候选工具仅在提取阶段可用")
         if action == "read":
@@ -74,13 +75,8 @@ class RuleSession:
             validate_candidates(self.candidate_draft)
             await self.save_candidates(self.candidate_draft, "merge")
             return "提取已交接；下轮提供合并工具。\n" + rule_working_context(self)
-        candidate = self.candidate_draft
         try:
-            for index, edit in enumerate(edits or []):
-                count = candidate.count(edit.old_text)
-                if count != 1:
-                    raise ValueError(f"edits[{index}].old_text匹配{count}处，须唯一；本批未保存，请核对当前稿")
-                candidate = candidate.replace(edit.old_text, edit.new_text, 1)
+            candidate = apply_text_edits(self.candidate_draft, edits or [])
             old_error = self.candidate_error
             self.candidate_error = None
             try:
@@ -91,8 +87,10 @@ class RuleSession:
         except Exception as exc:
             self.candidate_error = str(exc)
             raise
-        view = candidate if return_view == "all" else "\n\n".join(edit.new_text or "（删除）" for edit in edits or [])
-        return "候选稿已保存，尚未交接。\n" + candidate_status(self) + "\n\n" + view
+        # 暂停return_view及正文回显，保留原实现便于后续对照；保存和错误反馈不变。
+        # view = candidate if return_view == "all" else "\n\n".join(edit.new_text or "（删除）" for edit in edits or [])
+        # return "候选稿已保存，尚未交接。\n" + candidate_status(self) + "\n\n" + view
+        return "候选稿已保存，尚未交接。\n" + candidate_status(self)
 
     async def submit(self, request: SubmitRuleDeltaInput, call_id: str) -> str:
         if request.return_view is None:
@@ -158,8 +156,8 @@ class RuleSession:
 
 
 def build_rule_tools(session: RuleSession) -> list[StructuredTool]:
-    async def rule_candidates(action, edits=None, return_view="changed"):
-        return await session.candidates(action, edits, return_view)
+    async def rule_candidates(action, edits=None):
+        return await session.candidates(action, edits)
 
     async def submit_rule_delta(
         operations,

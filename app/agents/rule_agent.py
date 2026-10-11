@@ -24,18 +24,24 @@ def prepare_rule_request(state, *, tools, max_steps, model_settings, session=Non
     if session is not None:
         tools = active_rule_tools(tools, session.phase)
         messages[0] = SystemMessage(content=rule_system(session))
-    if state.get("prepared_step") != step and step >= max_steps - 1:
+    template = None
+    if step >= max_steps - 1:
         template = (
             "rule_extraction_finalize"
             if step == max_steps
             else "rule_extraction_last_tool_round"
         )
+    elif session is not None and session.phase == "extract" and 1 < step == max_steps - 5:
+        # 12轮时仅第7轮提醒尚未交接；已finish或错过该轮都不补发。
+        template = "rule_extraction_prepare_finish"
+    if template is not None and state.get("prepared_step") != step:
         messages.append(
             HumanMessage(
                 content=render_prompt(
                     template,
                     current_step=step,
                     max_steps=max_steps,
+                    remaining_tool_rounds=max_steps - step,
                     working_status=candidate_status(session) if session else "以实际工具绑定及已保存结果为准",
                 )
             )

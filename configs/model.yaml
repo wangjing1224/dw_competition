@@ -15,9 +15,10 @@
 # 固定 max_output_tokens 与 context_window_tokens 二选一；五个业务模型用窗口模式，
 # parser_vision_model 暂用固定输出上限。窗口/计数/限流与检索片段长度是不同概念。
 
-# 规则 Agent 每个阅读批次最多调用次数，整数>=2，默认8；最后一次不提供工具。
-# 压缩续跑不清零，正常换批重置。
-rule_agent_max_steps: 8
+# 规则 Agent 每个阅读批次最多调用次数，整数>=2；当前对照试验设12，最后一次不提供工具。
+# 提取与合并共享11个工具轮＋1个收尾轮；提前完成即可结束，切阶段及压缩不清零，正常换批重置。
+# 第max_steps-5轮（当前第7轮）仍未finish时仅提前提醒一次；保留末两轮原有提醒。
+rule_agent_max_steps: 12
 # 资料入库同上，整数>=2，默认8。
 evidence_ingestion_max_steps: 8
 

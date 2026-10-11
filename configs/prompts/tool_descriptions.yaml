@@ -43,8 +43,8 @@ view_image: |-
 
 rule_candidates: |-
   用途：查看和编辑当前文件唯一的候选Markdown草稿，不直接修改正式规则库。
-  输入：action为read、edit或finish。read/finish的edits省略或null；edit传非空old_text/new_text列表，顺序精确替换，old_text须唯一匹配，new_text为空表示删除。代码提供含条目占位的初始模板，头部候选简介，每项只填要求、候选说明，无需write或来源文件字段。
-  格式：每个条目标题严格为“### 候选 正整数”，编号唯一；编号后不附名称，标题下直接写要求、候选说明，不单独增加名称行。条目结构如下，待填写须替换为实际内容；多个条目沿用此结构并使用不同编号：
+  输入：仅action和edits。action为read、edit或finish。read/finish的edits省略或null；edit传非空old_text/new_text列表，顺序精确替换，old_text须唯一匹配，new_text为空表示删除。代码提供含条目占位的初始模板，头部候选简介，每项只填要求、候选说明，无需write或来源文件字段。
+  格式：每个条目标题严格为“### 候选 正整数”，编号唯一，可以不连续；编号后不附名称，标题下直接写要求、候选说明，不单独增加名称行。条目结构如下，待填写须替换为实际内容；多个条目沿用此结构并使用不同编号：
   ```markdown
   ### 候选 1
 
@@ -53,7 +53,7 @@ rule_candidates: |-
   候选说明：待填写。
   ```
   确无候选时，候选简介说明实际原因，删除整个占位条目，候选清单下只保留“无候选。”。
-  返回：保存状态、结构校验及阶段信息，changed返回变化文本，all返回全稿；read总是全稿。匹配失败整批不保存；文本保存后结构仍有问题会返回具体错误，供继续编辑，只有一份当前稿。
+  返回：edit仅返回简短保存状态、结构校验及阶段信息，不回显变化文本或全稿；read返回当前完整草稿。匹配失败返回首个失败项、总项数和命中次数；按前项替换后的内存稿匹配，任一失败则整批不保存，前项也不落盘。文本保存后结构仍有问题会返回具体错误，供继续编辑，只有一份当前稿。
   交接：仅finish检查当前稿及未解决编辑错误，通过并保存阶段后进入合并；成功返回完整草稿及已有规则，下轮切换工具。失败保持提取和当前稿，edit不隐式结束，正文宣告不切阶段。
   生命周期：同文件分批保留当前稿，成功处理完切下一文件时重置，不保存候选历史。
 
@@ -62,6 +62,7 @@ submit_rule_delta: |-
   用途：原子保存当前文件有依据的规则增量及项目简介，或只读查看当前规则库。
   契约：三个参数必须显式填写；只读时全部为 null，写入须至少更新规则或简介之一，并指定 changed/all。操作字段含义以参数 Schema 为准；ID 及来源合并由系统维护。
   add提交新主题；merge的requirement只写新增内容，由系统追加，仅补来源时可省略，merged_rule_ids用于吸收已有规则。add/merge不填来源列表；replace提交更正后完整字段和完整source_file_ids。每次写规则的reason均为更新后完整说明，直接覆盖而非追加，无额外说明可显式填空字符串，不可省略或为null。
+  空值兼容：add的rule_id、merged_rule_ids、source_file_ids为null时等同省略；merge的merged_rule_ids为null时等同空列表、source_file_ids为null时等同省略；replace的merged_rule_ids为null时等同省略。其他必填值、真实ID和来源列表仍按原契约校验，不丢弃非空非法字段。
   只读示例：{"operations":null,"project_profile":null,"return_view":null}。
   只更新简介并查看全库：{"operations":null,"project_profile":"更新后的完整简介","return_view":"all"}。
   all 是真实写入后的返回范围，不是查看命令。

@@ -171,9 +171,10 @@ Rerank切换不改变向量索引。正文切片默认1024个本地近似Token�
 ## 规则抽取与增量维护
 
 解析和索引完成后，规则 Agent 串行处理每份招标文件，使用独立消息历史：
-System 放稳定要求和启动时的完整规则视图，Human 放当前文件的有序正文、表格及图片路径。
-提交结果以 ToolMessage 更新上下文，不反复改写 System；下一份文件使用最新规则库启动。
+System 放共用要求及当前阶段指令，Human 放当前文件的有序正文、表格、图片路径和候选草稿。
+提取阶段不展示旧规则；finish以ToolMessage交接完整候选及已有规则，下一轮进入合并阶段。
 
+- `rule_candidates`：仅提取阶段提供，只接收action和edits；edit返回简短保存／校验回执，不回显正文，具体错误保留；read返回完整候选，finish校验并交接。return_view参数及原回显分支暂注释停用，正式提交工具不受影响。
 - `search_documents`：公共检索工具，规则侧按查询组回查当前文件及已完成的历史文件，不提前读取其他未来文件；补查不推进阅读游标。
 - `view_image`：通过统一图片路径查看当前或历史文件中的已登记图片；由 `CommonTool` 提供。
 - `submit_rule_delta`：一批 `add/merge/replace` 或项目简介更新；三个参数显式全为 `null` 时只读查看。
@@ -189,11 +190,12 @@ System 放稳定要求和启动时的完整规则视图，Human 放当前文件�
 所有文件处理完成才生成正式 `{project_id}.json`；进度及变更记录保留，不自动跨进程续跑。
 旧版规则数据不兼容、不迁移，也不会自动删除；测试新流程需重新上传原始招标文件抽取。
 
-`configs/model.yaml` 顶层 `rule_agent_max_steps` 配置每个阅读批次的规则 Agent 调用轮数，默认 8；同批压缩续跑不清零。
+`configs/model.yaml` 顶层 `rule_agent_max_steps` 配置每个阅读批次的规则 Agent 调用轮数，当前为 12；提取与合并共享，同批压缩续跑不清零。
 同层 `rule_limit: 10000` 配置规则库总条数上限。整批增量校验后、保存前，若总条数超过该值，
 会调用 `app/rules/policies.py` 的 `handle_rule_limit_exceeded()`；目前只打印警告并继续保存全部规则，
 不拒绝、截断或自动合并。后续超限策略从这个函数接入，当前将上限设大即可保持原有业务行为。
-倒数第二轮提醒保存且仍绑定工具，最后一轮提醒后使用不绑定工具的模型收尾，上一轮工具全部回应后才进入下一轮。
+第 `max_steps - 5` 轮（当前第7轮）开始前仍未成功finish时，追加一次简短交接提醒；已finish则不发，后续轮不补发，同轮压缩续跑不重复追加。预算过小时不在首轮提前提醒。
+原倒数第二轮提醒保存且仍绑定工具，最后一轮提醒后使用不绑定工具的模型收尾，上一轮工具全部回应后才进入下一轮。
 沿用 `RULE_EXTRACTION_MODEL_BASE_URL/API_KEY` 和 `rule_extraction_model.model`；模型需支持原生工具调用及多模态工具消息。
 没有自动切换模型，实际网关的识图和工具调用能力需要单独验证。
 
@@ -328,20 +330,20 @@ Markdown 生成失败时不继续生成 Word。部分文件执行失败时批次
 
 ### Agent 收尾判定
 
-当前默认预算如下；实际运行以生效配置为准：
+仓库当前配置如下；实际运行以生效配置为准：
 
-| Agent | 配置项 | 默认模型轮数 |
+| Agent | 配置项 | 当前模型轮数 |
 | --- | --- | --- |
-| 规则抽取 | `configs/model.yaml` 的 `rule_agent_max_steps` | 8 |
+| 规则抽取 | `configs/model.yaml` 的 `rule_agent_max_steps` | 12 |
 | 资料入库 | `configs/model.yaml` 的 `evidence_ingestion_max_steps` | 8 |
-| 主审核 | `configs/model.yaml` 的 `audit.bid_agent_max_steps` | 8 |
-| 资料核验子 Agent | `configs/model.yaml` 的 `audit.evidence_agent_max_steps` | 3 |
+| 主审核 | `configs/model.yaml` 的 `audit.bid_agent_max_steps` | 15 |
+| 资料核验子 Agent | `configs/model.yaml` 的 `audit.evidence_agent_max_steps` | 4 |
 
 修改 YAML 后重启后端生效。旧 `.env` 或系统环境中的 `BID_AGENT_MAX_STEPS`、
 `EVIDENCE_AGENT_MAX_STEPS` 不再读取，可删除；如曾自定义轮次，请将值迁入上述 YAML 字段。
 
-轮数指一个阅读批次/会话的模型调用预算，不是工具调用次数。主审核 8 轮中前 7 轮可调用工具，
-第 8 轮只作无工具回复；模型可以提前结束，不要求跑满。一轮可以发出多个工具调用，子 Agent 的模型调用不逐次扣减主 Agent 轮数。
+轮数指一个阅读批次/会话的模型调用预算，不是工具调用次数。规则当前前11轮可调用工具，第12轮无工具；主审核前14轮可调用工具，第15轮无工具。
+模型可以提前结束，不要求跑满。一轮可以发出多个工具调用，子 Agent 的模型调用不逐次扣减主 Agent 轮数。
 同批压缩续跑不清零；上下文容量、单次输出额度和模型轮数是不同限制。
 
 规则、资料入库和主审核 Agent 用简短普通文本说明本批处理情况，不要求固定结束语，也不增加完成工具或收尾 JSON。

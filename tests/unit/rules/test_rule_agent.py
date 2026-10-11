@@ -338,7 +338,7 @@ async def test_serial_files_have_fresh_messages_and_latest_rules(env):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("steps", [3, 8])
+@pytest.mark.parametrize("steps", [3, 8, 12, 15])
 async def test_last_round_is_unbound_with_all_previous_calls_closed(env, steps):
     env = env.model_copy(update={"rule_agent_max_steps": steps})
     model = ScriptModel(
@@ -446,6 +446,39 @@ async def test_write_failure_does_not_publish_and_call_id_replay_is_idempotent(e
     assert writer.await_count == 2
     assert len(session.commits) == 1
     assert "rule-2" in view  # 失败预留的编号不重复使用。
+
+
+@pytest.mark.asyncio
+async def test_submit_tool_normalizes_only_inactive_nulls_and_keeps_replay(env):
+    parsed = parsed_file(1)
+    writer = AsyncMock()
+    session = RuleSession(
+        RuleSet(project_id="project-1", source_files=[RuleSourceFile.from_document(parsed.document)]),
+        parsed, {}, writer, SimpleNamespace(settings=env), rule_limit=env.rule_limit,
+    )
+    submit = next(t for t in build_rule_tools(session) if t.name == "submit_rule_delta")
+    assert set(submit.tool_call_schema.model_json_schema()["properties"]) == {
+        "operations", "project_profile", "return_view",
+    }
+    operations = [
+        add_operation(rule_id=None, merged_rule_ids=None, source_file_ids=None),
+        {"action": "merge", "rule_id": "rule-1", "requirement": "从截止日起算。",
+         "reason": "期限及起算事件。", "merged_rule_ids": None, "source_file_ids": None},
+        {**add_operation(), "action": "replace", "rule_id": "rule-1",
+         "requirement": "自截止日起90日。", "source_file_ids": ["file-1"],
+         "merged_rule_ids": None},
+    ]
+    for index, operation in enumerate(operations):
+        call = tool_call("submit_rule_delta", f"save-{index}", submit_args([operation], view="changed"))
+        result = await submit.ainvoke(call)
+        assert result.status == "success" and "rule-1" in result.content
+        minimal = {key: value for key, value in operation.items() if value is not None}
+        replay = await submit.ainvoke({**call, "args": submit_args([minimal], view="changed")})
+        assert replay.content == result.content
+    assert writer.await_count == len(session.commits) == 3
+    assert session.rule_set.rules[0].requirement == "自截止日起90日。"
+    assert [s.file_id for s in session.rule_set.rules[0].sources] == ["file-1"]
+    assert len(session.rule_set.rules) == 1
 
 
 @pytest.mark.asyncio
@@ -1098,8 +1131,11 @@ async def test_small_window_batches_keep_complete_blocks_latest_view_and_progres
     assert all(option["max_tokens"] > 0 for option in model.options)
 
 
-def compaction_scenario(env, monkeypatch, *, summary=None, second_read_size=14000):
-    mock_counter(monkeypatch)
+def compaction_scenario(env, monkeypatch, *, summary=None, second_read_size=14000, steps=2):
+    from app.llm.input_budget import BudgetSettings, check_input
+    from app.rules.extractor import _batch_context, build_document_units
+
+    counter = mock_counter(monkeypatch)
     original_builder = build_rule_tools
 
     reads = 0
@@ -1122,8 +1158,25 @@ def compaction_scenario(env, monkeypatch, *, summary=None, second_read_size=1400
     parsed.sections[0].blocks[0].content = (
         "原文锚点-BEGIN:" + "D" * 30000 + ":原文锚点-END"
     )
-    # 新提示词和工具Schema计入固定开销；仍由14K工具结果触发压缩。
-    settings = budget_env(env, 54_500, steps=2)
+    settings = budget_env(env, 100_000, steps=steps)
+    session = RuleSession(
+        RuleSet(project_id="project-1", source_files=[RuleSourceFile.from_document(parsed.document)]),
+        parsed, {}, AsyncMock(), SimpleNamespace(settings=settings), rule_limit=settings.rule_limit,
+    )
+    tools = [
+        *original_builder(session), tool,
+        *CommonTool(parsed_documents={"file-1": parsed}, settings=settings).tools(),
+    ]
+    context = _batch_context(
+        session=session, units=build_document_units(parsed), start=0, end=1,
+        tools=tools, settings=settings,
+    )
+    fixed_cost = check_input(
+        context=context, counter=counter, budget_settings=BudgetSettings(100_000),
+    ).estimate.total
+    # 容量随实际提示词/Schema固定开销浮动，避免文案增长误触硬上限。
+    # 14K/15K只读结果仍须触发软阈值；下面的真实压缩次数断言验证此条件。
+    settings = budget_env(settings, fixed_cost + 12_000, steps=steps)
     write = tool_call(
         "submit_rule_delta",
         "saved-before-compaction",
@@ -1177,9 +1230,8 @@ async def test_compaction_reinvokes_same_batch_preserves_write_and_final_round(
 @pytest.mark.asyncio
 async def test_two_compactions_require_intervening_business_calls(env, monkeypatch):
     # 第二次没有前次提交的回执，增加Mock材料保持末轮仍触发软阈值。
-    settings, parsed, initial = compaction_scenario(env, monkeypatch, second_read_size=15000)
+    settings, parsed, initial = compaction_scenario(env, monkeypatch, second_read_size=15000, steps=3)
     first = next(initial.replies)
-    settings = budget_env(settings, 54_500, steps=3)
     model = ScriptModel(
         [
             first,

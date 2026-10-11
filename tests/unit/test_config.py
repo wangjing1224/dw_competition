@@ -242,6 +242,9 @@ def test_chat_platform_must_be_explicit_supported_value(platform):
 
 def test_rule_budget_configuration_and_legacy_roles():
     settings = get_settings()
+    assert settings.rule_agent_max_steps == 12
+    assert settings.evidence_ingestion_max_steps == 8
+    assert settings.audit.bid_agent_max_steps == 15 and settings.audit.evidence_agent_max_steps == 4
     assert settings.rule_extraction_model.context_window_tokens == 1_000_000
     assert settings.rule_extraction_model.max_output_tokens is None
     assert settings.rule_extraction_model.compaction_trigger_ratio == 0.90

@@ -88,12 +88,50 @@ def test_rule_candidate_start_reuses_visible_draft_and_keeps_read_for_recovery()
         "rule_extraction", stage_instructions=load_prompt("rule_candidate_stage")
     )
     assert "#### 本批起步" in system
-    assert "首轮已有充分事实时直接edit" in system
+    assert "首轮直接edit" in system
     assert "old_text逐字取自Human中的当前稿" in system
     assert "无需先read获取模板或确认草稿初始化" in system
     assert "只有无法确定当前待修改文本时才read" in system
     assert "不要求首轮强行保存尚未确认的条件" in system
-    assert "后续以成功保存的编辑及工具返回为准" in system
+    assert "后续以成功保存的edits及工具保存／校验反馈为准" in system
+    assert "不为补回显而固定read" in system
+
+
+def test_rule_candidate_receipt_contract_leaves_formal_submit_unchanged():
+    from app.models.rules import RuleCandidatesInput, SubmitRuleDeltaInput
+
+    description = load_tool_description("rule_candidates")
+    assert "仅action和edits" in description
+    assert "edit仅返回简短保存状态" in description
+    assert "不回显变化文本或全稿" in description
+    assert "read返回当前完整草稿" in description
+    assert "成功返回完整草稿及已有规则" in description
+    assert "具体错误" in description and "整批不保存" in description
+    assert "return_view" not in description
+    assert set(RuleCandidatesInput.model_fields) == {"action", "edits"}
+    assert set(SubmitRuleDeltaInput.model_fields) == {"operations", "project_profile", "return_view"}
+    assert "changed 返回整批最终新增或修改" in load_tool_description("submit_rule_delta")
+
+
+def test_rule_phases_separate_extraction_from_condition_level_merging():
+    extract = render_prompt("rule_extraction", stage_instructions=load_prompt("rule_candidate_stage"))
+    merge = render_prompt("rule_extraction", stage_instructions=load_prompt("rule_merge_stage"))
+    for text in ("相邻说明、表头、表下注释", "编号只需唯一，可以不连续", "前项也未落盘"):
+        assert text in extract
+    for text in (
+        "逐主题比较对象与范围", "出具机构资质、报告覆盖的型号和有效期",
+        "定向检查当前规则中实际引用或依赖", "不做全库数字或短语替换",
+        "不能只检查新增规则", "确需降级或改回bid_only时，用replace",
+    ):
+        assert text in merge and text not in extract
+    for text in (extract, merge):
+        assert "先明确本条要求证明的是投标响应" in text
+        assert "原文只要求响应或承诺时用 bid_only" in text
+        assert "必须以实际材料证明的条件用 evidence_check" in text
+    description = load_tool_description("rule_candidates")
+    assert "可以不连续" in description and "前项也不落盘" in description
+    assert "出具机构资质、报告覆盖的型号和有效期" not in description
+    assert "空值兼容" in load_tool_description("submit_rule_delta")
 
 
 def test_rule_merge_search_targets_unseen_information_not_repeated_self_search():

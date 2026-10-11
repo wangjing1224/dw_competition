@@ -67,11 +67,11 @@ class RuleDeltaOperation(StrictModel):
         description="新增、追加增量、完整覆盖。"
     )
     rule_id: str | None = Field(
-        default=None, description="merge/replace 引用已有 ID；add 不填写。"
+        default=None, description="merge/replace 引用已有 ID；add 省略，兼容 null。"
     )
     merged_rule_ids: list[NonBlank] = Field(
         default_factory=list,
-        description="仅 merge：有当前文件依据时明确吸收的其他规则 ID。",
+        description="仅 merge：有当前文件依据时明确吸收的其他规则 ID；无吸收时省略或空列表，兼容 null。",
     )
     category: RuleCategory | None = Field(
         default=None, description="add/replace 必填；merge 可沿用。"
@@ -88,11 +88,28 @@ class RuleDeltaOperation(StrictModel):
     )
     source_file_ids: list[NonBlank] | None = Field(
         default=None,
-        description="仅 replace 必填完整非空来源文件 ID 列表；add/merge 不填写。",
+        description="仅 replace 必填完整非空来源文件 ID 列表；add/merge 省略，兼容 null，不接受实际列表。",
     )
     reason: str = Field(
         description="更新后整条规则的完整依据说明，明确条件来自哪些文件；始终覆盖，可为空字符串。"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def omit_inactive_nulls(cls, value):
+        """只兼容无业务含义的空值，不丢弃实际 ID、来源或未知字段。"""
+        if not isinstance(value, dict) or not isinstance(value.get("action"), str):
+            return value
+        optional_nulls = {
+            "add": ("rule_id", "merged_rule_ids", "source_file_ids"),
+            "merge": ("merged_rule_ids", "source_file_ids"),
+            "replace": ("merged_rule_ids",),
+        }.get(value.get("action"), ())
+        normalized = dict(value)
+        for name in optional_nulls:
+            if name in normalized and normalized[name] is None:
+                normalized.pop(name)
+        return normalized
 
     @model_validator(mode="after")
     def validate_action(self):
@@ -206,7 +223,8 @@ class CandidateEdit(StrictModel):
 class RuleCandidatesInput(StrictModel):
     action: Literal["read", "edit", "finish"] = Field(description="read查看；edit保存；finish校验并交接合并。")
     edits: list[CandidateEdit] | None = Field(default=None, description="仅edit填写非空列表；read/finish省略或null。")
-    return_view: Literal["changed", "all"] = Field(default="changed", description="edit返回变化文本或全稿；read/finish始终返回全稿。")
+    # 试验停用候选edit正文回显；仅保留action/edits，恢复时需同步工具实现与说明。
+    # return_view: Literal["changed", "all"] = Field(default="changed", description="edit返回变化文本或全稿；read/finish始终返回全稿。")
 
     @model_validator(mode="after")
     def validate_action(self):

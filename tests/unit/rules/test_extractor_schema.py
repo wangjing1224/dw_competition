@@ -56,6 +56,70 @@ def test_invalid_operations_rejected(payload):
         RuleDeltaOperation.model_validate(payload)
 
 
+def operation_payload(action):
+    payload = {"action": action, "reason": "当前原文明示的要求。"}
+    if action in {"add", "replace"}:
+        payload.update(
+            category="commercial", requirement="期限90日。",
+            priority="important", verification="bid_only",
+        )
+    if action != "add":
+        payload["rule_id"] = "rule-1"
+    if action == "replace":
+        payload["source_file_ids"] = ["file-1"]
+    return payload
+
+
+@pytest.mark.parametrize("action,fields", [
+    ("add", ["rule_id", "merged_rule_ids", "source_file_ids"]),
+    ("merge", ["merged_rule_ids", "source_file_ids"]),
+    ("replace", ["merged_rule_ids"]),
+])
+def test_inactive_null_fields_are_equivalent_to_omission(action, fields):
+    minimal = operation_payload(action)
+    payload = {**minimal, **dict.fromkeys(fields)}
+    before = dict(payload)
+    operation = RuleDeltaOperation.model_validate(payload)
+    assert payload == before  # 不修改原始调用参数。
+    assert not set(fields) & operation.model_fields_set
+    assert operation.merged_rule_ids == []
+    assert operation.model_dump(exclude_unset=True) == minimal
+    # 嵌套工具参数再次校验仍保留字段是否实际传入的语义。
+    request = SubmitRuleDeltaInput(
+        operations=[operation], project_profile=None, return_view="changed",
+    )
+    assert request.model_dump(exclude_unset=True)["operations"] == [minimal]
+
+
+@pytest.mark.parametrize("action,overrides", [
+    ("add", {"rule_id": "rule-1"}),
+    ("add", {"merged_rule_ids": []}),
+    ("add", {"source_file_ids": []}),
+    ("add", {"source_file_ids": ["file-1"]}),
+    ("add", {"category": None}),
+    ("add", {"requirement": None}),
+    ("add", {"priority": None}),
+    ("add", {"verification": None}),
+    ("add", {"reason": None}),
+    ("add", {"unknown": None}),
+    ("add", {"action": []}),
+    ("merge", {"rule_id": None}),
+    ("merge", {"source_file_ids": []}),
+    ("merge", {"source_file_ids": ["file-1"]}),
+    ("merge", {"merged_rule_ids": ["rule-1"]}),
+    ("merge", {"reason": None}),
+    ("replace", {"merged_rule_ids": []}),
+    ("replace", {"source_file_ids": None}),
+    ("replace", {"source_file_ids": []}),
+    ("replace", {"source_file_ids": ["file-1", "file-1"]}),
+    ("replace", {"rule_id": None}),
+    ("replace", {"reason": None}),
+])
+def test_null_compatibility_does_not_relax_real_operation_constraints(action, overrides):
+    with pytest.raises(ValidationError):
+        RuleDeltaOperation.model_validate({**operation_payload(action), **overrides})
+
+
 def test_rule_has_exact_persisted_fields_and_view_has_no_provenance():
     source = RuleSourceFile(
         file_id="file-1", file_name="规范.md", source_path="目录/规范.md"

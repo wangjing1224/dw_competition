@@ -15,6 +15,7 @@
 | `rule_candidate_stage.md`、`rule_merge_stage.md` | 无；分别说明候选稿与正式合并工具策略 | `app/rules/context.py` |
 | `rule_extraction_input.md` | `${file_id}`、`${file_name}`、`${source_path}`、`${history_files}`、`${reading_scope}`、`${continuation}`、`${source_context}`、`${working_context}` | `app/rules/extractor.py` |
 | `rule_extraction_last_tool_round.md`、`rule_extraction_finalize.md` | `${current_step}`、`${max_steps}`、`${working_status}` | `app/agents/rule_agent.py` |
+| `rule_extraction_prepare_finish.md` | `${current_step}`、`${max_steps}`、`${remaining_tool_rounds}`；仅在尚未finish时提前提醒一次 | `app/agents/rule_agent.py` |
 | `evidence_ingestion.md` | `${current_material}`、`${history_view}`（启动快照） | `app/evidence/ingestion.py` |
 | `evidence_ingestion_input.md` | `${file_id}`、`${file_name}`、`${source_path}`、`${reading_scope}`、`${continuation}`、`${source_context}` | `app/evidence/ingestion.py` |
 | `evidence_ingestion_last_tool_round.md`、`evidence_ingestion_finalize.md` | `${current_step}`、`${max_steps}` | `app/agents/evidence_ingestion_agent.py` |
@@ -71,6 +72,7 @@
 ### 特殊模板的消息组织
 
 - `*_last_tool_round.md`：倒数第二轮追加的Human提醒，仍绑定工具；`*_finalize.md`：最后一轮Human提醒，不再绑定工具。
+- `rule_extraction_prepare_finish.md`：仅第 `max_steps - 5` 轮（当前12轮预算的第7轮）开始前仍在extract时追加一次Human提醒，`remaining_tool_rounds`含本轮。已finish、后续轮次均不补发，同轮压缩续跑沿用prepared_step去重；预算过小时不在首轮触发。不重发候选全稿、已有规则或错误清单，也不强制交接未完成的候选。
   规则/资料入库结束只回处理说明；主审核必须此前已通过工具保存报告；子审核结束直接回核验正文。
 - `context_compaction.md`：无工具的System提示。Human由代码拼接业务权威状态和原会话时序转录，输出交接文本，
   不改写规则/资料库；续跑的业务适配器负责读取最新状态、重新组织System与当前阅读范围。
@@ -87,7 +89,9 @@
 其余分别由规则入库、资料入库、主审核使用。入参Field说明与Schema在 `app/tools/`、`app/models/` 中维护，
 返回结果由工具实现渲染；只改YAML不会改变权限、参数个数、返回字段或读写行为。
 
-规则提取阶段不见旧库，用`rule_candidates(read/edit/finish)`维护一个当前文件稿；finish交接后下一轮才提供原`submit_rule_delta`，其原参数和保存行为不变。共用原8轮，压缩按当前阶段重建，不额外预留预算。
+规则提取阶段不见旧库，用`rule_candidates(read/edit/finish)`维护一个当前文件稿；finish交接后下一轮才提供`submit_rule_delta`。当前配置共用12轮（11个工具轮＋1个无工具收尾轮），切阶段和压缩均不重置，不增加阶段专用预算。除原末两轮提醒，仅在第7轮仍未finish时提前提醒一次，不为提醒追加业务全稿。提交仍用原三个参数及add/merge/replace语义，仅兼容按动作无业务含义的null字段；真实ID、来源和必填字段照常校验。
+候选稿与主审报告复用顺序精确替换及错误反馈；匹配失败整批不保存，候选编号可不连续。完整主题提取写在候选阶段System，旧规则条件比较、依赖更正及核验方式复查写在合并阶段System；工具描述只声明契约及错误语义，不添加完成协议或新工具。
+候选工具的`return_view`字段及edit正文回显分支暂注释停用，实际Schema只有action／edits。edit保留原保存、结构校验及阶段反馈，不返回变化正文；匹配失败、落盘异常和已保存但结构待修的具体信息不变。read仍返回全稿，finish仍返回全稿及已有规则；System说明按已成功保存的edits继续，不为补回显每次再read。正式`submit_rule_delta`的return_view和changed／all返回保持不变；以后恢复候选回显时，需同时恢复Schema、函数入参、返回分支和工具说明。
 
 新审核冻结`report_format_version=3`。主审专用适配给检索/看图/沙箱增加`rule_ids`，调用原公共工具前剥离；委派复用`checks[].rule_ids`。整轮非报告调用返回后只开放报告工具，后续write/edit落盘后检查关联块；read不解除，同轮写入不结清新返回。只检查当前稿，不要求本轮改过该块，也不强制来源非空；已填来源仍严查。核验状态和进度说明仅用于内部，未完成块允许不写业务结论，正式导出仍要求全部完成。旧版本不自动迁移。
 
