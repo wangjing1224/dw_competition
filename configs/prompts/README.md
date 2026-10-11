@@ -11,9 +11,10 @@
 
 | 模板 | 主要占位符 | Python 注入位置 |
 |---|---|---|
-| `rule_extraction.md` | `${rule_view}`（启动快照，会话内不覆盖） | `app/rules/extractor.py` |
-| `rule_extraction_input.md` | `${file_id}`、`${file_name}`、`${source_path}`、`${history_files}`、`${reading_scope}`、`${continuation}`、`${source_context}` | `app/rules/extractor.py` |
-| `rule_extraction_last_tool_round.md`、`rule_extraction_finalize.md` | `${current_step}`、`${max_steps}` | `app/agents/rule_agent.py` |
+| `rule_extraction.md` | `${stage_instructions}`（代码按当前阶段选择；共用准入规范） | `app/rules/context.py` |
+| `rule_candidate_stage.md`、`rule_merge_stage.md` | 无；分别说明候选稿与正式合并工具策略 | `app/rules/context.py` |
+| `rule_extraction_input.md` | `${file_id}`、`${file_name}`、`${source_path}`、`${history_files}`、`${reading_scope}`、`${continuation}`、`${source_context}`、`${working_context}` | `app/rules/extractor.py` |
+| `rule_extraction_last_tool_round.md`、`rule_extraction_finalize.md` | `${current_step}`、`${max_steps}`、`${working_status}` | `app/agents/rule_agent.py` |
 | `evidence_ingestion.md` | `${current_material}`、`${history_view}`（启动快照） | `app/evidence/ingestion.py` |
 | `evidence_ingestion_input.md` | `${file_id}`、`${file_name}`、`${source_path}`、`${reading_scope}`、`${continuation}`、`${source_context}` | `app/evidence/ingestion.py` |
 | `evidence_ingestion_last_tool_round.md`、`evidence_ingestion_finalize.md` | `${current_step}`、`${max_steps}` | `app/agents/evidence_ingestion_agent.py` |
@@ -24,6 +25,7 @@
 | `evidence_subagent.md` | 无动态变量，不绑定最终输出 Schema | `app/agents/evidence_subagent.py` |
 | `evidence_subagent_input.md` | `${verification_request}`、`${file_ids}`、`${relations}`、`${evidence_files}`、`${continuation}` | `app/agents/evidence_subagent.py` |
 | `bid_agent_last_tool_round.md`、`bid_agent_finalize.md` | `${current_step}`、`${max_steps}`、`${missing}` | `app/audit/session.py` |
+| `bid_agent_prepare_finish.md` | `${current_step}`、`${max_steps}`、`${missing}`；主审倒数第三轮提醒 | `app/audit/session.py` |
 | `evidence_subagent_last_tool_round.md`、`evidence_subagent_finalize.md` | `${current_step}`、`${max_steps}` | `app/audit/session.py` |
 | `context_compaction.md` | 无；System交接摘要约束 | `app/llm/context_compaction.py` |
 | `parser_image_transcription.md` | 无；System图表/图片转写要求 | `app/parsers/vision.py`，直接读取全文 |
@@ -40,6 +42,9 @@
 | 变量 | 类型、来源与用途 | 可空/缺省处理 |
 | --- | --- | --- |
 | `rule_view` | str，`app/rules/context.py` 的确定性Markdown渲染，包含规则ID、类别、要求、来源等；主审核不重复项目简介 | 空规则库仍有渲染出的结构提示，不省略变量 |
+| `stage_instructions` | str，候选或合并阶段的System片段 | 必填；工具权限由代码控制，不从正文推断阶段 |
+| `working_context` | str，当前候选稿和状态；仅merge附完整旧规则/reason | 当前文件单稿，下一文件不继承 |
+| `working_status` | str，阶段、候选结构及未解决保存错误，供原末两轮提醒 | 无错误显式写无，不含历史候选 |
 | `file_id` / `file_name` / `source_path` | str，当前解析文档的登记身份，系统生成ID，文件名/上传路径不是模型推断结果 | 有登记记录后才调用，不让模型补身份 |
 | `history_files` | str，规则侧已完成历史文件的ID/名称列表，不包括未来文件 | 无则“暂无已处理历史文件” |
 | `reading_scope` | str，代码按阅读游标构造批次/结构范围及是否还有后文；路由注明只看前部或全文 | 必填；不能把未读后文描述为已读 |
@@ -77,10 +82,18 @@
 
 ## 工具说明配置
 
-`tool_descriptions.yaml` 中七个字符串分别描述 `search_documents`、`view_image`、`submit_rule_delta`、
+`tool_descriptions.yaml` 中八个字符串分别描述 `rule_candidates`、`search_documents`、`view_image`、`submit_rule_delta`、
 `save_evidence_material`、`request_evidence_review`、`report_document`、`run_python`。通用检索/看图/沙箱由四类Agent复用，
 其余分别由规则入库、资料入库、主审核使用。入参Field说明与Schema在 `app/tools/`、`app/models/` 中维护，
 返回结果由工具实现渲染；只改YAML不会改变权限、参数个数、返回字段或读写行为。
+
+Task37：规则提取阶段不见旧库，用`rule_candidates(read/edit/finish)`维护一个当前文件稿；finish交接后下一轮才提供原`submit_rule_delta`，其原参数和保存行为不变。共用原8轮，压缩按当前阶段重建，不额外预留预算。
+
+新审核冻结`report_format_version=3`。主审专用适配给检索/看图/沙箱增加`rule_ids`，调用原公共工具前剥离；委派复用`checks[].rule_ids`。整轮非报告调用返回后只开放报告工具，后续write/edit落盘后检查关联块；read不解除，同轮写入不结清新返回。只检查当前稿，不要求本轮改过该块，也不强制来源非空；已填来源仍严查。核验状态和进度说明仅用于内部，未完成块允许不写业务结论，正式导出仍要求全部完成。旧版本不自动迁移。
+
+主审仅在倒数第三轮增加一次收尾提醒，原末两轮提醒保留，不加轮。子审、资料入库不注入主审关联字段或保存门禁。
+
+`search_documents`提供querylist/chunklist二选一。邻接组含chunk_id、before、after、file_id，按冻结有序索引返回完整中心及邻居，不经Rerank；边界随片段标记为当前索引开头/末尾。两模式共用权限及文件/片段读取登记，不将模型填写来源变成读取登记条件。
 
 Task34：`checks[].rule_ids` 关联一项事实涉及的全部规则；同一项非空去重并校验冻结规则，项间可以重用同一规则。
 这些ID只用于代码关联、记录及返回标题，不注入子Agent Human，主审仍须在 `verification_request` 提供实际标准。

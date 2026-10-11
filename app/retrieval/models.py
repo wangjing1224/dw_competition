@@ -94,7 +94,7 @@ class RecallItem(StrictModel):
 
 class SearchResult(StrictModel):
     chunk_id: str
-    score: float
+    score: float | None = None  # 邻接读取不经过排序，没有检索分数。
     source: SourceRef
     content: str
     project_id: str | None = None

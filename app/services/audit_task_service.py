@@ -61,7 +61,7 @@ class AuditTaskContext(StrictModel):
     file_order: list[str] = Field(default_factory=list)
     file_errors: dict[str, str] = Field(default_factory=dict)
     report_template: str
-    report_format_version: Literal[1, 2] = 1
+    report_format_version: Literal[1, 2, 3] = 1
     report_context: ReportContext | None = None
     index_scope_overrides: dict[str, str] = Field(default_factory=dict)
 
@@ -169,7 +169,7 @@ class AuditTaskService:
                 parsed_documents=parsed,
                 file_order=[record.file_id for record in records],
                 report_template=load_prompt("audit_report_template"),
-                report_format_version=2,
+                report_format_version=3,
                 report_context=ReportContext(),
             )
             self._save_context(context)

@@ -191,9 +191,30 @@ class RuleExtractionProgress(StrictModel):
     compaction_calls: int = Field(default=0, ge=0)
     compaction_records: list[dict] = Field(default_factory=list)
     last_budget: dict = Field(default_factory=dict)
+    candidate_draft: str = ""
+    phase: Literal["extract", "merge"] = "extract"
     rule_set: RuleSet
     commits: list[RuleCommitRecord] = Field(default_factory=list)
     error: str | None = None
+
+
+class CandidateEdit(StrictModel):
+    old_text: str = Field(min_length=1, description="当前候选稿中唯一匹配的原文，按列表顺序替换。")
+    new_text: str = Field(description="替换文本；空字符串表示删除。")
+
+
+class RuleCandidatesInput(StrictModel):
+    action: Literal["read", "edit", "finish"] = Field(description="read查看；edit保存；finish校验并交接合并。")
+    edits: list[CandidateEdit] | None = Field(default=None, description="仅edit填写非空列表；read/finish省略或null。")
+    return_view: Literal["changed", "all"] = Field(default="changed", description="edit返回变化文本或全稿；read/finish始终返回全稿。")
+
+    @model_validator(mode="after")
+    def validate_action(self):
+        if (self.action == "edit" and not self.edits) or (
+            self.action != "edit" and self.edits is not None
+        ):
+            raise ValueError("edit须传非空edits；read/finish的edits须省略或null")
+        return self
 
 
 def present_rule_for_model(rule: RuleItem) -> RuleModelView:

@@ -1,6 +1,7 @@
 """审核主子会话共享调用前预算/轮次控制；业务权限和报告留在调用方。"""
 
 from typing import TypedDict
+from time import perf_counter
 
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
@@ -35,6 +36,7 @@ class SessionState(TypedDict):
     messages: list[BaseMessage]
     model_calls: int
     prepared_step: int | None
+    bound_tools: list[str]
 
 
 def make_controller(settings):
@@ -49,16 +51,19 @@ def make_controller(settings):
     )
 
 
-def prepare_request(state, *, tools, max_steps, settings, role, missing=""):
+def prepare_request(state, *, tools, max_steps, settings, role, missing="", policy=None):
     step = state["model_calls"] + 1
     if step > max_steps:
         raise RuntimeError("模型调用超过当前会话轮次上限")
     messages = list(state["messages"])
-    if state.get("prepared_step") != step and step >= max_steps - 1:
+    if policy:
+        tools = policy.select_tools(tools)
+    early_notice = role == "bid_agent" and step == max_steps - 2
+    if state.get("prepared_step") != step and (step >= max_steps - 1 or early_notice):
         messages.append(
             HumanMessage(
                 content=render_prompt(
-                    f"{role}_{'finalize' if step == max_steps else 'last_tool_round'}",
+                    f"{role}_{'prepare_finish' if early_notice else 'finalize' if step == max_steps else 'last_tool_round'}",
                     current_step=step,
                     max_steps=max_steps,
                     missing=missing or "无",
@@ -87,6 +92,7 @@ async def audit_agent_node(
     report=None,
     stats=None,
     events=None,
+    policy=None,
 ):
     context = prepare_request(
         state,
@@ -95,6 +101,7 @@ async def audit_agent_node(
         settings=controller.settings,
         role=role,
         missing="、".join(report.missing()) if report else "",
+        policy=policy,
     )
     decision = controller.check(context)
     if decision.status == "blocked":
@@ -108,18 +115,22 @@ async def audit_agent_node(
             context,
             decision,
         )
-    active_tools = tools if step < max_steps else []
+    active_tools = (policy.select_tools(tools) if policy else tools) if step < max_steps else []
     if events:
         events(step, step == max_steps)
     # 名额只覆盖真实模型请求，等待工具或子会话时不占用。
+    waiting = perf_counter()
     async with limiter:
+        waited = round((perf_counter() - waiting) * 1000, 3)
+        if stats is not None:
+            stats["model_slot_wait_ms"] = stats.get("model_slot_wait_ms", 0) + waited
         response = await invoke_agent_model(
             model.bind_tools(active_tools) if active_tools else model,
             list(context.messages),
             active_tools,
             trace_context,
             trace_name=role,
-            diagnostic_context={**budget_diagnostics(controller), "turn_index": step},
+            diagnostic_context={**budget_diagnostics(controller), "turn_index": step, "model_slot_wait_ms": waited},
             **budgeted_generation_options(
                 controller.settings, controller.output_tokens(context)
             ),
@@ -137,6 +148,7 @@ async def audit_agent_node(
         "messages": [*context.messages, response],
         "model_calls": step,
         "prepared_step": None,
+        "bound_tools": [tool.name for tool in active_tools],
     }
 
 
@@ -152,6 +164,7 @@ def build_session_graph(
     report=None,
     stats=None,
     events=None,
+    policy=None,
 ):
     from functools import partial
 
@@ -162,11 +175,15 @@ def build_session_graph(
         messages = list(state["messages"])
         if state["model_calls"] >= max_steps:
             raise RuntimeError("模型在无工具末轮仍发出 tool_calls")
+        if policy:
+            policy.begin_batch(state["model_calls"])
         for call in pending_tool_calls(messages[-1]):
             try:
                 check_tool_arguments(call)
                 if call["name"] not in by_name:
                     raise ValueError("未知工具，请使用当前绑定的工具名称")
+                if call["name"] not in state.get("bound_tools", []):
+                    raise ValueError("本轮未授权此工具；请先使用报告工具保存关联规则进度")
                 result = await invoke_agent_tool(
                     by_name[call["name"]], call, trace_context
                 )
@@ -196,6 +213,8 @@ def build_session_graph(
             if not isinstance(result, ToolMessage) or result.tool_call_id != call["id"]:
                 raise RuntimeError("工具未返回对应 tool_call_id")
             messages.append(result)
+        if policy:
+            policy.after_batch()
         return {"messages": messages}
 
     async def execute(state):
@@ -218,6 +237,7 @@ def build_session_graph(
             report=report,
             stats=stats,
             events=events,
+            policy=policy,
         ),
     )
     graph.add_node("tools", execute)
@@ -244,6 +264,7 @@ async def run_session(
     report=None,
     stats=None,
     events=None,
+    policy=None,
 ):
     controller = make_controller(settings)
     graph = build_session_graph(
@@ -257,6 +278,7 @@ async def run_session(
         report=report,
         stats=stats,
         events=events,
+        policy=policy,
     )
     state = {"messages": build_messages(""), "model_calls": 0, "prepared_step": None}
     compacted_steps = set()
@@ -271,6 +293,8 @@ async def run_session(
                 raise RuntimeError("模型未正常结束")
             if not isinstance(response.content, str) or not response.content.strip():
                 raise RuntimeError("模型未返回非空处理结果")
+            if policy:
+                policy.check_exit()
             return response.content.strip()
         except NeedsCompaction as signal:
             step = signal.state["model_calls"] + 1
@@ -314,6 +338,7 @@ async def run_session(
                 settings=settings,
                 role=role,
                 missing="、".join(report.missing()) if report else "",
+                policy=policy,
             )
             checked = controller.check(rebuilt)
             if stats is not None:

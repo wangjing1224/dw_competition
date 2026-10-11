@@ -17,6 +17,7 @@ from app.services.bidder_service import BidderService
 from app.services.project_service import ProjectService
 from app.storage.database import initialize_database
 from app.storage.file_store import FileOwner, FileStore
+from tests.helpers.audit import candidate_response
 
 
 class FakeEmbedding:
@@ -58,8 +59,10 @@ async def test_project_and_bidder_preprocessing_reach_ready(
 
         async def ainvoke(self, messages, **kwargs):
             assert kwargs["max_tokens"] > 0
-            if any(getattr(message, "type", "") == "tool" for message in messages):
+            if any(message.type == "tool" and message.name == "submit_rule_delta" for message in messages):
                 return AIMessage(content="处理完毕")
+            if not any(message.type == "tool" for message in messages):
+                return candidate_response("探测器分辨率不低于640x480")
             return AIMessage(
                 content="",
                 tool_calls=[

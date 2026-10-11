@@ -10,7 +10,7 @@ from langsmith.utils import tracing_is_enabled
 
 from app.agents.bid_agent import build_bid_agent_messages
 from app.audit.concurrency import model_limiter
-from app.audit.context import scope_for, verify_indexes
+from app.audit.context import evidence_view, scope_for, verify_indexes
 from app.audit.session import (
     build_session_graph,
     make_controller,
@@ -21,6 +21,7 @@ from app.audit.sources import SourceLedger
 from app.graph.state_updates import file_result_from_report
 from app.llm.context_compaction import InputBudgetError
 from app.llm.input_budget import plan_document_input
+from app.llm.model_diagnostics import fingerprint
 from app.models.results import AuditResult
 from app.models.rules import RuleReportItem, present_rule_for_model
 from app.parsers.assets import atomic_write
@@ -29,7 +30,7 @@ from app.reports.markdown_report import ReportDocument
 from app.retrieval.service import RetrievalService
 from app.tools.bid_tools import build_evidence_review_tool
 from app.tools.common_tools import CommonTool
-from app.tools.report_tools import report_tool
+from app.tools.report_tools import ReportSavePolicy, report_tool
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,10 @@ class LangGraphAuditExecutor:
             "task_id": context.task_id,
             "file_id": document.file_id,
             "thread_id": f"{context.task_id}-{document.file_id}-{uuid4().hex}",
+            "rule_set_sha256": fingerprint(context.rule_set),
+            "evidence_library_sha256": fingerprint(context.evidence_library),
+            "parsed_snapshot_sha256": fingerprint({key: p.model_dump(mode="json") for key, p in context.parsed_documents.items()}),
+            "source_sha256": parsed.source_sha256,
         }
 
         def event(actor):
@@ -178,6 +183,7 @@ class LangGraphAuditExecutor:
         )
         controller = make_controller(self.settings.bid_chat_model)
         cursor, batch_number = 0, 0
+        policy = None
 
         def checkpoint(error=None):
             import json
@@ -194,11 +200,22 @@ class LangGraphAuditExecutor:
                     for key, value in ledger.sources.items()
                 },
                 "evidence_reviews": records,
+                "pending_report_saves": policy.pending if policy else [],
+                "report_format_version": context.report_format_version,
             }
             atomic_write(
                 directory / "drafts" / f"{document.file_id}.state.json",
                 json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8"),
             )
+
+        if context.report_format_version == 3:
+            def preflight(name, arguments):
+                if name == "request_evidence_review":
+                    for check in arguments["checks"]:
+                        evidence_view(context.evidence_library, check.file_ids)
+
+            policy = ReportSavePolicy(report, checkpoint, preflight=preflight)
+            tools = policy.adapt_tools(tools)
 
         try:
             while cursor < len(units):
@@ -218,6 +235,7 @@ class LangGraphAuditExecutor:
                         settings=self.settings.bid_chat_model,
                         role="bid_agent",
                         missing="、".join(report.missing()),
+                        policy=policy,
                     )
 
                 batch = plan_document_input(
@@ -253,6 +271,7 @@ class LangGraphAuditExecutor:
                     report=report,
                     stats=stats,
                     events=event("main_agent"),
+                    policy=policy,
                 )
                 # 会话已校验正常收尾；不用固定结束语判成功，写入和完整性仍检查真实报告。
                 report.check_draft()

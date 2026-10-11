@@ -125,7 +125,63 @@ def fields(body, allowed, required):
     return values
 
 
-def parse_v2(text, rule_set, ledger, *, final=False, report_context=None):
+def rule_fields(body, key, ledger, *, progress=False):
+    """单块校验供草稿门禁复用；没有来源行合法，有值则严格校验。"""
+    business = ["结论", "实际发现", "审核说明"]
+    internal = ["核验状态", "进度说明"] if progress else []
+    try:
+        values = fields(body, [*internal, *business, "复核建议", *SOURCE_FIELDS], internal or business)
+        if PENDING in body or "〈" in body or "```" in body:
+            raise ValueError("已填写规则块仍有模板占位或代码围栏")
+        if progress:
+            if values["核验状态"] not in {"未完成", "已完成"}:
+                raise ValueError("核验状态只能是未完成或已完成")
+            complete = values["核验状态"] == "已完成"
+            if complete and list(values)[2:5] != business:
+                raise ValueError("已完成块须按顺序填写结论、实际发现、审核说明")
+        else:
+            complete = True
+        if "结论" in values and values["结论"] not in RESULTS:
+            raise ValueError("结论非法：当前仅支持符合、不符合、人工复核，请根据已有事实修正")
+        data = {"reason": values.get("审核说明"), "observation": values.get("实际发现"), "recommendation": values.get("复核建议")}
+        for label, (field, role) in SOURCE_FIELDS.items():
+            if label not in values:
+                continue
+            keys = values[label].split("、")
+            if len(set(keys)) != len(keys) or any(not k or k.strip() != k or "\n" in k for k in keys):
+                raise ValueError("来源须为非空单行，不能重复或带空白")
+            for source in keys:
+                if (field == "image_paths") != ("/" in source):
+                    raise ValueError("图片路径与片段 ID 类型不符")
+                try:
+                    ledger.validate(source, role)
+                except ValueError as exc:
+                    raise ValueError(f"{key}的{label}：{exc}") from exc
+            data[field] = keys
+        return values, data, complete
+    except ValueError as exc:
+        raise ValueError(f"{key}：{exc}") from exc
+
+
+def draft_rule_states(text, rule_set, ledger):
+    """只检查各关联块，不要求报告其它部分先完成，也不比较写前写后。"""
+    try:
+        _, sections = report_structure(text, rule_set)
+    except ValueError as exc:
+        return {rule.rule_id: (None, str(exc)) for rule in rule_set.rules}
+    bodies = dict(sections)
+    result = {}
+    for rule in rule_set.rules:
+        try:
+            values, _, _ = rule_fields(bodies[f"### {rule.rule_id}"], rule.rule_id, ledger, progress=True)
+            result[rule.rule_id] = (values["核验状态"], None)
+        except ValueError as exc:
+            result[rule.rule_id] = (None, str(exc))
+    return result
+
+
+def report_structure(text, rule_set):
+    """只校验固定骨架及规则身份；其它块尚未填写不阻止局部进度检查。"""
     text, _ = restore_category_headings(text, rule_set)
     headings = list(re.finditer(r"^#{1,6} .+$", text, re.MULTILINE))
     headers = [m[0] for m in headings]
@@ -166,6 +222,11 @@ def parse_v2(text, rule_set, ledger, *, final=False, report_context=None):
         )
         for i, m in enumerate(headings)
     ]
+    return headers, sections
+
+
+def parse_v2(text, rule_set, ledger, *, final=False, report_context=None, progress=False):
+    headers, sections = report_structure(text, rule_set)
     missing = []
 
     def content(body, label):
@@ -228,39 +289,10 @@ def parse_v2(text, rule_set, ledger, *, final=False, report_context=None):
             position += 1
             if not body:
                 continue
-            try:
-                values = fields(
-                    body,
-                    ["结论", "实际发现", "审核说明", "复核建议", *SOURCE_FIELDS],
-                    ["结论", "实际发现", "审核说明"],
-                )
-            except ValueError as exc:
-                raise ValueError(f"{key}：{exc}") from exc
-            if values["结论"] not in RESULTS:
-                raise ValueError(
-                    f"{key}结论非法：当前仅支持符合、不符合、人工复核，请根据已有事实修正"
-                )
-            data = {
-                "reason": values["审核说明"],
-                "observation": values["实际发现"],
-                "recommendation": values.get("复核建议"),
-            }
-            for label, (field, role) in SOURCE_FIELDS.items():
-                if label not in values:
-                    continue
-                keys = values[label].split("、")
-                if len(set(keys)) != len(keys) or any(
-                    not k or k.strip() != k or "\n" in k for k in keys
-                ):
-                    raise ValueError("来源须为非空单行，不能重复或带空白")
-                for source in keys:
-                    if (field == "image_paths") != ("/" in source):
-                        raise ValueError("图片路径与片段 ID 类型不符")
-                    try:
-                        ledger.validate(source, role)
-                    except ValueError as exc:
-                        raise ValueError(f"{key}的{label}：{exc}") from exc
-                data[field] = keys
+            values, data, complete = rule_fields(body, key, ledger, progress=progress)
+            if not complete:
+                missing.append(key)
+                continue
             rule = RuleAuditDecision(
                 rule_id=key, result=RESULTS[values["结论"]], summary=data
             )

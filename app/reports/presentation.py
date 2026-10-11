@@ -43,7 +43,7 @@ def heading_anchor(title):
 
 
 def report_markdown(result: AuditResult, file_result) -> str:
-    if file_result.report_format_version != 2:
+    if file_result.report_format_version not in (2, 3):
         raise ValueError("旧版结果不自动转换为新版报告")
     parts = [f"# {literal(file_result.display_title)}", "## 一、审核概况"]
     context = file_result.report_context
@@ -199,5 +199,5 @@ def write_formal_markdown(result, file_result, store):
 
 def write_formal_reports(result, store):
     for file_result in result.file_results:
-        if file_result.report_format_version == 2:
+        if file_result.report_format_version in (2, 3):
             write_formal_markdown(result, file_result, store)

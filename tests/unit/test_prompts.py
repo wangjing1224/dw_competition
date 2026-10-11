@@ -64,7 +64,7 @@ def test_evidence_tool_contract_and_parameter_schema_are_separate_from_strategy(
 def test_rule_system_and_input_are_separate():
     system = render_prompt(
         "rule_extraction",
-        rule_view="当前暂无规则",
+        stage_instructions=load_prompt("rule_candidate_stage"),
     )
     human = render_prompt(
         "rule_extraction_input",
@@ -75,8 +75,9 @@ def test_rule_system_and_input_are_separate():
         reading_scope="第 1 批；还有后续内容：否",
         continuation="这是当前文件的首批内容。",
         source_context="技术要求：像素不低于640x480",
+        working_context="候选草稿",
     )
-    assert "当前暂无规则" in system
+    assert "提取候选" in system and "当前暂无规则" not in system
     assert "640x480" not in system
     assert "640x480" in human
     assert "file-1" in human
@@ -272,9 +273,9 @@ def test_summary_policy_and_sandbox_protocol_are_separate():
 
 
 def test_ingestion_preserves_formula_roles_and_operation_semantics():
-    rule = render_prompt("rule_extraction", rule_view="规则")
+    rule = render_prompt("rule_extraction", stage_instructions=load_prompt("rule_merge_stage"))
     material = render_prompt("evidence_ingestion", current_material="无", history_view="历史")
-    assert "全部必要条件" in rule and "文件顺序本身不决定效力" in rule
+    assert "全部必要条件" in rule and "文件处理顺序本身不决定效力" in rule
     assert "互斥条件" in rule
     assert "不能决定有争议原文的效力或自行修改招标门槛" in rule
     assert "不用某个例子算出的数字替代适用公式" in rule
@@ -287,8 +288,8 @@ def test_ingestion_preserves_formula_roles_and_operation_semantics():
     ("bid_agent", {"rule_view": "规则", "report_markdown_contract": "模板"},
      ["search_documents", "view_image", "request_evidence_review", "report_document", "run_python"]),
     ("evidence_subagent", {}, ["search_documents", "view_image", "run_python"]),
-    ("rule_extraction", {"rule_view": "规则"},
-     ["search_documents", "view_image", "submit_rule_delta", "run_python"]),
+    ("rule_extraction", {"stage_instructions": load_prompt("rule_merge_stage")},
+     ["search_documents", "view_image", "run_python", "submit_rule_delta"]),
     ("evidence_ingestion", {"current_material": "当前", "history_view": "历史"},
      ["search_documents", "view_image", "save_evidence_material", "run_python"]),
 ])
@@ -320,7 +321,7 @@ def test_task35_strategy_scope_facts_and_templates():
     assert "完整来源键紧邻该事实" in child
     assert "混合依据分别标明" in child
     assert "主审交接事实保留交接身份" in child
-    rule = render_prompt("rule_extraction", rule_view="规则")
+    rule = render_prompt("rule_extraction", stage_instructions=load_prompt("rule_merge_stage"))
     assert "不承担独立评分" in rule and "不因位于评分章节一并排除" in rule
     assert "表格、清单、附件" in rule and "条件本身已明确而对象绑定尚未确认" in rule
     evidence = render_prompt("evidence_ingestion", current_material="无", history_view="历史")
@@ -398,7 +399,7 @@ def test_every_documented_call_uses_the_exposed_tool_schema(
 
 
 @pytest.mark.parametrize("name,variables,headings", [
-    ("rule_extraction", {"rule_view"}, ["准入与粒度", "分类和等级", "工具使用规范", "依据与项目简介", "阅读与结束"]),
+    ("rule_extraction", {"stage_instructions"}, ["准入与粒度", "分类和等级", "工具使用规范", "依据与项目简介", "阅读与结束"]),
     ("bid_agent", {"rule_view", "report_markdown_contract"}, [
         "职责与边界", "工具使用规范", "事实采用与核验边界", "负面理由与适用性",
         "资料核验交接", "依据与来源保存", "成果与收尾", "本次完整规则（业务数据）",
@@ -421,16 +422,16 @@ def test_task36_keeps_template_variables_and_section_structure(name, variables, 
 
 
 def test_task36_rule_coverage_replaces_general_guidance_without_changing_admission():
-    prompt = render_prompt("rule_extraction", rule_view="规则")
+    prompt = render_prompt("rule_extraction", stage_instructions=load_prompt("rule_merge_stage"))
     assert "覆盖以已保存requirement中的实际条件为准" in prompt
     assert "项目简介或reason提过" in prompt
     assert "例外与触发条件属于规则的一部分" in prompt
-    assert "仅简介变化且无未保存的有效要求时可只更新简介" in prompt
+    assert "没有其他增量时无需空写" in prompt
     assert "背景、纯评分或范围外事项按准入边界处理" in prompt
     assert "已确认无变化的主题沿用，不每轮重新扫描全库" in prompt
     assert "不按每个单元格机械拆分" in prompt
-    assert "应replace为更正后的适用条款" in prompt
-    assert "效力未知的冲突说明双方依据" in prompt
+    assert "应replace为更正后的完整条款" in prompt
+    assert "效力未知的冲突保留双方依据" in prompt
     assert "提取可由投标内容或证明材料核验的独立要求，保留适用对象" not in prompt
 
 
@@ -491,7 +492,7 @@ def test_complete_report_examples_use_existing_parser_and_real_source_keys(examp
     block = examples[example_index].replace("〈本项真实rule_id〉", "rule-1")
     block = block.replace("〈随上述事实返回的完整真实chunk_id〉", key)
     text = filled_report(context.rule_set, version=2).split("### rule-1", 1)[0] + block
-    decision, missing = parse_report(text, context.rule_set, ledger, version=2, final=True)
+    decision, missing = parse_report(text, context.rule_set, ledger, version=3, final=True)
     assert not missing
     rule = decision.categories[0].rules[0]
     assert rule.result == ["non_compliant", "compliant"][example_index]
@@ -499,6 +500,6 @@ def test_complete_report_examples_use_existing_parser_and_real_source_keys(examp
     if example_index == 0:
         for invalid in (text.replace(key, "unknown-chunk"), text.replace("资料片段：", "投标片段：")):
             with pytest.raises(ValueError, match="未实际读取、类型不符或越权"):
-                parse_report(invalid, context.rule_set, ledger, version=2, final=True)
+                parse_report(invalid, context.rule_set, ledger, version=3, final=True)
     else:
         assert not ledger.sources and "摘要记载" in rule.summary.observation

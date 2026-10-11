@@ -28,6 +28,31 @@ class RetrievalService:
         self.settings = settings or get_settings()
         self.indexes = indexes
 
+    def _index(self, scope_id):
+        if self.indexes is not None:
+            return self.indexes[scope_id]
+        return load_index(
+            scope_id,
+            expected_fingerprint=embedding_config_fingerprint(
+                self.settings.embedding_model
+            ),
+        )
+
+    def file_chunks(self, query_filter: IndexFilter, *, file_id: str, parse_version: str):
+        """读取授权冻结文件的有序索引，不调用Embedding／Rerank。"""
+        if query_filter.file_ids and file_id not in query_filter.file_ids:
+            raise ValueError("文件不在指定索引读取范围")
+        index = self._index(query_filter.scope_id)
+        selected = query_filter.model_copy(update={"file_ids": [file_id]})
+        chunks = [index.chunks[i] for i in filter_chunk_indices(index.chunks, selected)]
+        if not chunks:
+            raise ValueError("当前授权文件没有可读取的索引片段")
+        if not parse_version or any(c.parse_version != parse_version for c in chunks):
+            raise ValueError("索引解析版本与会话不一致，需要重建索引")
+        if len({c.chunk_id for c in chunks}) != len(chunks):
+            raise ValueError("索引片段ID重复，无法准确定位")
+        return chunks
+
     async def search(
         self,
         query: str,
@@ -36,15 +61,7 @@ class RetrievalService:
         candidate_top_k: int | None = None,
         final_top_k: int | None = None,
     ) -> list[SearchResult]:
-        if self.indexes is not None:
-            index = self.indexes[query_filter.scope_id]
-        else:
-            index = load_index(
-                query_filter.scope_id,
-                expected_fingerprint=embedding_config_fingerprint(
-                    self.settings.embedding_model
-                ),
-            )
+        index = self._index(query_filter.scope_id)
         allowed = filter_chunk_indices(index.chunks, query_filter)
         if not allowed:
             return []

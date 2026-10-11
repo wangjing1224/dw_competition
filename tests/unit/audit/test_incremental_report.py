@@ -236,7 +236,7 @@ async def test_query_only_rounds_keep_history_and_only_existing_final_reminders(
     assert len(model.calls) == 8 and len(model.bindings) == 7
     for step, (messages, _) in enumerate(model.calls, 1):
         humans = [m for m in messages if m.type == "human"]
-        assert len(humans) == 1 + (step >= 7) + (step == 8)
+        assert len(humans) == 1 + (step >= 6) + (step >= 7) + (step == 8)
         assert [m.tool_call_id for m in messages if m.type == "tool"] == [
             f"query-{i}" for i in range(1, step)
         ]

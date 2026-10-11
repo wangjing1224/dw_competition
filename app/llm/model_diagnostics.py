@@ -1,6 +1,62 @@
 """通用模型调用只读诊断；业务方仅提供身份和预算，不输出正文或推理内容。"""
 
+import hashlib
 import json
+import subprocess
+from functools import lru_cache
+
+
+def fingerprint(value):
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json")
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+@lru_cache(maxsize=1)
+def code_snapshot():
+    """首个诊断请求时记录代码起点；只读，不扫描环境变量或凭据。"""
+    from app.core.config import PROJECT_ROOT
+
+    try:
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, capture_output=True,
+            text=True, timeout=2, check=True,
+        ).stdout.strip()
+        hashes = {
+            str(path.relative_to(PROJECT_ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted((PROJECT_ROOT / "app").rglob("*.py"))
+        }
+        return {"git_commit": revision, "app_source_sha256": fingerprint(hashes)}
+    except (OSError, subprocess.SubprocessError):
+        return {"git_commit": None, "app_source_sha256": None}
+
+
+def runtime_fingerprints(messages, tools):
+    """散列失败只记错误类型，不能由只读诊断阻断业务请求或暴露正文。"""
+    try:
+        return {
+            "code_at_first_call": code_snapshot(),
+            "messages": [
+                {
+                    "role": message.get("role", message.get("type"))
+                    if isinstance(message, dict) else message.type,
+                    "sha256": fingerprint(message),
+                }
+                for message in messages
+            ],
+            "tools": {
+                tool.name: {
+                    "description_sha256": fingerprint(tool.description),
+                    "schema_sha256": fingerprint(tool.tool_call_schema.model_json_schema()),
+                }
+                for tool in tools
+            },
+        }
+    except Exception as exc:
+        return {"error_type": type(exc).__name__}
 
 
 def budget_diagnostics(controller):
@@ -12,6 +68,9 @@ def budget_diagnostics(controller):
         "model_name": settings.model,
         "platform": settings.platform,
         "thinking_enabled": settings.enable_thinking,
+        "temperature": settings.temperature,
+        "max_retries": settings.max_retries,
+        "timeout_seconds": settings.timeout_seconds,
         "estimated_input_tokens": estimate.total if estimate else None,
         "estimate_method": estimate.method if estimate else None,
         "context_window_tokens": settings.context_window_tokens,
@@ -36,6 +95,15 @@ def request_diagnostics(messages, tools, call_options, metadata):
         "model_name",
         "platform",
         "thinking_enabled",
+        "temperature",
+        "max_retries",
+        "timeout_seconds",
+        "model_slot_wait_ms",
+        "rule_set_sha256",
+        "evidence_library_sha256",
+        "parsed_snapshot_sha256",
+        "source_sha256",
+        "phase",
         "estimated_input_tokens",
         "estimate_method",
         "context_window_tokens",
@@ -56,6 +124,8 @@ def request_diagnostics(messages, tools, call_options, metadata):
         },
         "tools_enabled": bool(tools),
         "tool_names": [tool.name for tool in tools],
+        # 对实际发送对象散列，不把磁盘上可能尚未加载的新提示词冒充生效值。
+        "runtime_fingerprints": runtime_fingerprints(messages, tools),
     }
 
 

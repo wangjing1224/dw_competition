@@ -48,7 +48,7 @@ class FileAuditResult(StrictModel):
     file: DocumentRef
     # 从模型成功保存的 Markdown 一级标题提取；旧结果可没有此字段。
     report_title: str | None = Field(default=None, min_length=1)
-    report_format_version: Literal[1, 2] = 1
+    report_format_version: Literal[1, 2, 3] = 1
     report_context: ReportContext | None = None
     highlights: list[ReportHighlight] = Field(default_factory=list)
     is_applicable: bool
@@ -75,7 +75,7 @@ class FileAuditResult(StrictModel):
     @model_validator(mode="after")
     def validate_applicability(self) -> "FileAuditResult":
         if (
-            self.report_format_version == 2
+            self.report_format_version in (2, 3)
             and self.is_applicable
             and any(
                 not (f.observation or "").strip() or not f.summary.strip()

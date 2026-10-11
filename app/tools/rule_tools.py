@@ -7,17 +7,22 @@ from typing import Annotated
 from langchain_core.tools import InjectedToolCallId, StructuredTool
 
 from app.models.documents import ParsedDocument
-from app.models.rules import RuleCommitRecord, RuleSet, SubmitRuleDeltaInput
+from app.models.rules import RuleCandidatesInput, RuleCommitRecord, RuleSet, SubmitRuleDeltaInput
 from app.prompts.loader import load_tool_description
 from app.retrieval.models import IndexFilter
 from app.retrieval.service import RetrievalService
-from app.rules.context import build_rule_view
+from app.rules.context import CANDIDATE_TEMPLATE, build_rule_view, candidate_status, rule_working_context, validate_candidates
 from app.rules.merger import apply_rule_delta_operations
 from app.rules.policies import handle_rule_limit_exceeded
 
 
 class SubmitRuleToolInput(SubmitRuleDeltaInput):
     tool_call_id: Annotated[str, InjectedToolCallId]
+
+
+def active_rule_tools(tools, phase):
+    hidden = "submit_rule_delta" if phase == "extract" else "rule_candidates"
+    return [tool for tool in tools if tool.name != hidden]
 
 
 @dataclass
@@ -44,6 +49,50 @@ class RuleSession:
     compaction_calls: int = 0
     compaction_records: list[dict] = field(default_factory=list)
     last_budget: dict = field(default_factory=dict)
+    candidate_draft: str = CANDIDATE_TEMPLATE
+    phase: str = "extract"
+    candidate_error: str | None = None
+    merge_tool_round_seen: bool = False
+
+    async def save_candidates(self, draft, phase):
+        previous = self.candidate_draft, self.phase
+        self.candidate_draft, self.phase = draft, phase
+        try:
+            await self.persist(self.rule_set, self.commits)
+        except BaseException:
+            self.candidate_draft, self.phase = previous
+            raise
+
+    async def candidates(self, action, edits=None, return_view="changed"):
+        if self.phase != "extract":
+            raise ValueError("候选工具仅在提取阶段可用")
+        if action == "read":
+            return candidate_status(self) + "\n\n" + self.candidate_draft
+        if action == "finish":
+            if self.candidate_error:
+                raise ValueError("存在未解决候选编辑错误：" + self.candidate_error)
+            validate_candidates(self.candidate_draft)
+            await self.save_candidates(self.candidate_draft, "merge")
+            return "提取已交接；下轮提供合并工具。\n" + rule_working_context(self)
+        candidate = self.candidate_draft
+        try:
+            for index, edit in enumerate(edits or []):
+                count = candidate.count(edit.old_text)
+                if count != 1:
+                    raise ValueError(f"edits[{index}].old_text匹配{count}处，须唯一；本批未保存，请核对当前稿")
+                candidate = candidate.replace(edit.old_text, edit.new_text, 1)
+            old_error = self.candidate_error
+            self.candidate_error = None
+            try:
+                await self.save_candidates(candidate, "extract")
+            except BaseException:
+                self.candidate_error = old_error
+                raise
+        except Exception as exc:
+            self.candidate_error = str(exc)
+            raise
+        view = candidate if return_view == "all" else "\n\n".join(edit.new_text or "（删除）" for edit in edits or [])
+        return "候选稿已保存，尚未交接。\n" + candidate_status(self) + "\n\n" + view
 
     async def submit(self, request: SubmitRuleDeltaInput, call_id: str) -> str:
         if request.return_view is None:
@@ -109,6 +158,9 @@ class RuleSession:
 
 
 def build_rule_tools(session: RuleSession) -> list[StructuredTool]:
+    async def rule_candidates(action, edits=None, return_view="changed"):
+        return await session.candidates(action, edits, return_view)
+
     async def submit_rule_delta(
         operations,
         project_profile,
@@ -144,6 +196,12 @@ def build_rule_tools(session: RuleSession) -> list[StructuredTool]:
     ).search_tool()
     return [
         search,
+        StructuredTool.from_function(
+            coroutine=rule_candidates,
+            name="rule_candidates",
+            args_schema=RuleCandidatesInput,
+            description=load_tool_description("rule_candidates"),
+        ),
         StructuredTool.from_function(
             coroutine=submit_rule_delta,
             name="submit_rule_delta",

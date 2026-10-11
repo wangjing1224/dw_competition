@@ -126,6 +126,18 @@ class ScriptModel:
 
 @pytest.fixture
 def env(monkeypatch, temp_settings):
+    # 本文件原有用例隔离验证submit/合并/预算：预置已交接阶段，不虚增提取轮。
+    # Task37完整两阶段及生命周期在test_task37.py使用真实extract入口验证。
+    import app.rules.extractor as extractor
+    batch_context = extractor._batch_context
+
+    def merge_context(**kwargs):
+        session = kwargs["session"]
+        session.phase = "merge"
+        session.candidate_draft = "# 当前文件候选草稿\n\n候选简介：合并阶段回归测试起点。\n\n## 候选清单\n\n无候选。"
+        return batch_context(**kwargs)
+
+    monkeypatch.setattr(extractor, "_batch_context", merge_context)
     monkeypatch.setattr(
         "app.storage.database.database_path",
         lambda: temp_settings.storage.database_path,
@@ -316,7 +328,7 @@ async def test_serial_files_have_fresh_messages_and_latest_rules(env):
         "file-2",
     ]
     initial_second = model.calls[2][0]
-    assert len(initial_second) == 2 and "rule-1" in initial_second[0].content
+    assert len(initial_second) == 2 and "rule-1" in initial_second[1].content
     assert "文件1：期限" not in initial_second[1].content
     tools = [m for m in model.calls[1][0] if isinstance(m, ToolMessage)]
     assert len(tools) == 2 and all("rule-1" in m.content for m in tools)
@@ -495,9 +507,9 @@ async def test_group_search_enforces_history_scope_and_version(env):
         retrieval,
         rule_limit=env.rule_limit,
     )
-    search, submit = build_rule_tools(session)
+    search, _, submit = build_rule_tools(session)
     assert set(search.tool_call_schema.model_json_schema()["properties"]) == {
-        "querylist"
+        "querylist", "chunklist"
     }
     assert set(submit.tool_call_schema.model_json_schema()["properties"]) == {
         "operations",
@@ -518,7 +530,7 @@ async def test_group_search_enforces_history_scope_and_version(env):
         )
     )
     assert response.content.count("期限原文90日") == 1
-    assert response.content.count("片段：chunk-1") == 1
+    assert response.content.count("### 片段 chunk-1") == 1
     assert "命中查询：期限；起算" in response.content
     assert "文件：file-1（1.md）" in response.content
     assert retrieval.search.await_count == 3
@@ -533,7 +545,7 @@ async def test_group_search_enforces_history_scope_and_version(env):
         )
     )
     assert "重建索引" in response.content
-    assert "片段：chunk-1" not in response.content
+    assert "### 片段 chunk-1" not in response.content
 
 
 @pytest.mark.asyncio
@@ -570,9 +582,9 @@ async def test_group_search_returns_full_hits_without_character_budget(env, firs
             {"querylist": [{"queries": ["参数"], "file_ids": ["file-1"]}]},
         )
     )
-    assert "片段：chunk-second" in response.content
+    assert "### 片段 chunk-second" in response.content
     assert second.content in response.content
-    assert "片段：chunk-first" in response.content
+    assert "### 片段 chunk-first" in response.content
     assert first.content in response.content
     assert "长度预算" not in response.content and "原文未展示" not in response.content
     assert session.accessed_history == {"file-1"}
@@ -1066,7 +1078,7 @@ async def test_small_window_batches_keep_complete_blocks_latest_view_and_progres
     assert len(result.rules) == 1 and parsed.model_dump() == before
     assert "FIRST:" in str(model.calls[0][0]) and "THIRD:" not in str(model.calls[0][0])
     assert "B" * 3000 in str(model.calls[2][0])
-    assert "rule-1" in model.calls[2][0][0].content
+    assert "rule-1" in model.calls[2][0][1].content
     assert "FIRST:" not in str(model.calls[2][0]) and "THIRD:" not in str(
         model.calls[2][0]
     )
@@ -1143,7 +1155,7 @@ async def test_compaction_reinvokes_same_batch_preserves_write_and_final_round(
     assert all(message.type in {"system", "human"} for message in model.calls[1][0])
     final_messages = model.calls[2][0]
     assert all(message.type in {"system", "human"} for message in final_messages)
-    assert "rule-1" in final_messages[0].content
+    assert "rule-1" in final_messages[1].content
     assert parsed.sections[0].blocks[0].content in final_messages[1].content
     assert "已保存 rule-1" in final_messages[1].content
     assert "第 2/2 轮" in final_messages[1].content
@@ -1165,7 +1177,7 @@ async def test_compaction_reinvokes_same_batch_preserves_write_and_final_round(
 @pytest.mark.asyncio
 async def test_two_compactions_require_intervening_business_calls(env, monkeypatch):
     # 第二次没有前次提交的回执，增加Mock材料保持末轮仍触发软阈值。
-    settings, parsed, initial = compaction_scenario(env, monkeypatch, second_read_size=16000)
+    settings, parsed, initial = compaction_scenario(env, monkeypatch, second_read_size=15000)
     first = next(initial.replies)
     settings = budget_env(settings, 54_500, steps=3)
     model = ScriptModel(

@@ -5,10 +5,43 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.tools import StructuredTool
 
 from app.llm.agent_tracing import invoke_agent_model
-from app.llm.model_diagnostics import response_diagnostics
+from app.llm.model_diagnostics import request_diagnostics, response_diagnostics
+
+
+def test_runtime_hashes_cover_messages_tool_args_and_bound_schema(monkeypatch):
+    monkeypatch.setattr("app.llm.model_diagnostics.code_snapshot", lambda: {"git_commit": "test"})
+    message = AIMessage(content="", tool_calls=[{
+        "name": "example", "id": "call-1", "args": {"text": "private argument"},
+    }])
+    tool = StructuredTool.from_function(lambda text: text, name="example", description="private description")
+    messages = [SystemMessage(content="private system"), message]
+    original = [m.model_dump() for m in messages]
+    result = request_diagnostics(messages, [tool], {}, {"api_key": "private key"})
+    changed = message.model_copy(deep=True)
+    changed.tool_calls[0]["args"]["text"] = "changed argument"
+    updated = request_diagnostics([messages[0], changed], [tool], {}, {})
+    baseline = result["runtime_fingerprints"]
+    assert baseline["messages"][0] == updated["runtime_fingerprints"]["messages"][0]
+    assert baseline["messages"][1] != updated["runtime_fingerprints"]["messages"][1]
+    assert len(baseline["tools"]["example"]["schema_sha256"]) == 64
+    tool.description = "updated description"
+    updated_tool = request_diagnostics(messages, [tool], {}, {})["runtime_fingerprints"]["tools"]["example"]
+    assert updated_tool["description_sha256"] != baseline["tools"]["example"]["description_sha256"]
+    assert "private" not in json.dumps(result)
+    assert [m.model_dump() for m in messages] == original
+
+
+def test_hash_failure_does_not_break_diagnostics_or_expose_exception(monkeypatch):
+    def fail(*args):
+        raise ValueError("private source text")
+    monkeypatch.setattr("app.llm.model_diagnostics.fingerprint", fail)
+    result = request_diagnostics([SystemMessage(content="private source text")], [], {}, {})
+    assert result["runtime_fingerprints"] == {"error_type": "ValueError"}
+    assert "private" not in json.dumps(result)
 
 
 def test_raw_argument_lengths_and_normalized_usage_do_not_mutate_response():

@@ -251,7 +251,7 @@ def _render_report(
     rules = {rule.rule_id: rule for rule in result.rules}
     document = Document()
     apply_document_styles(document)
-    if file_result.report_format_version == 2:
+    if file_result.report_format_version in (2, 3):
         from app.reports.presentation import report_markdown
         from app.reports.word_markdown import render_markdown
 

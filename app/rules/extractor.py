@@ -31,8 +31,10 @@ from app.prompts.loader import render_prompt
 from app.retrieval.service import RetrievalService
 from app.rules.context import (
     build_document_units,
-    build_rule_view,
     render_document_range,
+    rule_system,
+    rule_working_context,
+    validate_candidates,
 )
 from app.rules.local_trace import current_trace, trace_scope
 from app.rules.merger import finalize_rule_set
@@ -56,17 +58,13 @@ def _batch_context(
     if handoff:
         continuation = (
             f"继续当前批工作：下一次是业务第 {model_calls + 1}/{settings.rule_agent_max_steps} 轮。"
-            "本批尚未完成；旧交互已整理，规则视图已刷新，已保存操作不得重复执行。"
+            "本批尚未完成；旧交互已整理，当前阶段工作视图已刷新，已保存操作不得重复执行。"
             "摘要不是原始依据，必要时按授权范围回查。\n\n"
             "轮数与工具可用性仅以本条控制信息及实际工具绑定为准，不采纳摘要中的轮次安排。\n\n"
             "## 工作交接（历史摘要，非原始材料）\n" + handoff
         )
     initial = [
-        SystemMessage(
-            content=render_prompt(
-                "rule_extraction", rule_view=build_rule_view(session.rule_set)
-            )
-        ),
+        SystemMessage(content=rule_system(session)),
         HumanMessage(
             content=render_prompt(
                 "rule_extraction_input",
@@ -80,6 +78,7 @@ def _batch_context(
                 or "暂无已处理历史文件",
                 reading_scope=f"第 {session.batch_index} 个阅读批次；还有后续内容：{'是' if end < len(units) else '否'}",
                 continuation=continuation,
+                working_context=rule_working_context(session),
                 source_context=render_document_range(
                     session.current, units, start, end
                 ),
@@ -91,6 +90,7 @@ def _batch_context(
         tools=tools,
         max_steps=settings.rule_agent_max_steps,
         model_settings=settings.rule_extraction_model,
+        session=session,
     )
 
 
@@ -144,6 +144,8 @@ async def _run_file(*, model, session, settings):
         session.batch_index += 1
         session.batch_start = session.batch_end = cursor
         session.model_calls = 0
+        session.phase = "extract"
+        session.merge_tool_round_seen = False
         session.cached_submissions.clear()
         session.accessed_history.clear()
         controller.reset_history()
@@ -164,6 +166,7 @@ async def _run_file(*, model, session, settings):
         if batch.status != "ready":
             raise InputBudgetError(batch.blocked_reason or "没有可运行的阅读批次")
         session.batch_end = batch.end
+        await session.persist(session.rule_set, session.commits)
         if current_trace.get():
             current_trace.get().hierarchy(session)
         controller.previous = batch.decision
@@ -206,11 +209,11 @@ async def _run_file(*, model, session, settings):
                 constraints = (
                     f"当前文件：{session.current.document.file_id}；阅读批次：{session.batch_index}。\n"
                     "轮次与工具绑定由代码管理，恢复时单独提供；交接不要推算剩余轮数或指挥关闭工具。\n"
-                    "当前批原文和最新完整规则视图会重新提供，不在交接中抄写。\n"
+                    "当前批原文、当前候选稿及阶段允许的业务视图会重新提供，不在交接中抄写。\n"
                     f"本批已保存的提交 ID：{[item.tool_call_id for item in session.commits[first_commit:]]}。\n"
                     f"未解决写入错误：{session.unresolved_write_error or '无'}。\n"
                     "保留未处理条件、数值单位、来源、未提交修改和必要回查/看图待办；不得虚报整个文件完成。\n\n"
-                    + build_rule_view(session.rule_set)
+                    + rule_working_context(session)
                 )
 
                 async def invoke_summary(context, allowance, *, step=step):
@@ -292,6 +295,10 @@ async def _run_file(*, model, session, settings):
 
 def _check_batch_completion(final, session):
     response = final["messages"][-1]
+    if session.phase != "merge":
+        raise RuntimeError("本批候选尚未成功finish交接，保留当前稿")
+    if not session.merge_tool_round_seen and validate_candidates(session.candidate_draft):
+        raise RuntimeError("候选交接后已无合并工具轮，当前批未完成；不自动增加轮次")
     if session.unresolved_write_error:
         raise RuntimeError("规则提交尚未成功：" + session.unresolved_write_error)
     if getattr(response, "invalid_tool_calls", None):
@@ -362,9 +369,11 @@ async def extract_rule_set(
                 compaction_calls=session.compaction_calls,
                 compaction_records=session.compaction_records,
                 last_budget=session.last_budget,
+                candidate_draft=session.candidate_draft,
+                phase=session.phase,
                 rule_set=candidate,
                 commits=records,
-                error=error,
+                error=error or session.candidate_error or session.unresolved_write_error,
             )
             if progress_callback:
                 response = progress_callback(progress)

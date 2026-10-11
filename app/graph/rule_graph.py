@@ -22,6 +22,7 @@ class RuleState(TypedDict):
     messages: list[BaseMessage]
     model_calls: int
     prepared_step: int | None
+    bound_tools: list[str]
 
 
 def route_rule_agent(state):
@@ -41,7 +42,8 @@ def build_rule_graph(
         # 最终轮未绑定工具；若服务仍返回 tool_calls，视为协议异常，不继续循环。
         if state["model_calls"] >= max_steps:
             raise RuntimeError("模型在未提供工具的最终轮仍发出工具调用")
-        for call in pending_tool_calls(response):
+        calls = pending_tool_calls(response)
+        for index, call in enumerate(calls):
             name, call_id = call["name"], call["id"]
             try:
                 before_profile = session.rule_set.project_profile
@@ -61,6 +63,12 @@ def build_rule_graph(
                     check_tool_arguments(call)
                     if name not in by_name:
                         raise ValueError(f"未知工具 {name}")
+                    if name not in state.get("bound_tools", []):
+                        raise ValueError(f"本轮未授权工具 {name}，阶段切换仅对下一轮生效")
+                    if name == "rule_candidates" and call["args"].get("action") == "finish" and any(
+                        later["name"] == "rule_candidates" for later in calls[index + 1:]
+                    ):
+                        raise ValueError("finish必须是本轮最后一个候选调用；请先完成全部编辑")
                     result = await invoke_rule_tool(by_name[name], call, trace_context)
                     if (
                         isinstance(result, ToolMessage)
@@ -84,6 +92,10 @@ def build_rule_graph(
                 raise
             except Exception as exc:  # noqa: BLE001 - 普通工具异常需闭合为对应的错误ToolMessage。
                 detail = tool_error_text(exc)
+                if name == "rule_candidates" and session.phase == "extract" and (
+                    not isinstance(call.get("args"), dict) or call["args"].get("action") == "edit"
+                ):
+                    session.candidate_error = detail
                 if name == "submit_rule_delta":
                     args = call.get("args")
                     # 只读意图按两个写入参数显式为 null 判定，不把误填 all
@@ -114,6 +126,7 @@ def build_rule_graph(
             messages.append(result)
         if current_trace.get():
             current_trace.get().close_scope(session, "turn")
+        await session.persist(session.rule_set, session.commits)
         return {"messages": messages}
 
     graph = StateGraph(RuleState)

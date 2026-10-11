@@ -470,7 +470,7 @@ describe('审核工作区', () => {
       ).toBeInTheDocument();
     },
   );
-  it('新版重点可跳关联明细，展示发现、判断、建议和真实摘录，不铺内部草稿', async () => {
+  it.each([2, 3] as const)('报告v%s可跳关联明细，展示发现、判断、建议和真实摘录，不铺内部草稿', async (version) => {
     const quote = '投标响应表载明：精度100，单位与试验条件待核验。';
     mockApi((url) =>
       url.endsWith('/files/file-1')
@@ -478,11 +478,11 @@ describe('审核工作区', () => {
             ...report,
             document: {
               ...report.document,
-              markdown: '# 内部报告\n### rule-147\n内部草稿不可铺出',
+              markdown: '# 内部报告\n### rule-147\n内部草稿不可铺出\n核验状态：已完成\n进度说明：内部工作进度',
             },
             result: {
               ...report.result!,
-              report_format_version: 2,
+              report_format_version: version,
               report_title: '设备采购审核报告',
               report_context: {
                 task_name: '受理时任务名',
@@ -531,6 +531,7 @@ describe('审核工作区', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('重点问题与处理建议')).toBeInTheDocument();
     expect(screen.queryByText('内部草稿不可铺出')).not.toBeInTheDocument();
+    expect(screen.queryByText(/进度说明：内部工作进度/)).not.toBeInTheDocument();
     expect(screen.getByText('核对原始测试记录。')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '查看关联明细' }));
     expect(

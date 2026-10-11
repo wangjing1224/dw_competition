@@ -275,7 +275,7 @@ class ReportModel:
             "report_document",
             {
                 "action": "write",
-                "content": filled_report(self.rules, version=2),
+                "content": filled_report(self.rules, version=3),
                 "edits": None,
             },
         )
@@ -294,7 +294,7 @@ async def test_single_invalid_draft_is_visible_but_only_repaired_result_exports(
                     "report_document",
                     {
                         "action": "write",
-                        "content": filled_report(self.rules, version=2)
+                        "content": filled_report(self.rules, version=3)
                         + "\n投标片段：fake\n",
                         "edits": None,
                     },
@@ -393,7 +393,7 @@ async def test_real_pipeline_per_file_results_traces_and_word_error(env, monkeyp
         assert report["result"]["report_title"] == "设备采购投标文件审核报告"
         assert report["rules"][0]["requirement"] == "精度至少100"
         assert env.service.output(task, "md", f["file_id"]).is_file()
-        assert report["result"]["report_format_version"] == 2
+        assert report["result"]["report_format_version"] == 3
         context = report["result"]["report_context"]
         assert context["task_name"] == "混合审核" and context["finalized_at"]
         assert context["rule_library_name"] == f["project_name"]
@@ -405,6 +405,7 @@ async def test_real_pipeline_per_file_results_traces_and_word_error(env, monkeyp
         assert formal.parent.name == "reports"
         assert formal.read_text() == report["document"]["display_markdown"]
         assert "rule-1" not in formal.read_text()
+        assert "核验状态" not in formal.read_text() and "进度说明" not in formal.read_text()
         assert "## 四、审核明细及原文摘录" in formal.read_text()
         assert (
             env.service.report(task, f["file_id"])["result"]["report_context"]
@@ -516,7 +517,7 @@ async def test_routed_files_have_reason_without_findings_or_audit_calls(
         assert report["counts"] is None
         assert report["result"]["findings"] == []
         assert report["result"]["exclusion_reason"]
-        assert report["result"]["report_format_version"] == 2
+        assert report["result"]["report_format_version"] == 3
         assert "审核明细" not in report["document"]["display_markdown"]
         title = report["result"]["report_title"]
         assert title.endswith("项目适用性说明")
@@ -532,7 +533,7 @@ async def test_routed_files_have_reason_without_findings_or_audit_calls(
 
 
 @pytest.mark.asyncio
-async def test_v2_markdown_failure_retains_json_without_exposing_draft(
+async def test_current_markdown_failure_retains_json_without_exposing_draft(
     env, monkeypatch
 ):
     from app.core.errors import BusinessError
@@ -626,7 +627,8 @@ async def test_search_ledger_finding_formal_quote_end_to_end(env):
 
     class ReadingModel(ReportModel):
         async def ainvoke(self, messages, **kwargs):
-            if any(m.type == "tool" and m.name == "report_document" for m in messages):
+            saves = [m for m in messages if m.type == "tool" and m.name == "report_document"]
+            if len(saves) == 2:
                 return AIMessage(content="已完成")
             searches = [
                 m for m in messages if m.type == "tool" and m.name == "search_documents"
@@ -634,14 +636,28 @@ async def test_search_ledger_finding_formal_quote_end_to_end(env):
             if not searches:
                 return tool_response(
                     "search_documents",
-                    {"querylist": [{"queries": ["精度"], "file_ids": None}]},
+                    {"querylist": [{"queries": ["精度"], "file_ids": None}], "rule_ids": ["rule-1"]},
                 )
-            key = re.search(r"^片段：(.+)$", searches[-1].content, re.MULTILINE)[1]
+            key = re.search(r"^### 片段 (.+)$", searches[-1].content, re.MULTILINE)[1]
+            if not saves:
+                from app.reports.markdown_report import skeleton
+
+                return tool_response("report_document", {
+                    "action": "write", "content": skeleton(self.rules, 3).replace(
+                        "### rule-1\n\n待填写。", "### rule-1\n\n核验状态：未完成\n\n进度说明：已定位精度，继续核对相邻表文。"),
+                    "edits": None,
+                }, "progress")
+            if len(searches) == 1:
+                file_id = re.search(r"文件：([^（]+)（", searches[-1].content)[1]
+                return tool_response("search_documents", {
+                    "rule_ids": ["rule-1"],
+                    "chunklist": [{"chunk_id": key, "file_id": file_id, "before": 1, "after": 1}],
+                }, "neighbors")
             return tool_response(
                 "report_document",
                 {
                     "action": "write",
-                    "content": filled_report(self.rules, version=2)
+                    "content": filled_report(self.rules, version=3)
                     + f"\n投标片段：{key}\n",
                     "edits": None,
                 },
@@ -674,6 +690,9 @@ async def test_search_ledger_finding_formal_quote_end_to_end(env):
         )
         word = Document(env.service.output(task, "word", file["file_id"]))
         assert quote in "\n".join(p.text for p in word.paragraphs)
+        assert "进度说明" not in "\n".join(p.text for p in word.paragraphs)
+        state = json.loads((env.settings.storage.data_root / "outputs" / task / "drafts" / f"{file['file_id']}.state.json").read_text())
+        assert state["pending_report_saves"] == [] and state["report_format_version"] == 3
 
 
 def test_trace_redacts_typed_reasoning_without_mutating_model_response():
@@ -708,7 +727,7 @@ async def test_concurrent_children_keep_file_session_and_parent_scope(env):
                     "report_document",
                     {
                         "action": "write",
-                        "content": filled_report(self.rules, version=2),
+                        "content": filled_report(self.rules, version=3),
                         "edits": None,
                     },
                     "save",

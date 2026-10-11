@@ -93,3 +93,26 @@ def test_v2_rebuild_keeps_first_finalization_and_frozen_names(monkeypatch, temp_
     assert first.file_results[0].report_context.finalized_at
     assert first.file_results[0].report_context == second.file_results[0].report_context
     assert report_markdown(first, first.file_results[0]) == report_markdown(second, second.file_results[0])
+
+
+@pytest.mark.parametrize("gate", ["pending", "unknown", "incomplete", "complete"])
+def test_v3_rebuild_requires_known_saved_progress(monkeypatch, temp_settings, gate):
+    monkeypatch.setattr("app.storage.file_store.get_settings", lambda: temp_settings)
+    store = FileStore()
+    context, directory = save_snapshot(store)
+    context.report_format_version = 3
+    atomic_write(directory / "audit_context.json", context.model_dump_json().encode())
+    text = filled_report(context.rule_set, version=3)
+    if gate == "incomplete":
+        text = text.replace("核验状态：已完成", "核验状态：未完成")
+    atomic_write(directory / "drafts" / "bid-1.md", text.encode())
+    path = directory / "drafts" / "bid-1.state.json"
+    state = json.loads(path.read_text())
+    if gate != "unknown":
+        state.update(report_format_version=3, pending_report_saves=(
+            [{"batch_index": 1, "tool_round": 1, "tool_call_id": "q", "rule_ids": ["rule-1"]}] if gate == "pending" else []
+        ))
+    atomic_write(path, json.dumps(state).encode())
+    result = rebuild_result("audit-1", store)
+    assert bool(result.file_results) == (gate == "complete")
+    assert bool(result.file_errors) == (gate != "complete")

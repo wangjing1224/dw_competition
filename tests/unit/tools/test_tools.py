@@ -56,7 +56,7 @@ def test_search_description_uses_instance_configuration_without_changing_schema(
             "${" not in tool.description and "不按正文字符预算裁剪" in tool.description
         )
         schema = convert_to_openai_tool(tool)["function"]["parameters"]
-        assert set(schema["properties"]) == {"querylist"}
+        assert set(schema["properties"]) == {"querylist", "chunklist"}
         assert "candidate_top_k" not in str(schema) and "final_top_k" not in str(schema)
     assert descriptions[0] == descriptions[2] != descriptions[1]
 

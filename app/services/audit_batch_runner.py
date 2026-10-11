@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from time import perf_counter
 
 from app.audit.bid_summary import summarize_and_route_bid_document
 from app.audit.concurrency import file_limiter, model_limiter
@@ -89,7 +90,9 @@ async def run_audit_batch(task_id, *, models=None, executor=None):
             file_id = row["file_id"]
             trace = AuditTrace(task_id, file_id)
             # 同进程所有批次共用容量，不为每批复制一组无限执行名额。
+            waiting = perf_counter()
             async with file_limiter(settings.audit.file_concurrency):
+                logger.info("audit_file_slot task=%s file=%s wait_ms=%.3f", task_id, file_id, (perf_counter() - waiting) * 1000)
                 try:
                     with (
                         bind(trace),
@@ -137,7 +140,7 @@ async def process_file(service, settings, models, executor, frozen, row):
             rule_library_name=frozen["projects"][row["project_id"]]["name"],
             evidence_library_name=frozen["bidders"][row["bidder_id"]]["name"],
         )
-        if frozen.get("report_format_version") == 2
+        if frozen.get("report_format_version") in (2, 3)
         else None,
         file_order=[file_id],
         parsed_documents={
@@ -265,8 +268,8 @@ async def process_file(service, settings, models, executor, frozen, row):
         )
 
     file_result = result.file_results[0]
-    if context.report_format_version == 2:
-        file_result.report_format_version = 2
+    if context.report_format_version in (2, 3):
+        file_result.report_format_version = context.report_format_version
         finalized_at = (
             file_result.report_context.finalized_at
             if file_result.report_context
@@ -308,7 +311,7 @@ async def process_file(service, settings, models, executor, frozen, row):
         overall_conclusion=str(result.file_results[0].overall_conclusion),
         word_status="unavailable",
     )
-    if context.report_format_version == 2:
+    if context.report_format_version in (2, 3):
         try:
             md_path = write_formal_markdown(
                 result, result.file_results[0], service.store

@@ -15,7 +15,7 @@ from typing import Annotated, Callable
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import InjectedToolCallId, StructuredTool
-from pydantic import Field, StringConstraints
+from pydantic import Field, StringConstraints, model_validator
 
 from app.core.config import AppSettings, PythonToolSettings
 from app.models.common import StrictModel
@@ -23,7 +23,7 @@ from app.models.documents import ParsedDocument, validate_asset_path
 from app.parsers.assets import AssetStore, file_asset_root
 from app.parsers.image_messages import build_view_image_result
 from app.prompts.loader import load_tool_description
-from app.retrieval.models import IndexFilter
+from app.retrieval.models import IndexFilter, SearchResult
 
 QueryText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -41,12 +41,30 @@ class DocumentSearchGroup(StrictModel):
     )
 
 
+class DocumentChunkGroup(StrictModel):
+    chunk_id: QueryText = Field(description="当前文件冻结版本中真实的中心片段ID，原样传入。")
+    before: int = Field(ge=0, strict=True, description="中心前读取的片段数量；非负整数，0表示不向前扩展。")
+    after: int = Field(ge=0, strict=True, description="中心后读取的片段数量；中心始终返回。")
+    file_id: QueryText = Field(description="该中心片段所属的单个授权文件ID，不是file_ids列表。")
+
+
 class SearchDocumentsInput(StrictModel):
-    querylist: list[DocumentSearchGroup] = Field(
+    querylist: list[DocumentSearchGroup] | None = Field(
+        default=None,
         min_length=1,
         max_length=12,
         description="非空查询组列表，每组有 queries 和 file_ids；不同范围分组。",
     )
+    chunklist: list[DocumentChunkGroup] | None = Field(
+        default=None, min_length=1,
+        description="邻接读取组列表，每组为chunk_id、before、after、file_id；与querylist二选一，未用项省略或null。",
+    )
+
+    @model_validator(mode="after")
+    def one_mode(self):
+        if (self.querylist is None) == (self.chunklist is None):
+            raise ValueError("querylist与chunklist必须恰好提供一个非空列表")
+        return self
 
 
 class ViewImageInput(StrictModel):
@@ -128,7 +146,85 @@ class CommonTool:
                     found.append(result)
             return sorted(found, key=lambda result: result.score, reverse=True)
 
-        async def search_documents(querylist: list[DocumentSearchGroup]) -> str:
+        def register(result):
+            if self.on_source_read:
+                self.on_source_read(result.source.file_id)
+            if self.on_chunk_read:
+                self.on_chunk_read(result)
+
+        def read_neighbors(chunklist):
+            files, errors = {}, []
+            for number, group in enumerate(chunklist, 1):
+                try:
+                    if group.file_id not in self.parsed_documents:
+                        raise ValueError("文件不在当前会话授权范围")
+                    parsed = self.parsed_documents[group.file_id]
+                    if group.file_id not in files:
+                        scope = self.file_filters.get(group.file_id, self.query_filter)
+                        chunks = self.retrieval.file_chunks(
+                            scope, file_id=group.file_id, parse_version=parsed.markdown_path,
+                        )
+                        files[group.file_id] = (chunks, [])
+                    chunks, windows = files[group.file_id]
+                    center = next((i for i, c in enumerate(chunks) if c.chunk_id == group.chunk_id), None)
+                    if center is None:
+                        raise ValueError("片段ID不存在于指定文件的当前冻结索引；请核对file_id及真实chunk_id")
+                    start, end = max(0, center - group.before), min(len(chunks), center + group.after + 1)
+                    registered = {image.path for section in parsed.sections for block in section.blocks for image in block.images}
+                    for chunk in chunks[start:end]:
+                        if chunk.file_id != group.file_id or chunk.parse_version != parsed.markdown_path:
+                            raise ValueError("索引片段与授权文件或解析版本不匹配")
+                        if any(getattr(chunk, key) != getattr(parsed.document, key) for key in ("data_role", "project_id", "bidder_id", "task_id")):
+                            raise ValueError("索引片段角色或归属与授权文件不符")
+                        if not set(chunk.image_paths) <= registered:
+                            raise ValueError("索引图片未登记在固定解析版本，需要重建索引")
+                    windows.append((start, end))
+                except Exception as exc:
+                    errors.append(f"请求组{number}失败：{type(exc).__name__}: {exc}")
+            sections, delivered = [], []
+            for chunks, windows in files.values():
+                merged = []
+                for start, end in sorted(windows):
+                    if merged and start < merged[-1][1]:
+                        merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+                    else:
+                        merged.append((start, end))
+                for start, end in merged:
+                    parts = []
+                    for index in range(start, end):
+                        chunk = chunks[index]
+                        lines = [f"### 片段 {chunk.chunk_id}",
+                                 f"文件：{chunk.file_id}（{chunk.file_name}）",
+                                 f"位置：{chunk.section or '章节未知'}；页码：{'、'.join(map(str, chunk.page_numbers)) or '未知'}"]
+                        boundary = []
+                        if index == 0:
+                            boundary.append("当前索引开头")
+                        if index == len(chunks) - 1:
+                            boundary.append("当前索引末尾")
+                        if boundary:
+                            lines.append("边界：" + "、".join(boundary))
+                        lines.append("原文：\n" + chunk.content)
+                        if chunk.image_paths:
+                            lines.append("相关图片：" + "、".join(chunk.image_paths))
+                        parts.append("\n\n".join(lines))
+                        delivered.append(SearchResult(
+                            chunk_id=chunk.chunk_id, source=chunk.source_ref(len(chunk.content)),
+                            content=chunk.content, parse_version=chunk.parse_version,
+                            page_numbers=chunk.page_numbers, image_paths=chunk.image_paths,
+                            project_id=chunk.project_id, bidder_id=chunk.bidder_id, task_id=chunk.task_id,
+                            evidence_type=chunk.evidence_type,
+                        ))
+                    sections.append("\n\n".join(parts))
+            if errors:
+                sections.append(("状态：部分完成。" if delivered else "状态：未完成。") + "\n\n" + "\n".join(errors))
+            # 完成范围检查及投影后才登记，未交付组不能成为已读来源。
+            for result in delivered:
+                register(result)
+            return "\n\n---\n\n".join(sections)
+
+        async def search_documents(querylist=None, chunklist=None) -> str:
+            if chunklist is not None:
+                return read_neighbors(chunklist)
             groups = []
             for number, group in enumerate(querylist, 1):
                 ids = list(
@@ -201,7 +297,7 @@ class CommonTool:
                     # Task32 D1：暂时停用组正文预算，保留Top-K/Rerank及组内去重。
                     # used = 0
                     # budget = self.settings.retrieval.max_source_chars
-                    for hit_number, (result, queries) in enumerate(hits.values(), 1):
+                    for result, queries in hits.values():
                         # 旧裁剪仅留作恢复参考，不把别组命中冒充本组结果：
                         # if used and used + len(result.content) > budget:
                         #     lines.append("返回达到本组长度预算；其余命中未展示。")
@@ -209,24 +305,11 @@ class CommonTool:
                         # displayed = len(result.content) <= budget
                         # content = result.content if displayed else "完整结构超过本组预算，原文未展示，不截断表格。"
                         content = result.content
-                        lines.append(f"### 命中 {hit_number}")
-                        lines.append(f"片段：{result.chunk_id}")
+                        lines.append(f"### 片段 {result.chunk_id}")
                         lines.extend(
                             [
                                 "命中查询：" + "；".join(queries),
                                 f"文件：{result.source.file_id}（{result.source.file_name}）",
-                                "角色："
-                                + {
-                                    "rule_source": "招标原文",
-                                    "bid_document": "当前投标原文",
-                                    "evidence_material": "投标方资料",
-                                }[
-                                    str(
-                                        self.parsed_documents[
-                                            result.source.file_id
-                                        ].document.data_role
-                                    )
-                                ],
                                 f"位置：{result.source.section or '章节未知'}；页码：{'、'.join(map(str, result.page_numbers)) or '未知'}",
                                 "原文：\n" + content,
                             ]
@@ -237,10 +320,7 @@ class CommonTool:
                             lines.append(
                                 "读取限制：此次返回为文本节选，不代表完整原文。"
                             )
-                        if self.on_source_read:
-                            self.on_source_read(result.source.file_id)
-                        if self.on_chunk_read:
-                            self.on_chunk_read(result)
+                        register(result)
                         # used += len(content)
                 except Exception as exc:
                     if self.strict_errors and not isinstance(exc, ValueError):

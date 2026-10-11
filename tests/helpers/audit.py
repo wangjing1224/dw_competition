@@ -126,7 +126,7 @@ def filled_report(
     text = skeleton(rule_set, version).replace(
         f"# {TITLE_PLACEHOLDER}", f"# {title}", 1
     )
-    if version == 2:
+    if version in (2, 3):
         text = text.replace("## 重点问题\n\n待填写。", "## 重点问题\n\n无重点问题。")
     text = text.replace(
         "## 总体总结\n\n待填写。", "## 总体总结\n\n文件审核完成，详见分类结论。"
@@ -138,12 +138,29 @@ def filled_report(
         r"(### rule-[^\n]+\n\n)待填写。",
         lambda m: (
             m[1]
+            + ("核验状态：已完成\n进度说明：已核对必要事实。\n" if version == 3 else "")
             + f"结论：{conclusion}\n"
-            + ("实际发现：技术响应表载明参数。\n" if version == 2 else "")
+            + ("实际发现：技术响应表载明参数。\n" if version in (2, 3) else "")
             + f"审核说明：{reason}"
         ),
         text,
     )
+
+
+def candidate_response(requirement, explanation="本批原文明示的要求。"):
+    """脚本模型同轮编辑候选并finish，仍经过真实阶段和文本校验。"""
+    from app.rules.context import CANDIDATE_TEMPLATE
+
+    draft = (
+        "# 当前文件候选草稿\n\n候选简介：" + requirement
+        + "\n\n## 候选清单\n\n### 候选 1\n\n要求：" + requirement
+        + "\n\n候选说明：" + explanation
+    )
+    return AIMessage(content="", tool_calls=[
+        {"name": "rule_candidates", "id": "candidate-edit", "args": {
+            "action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": draft}]}},
+        {"name": "rule_candidates", "id": "candidate-finish", "args": {"action": "finish"}},
+    ])
 
 
 class SequenceModel:

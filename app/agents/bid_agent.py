@@ -27,7 +27,7 @@ def build_bid_agent_messages(context, parsed, units, start, end, report, handoff
                 file_identity=f"文件ID：{document.file_id}\n文件名：{document.file_name}\n所选项目：{context.project_id}\n资料库：{context.bidder_id}",
                 project_profile=context.rule_set.project_profile,
                 reading_scope=f"完整结构第{start + 1}至{end}，共{len(units)}个；前{start}个已处理，"
-                + ("还有后部未读。" if end < len(units) else "本批包含文件末尾。")
+                + ("还有后部未读。" if end < len(units) else "本批包含当前解析结构末尾，不代表已确认真实提交包完整。")
                 + "图片入口不代表已查看。",
                 document_context=render_document_range(parsed, units, start, end),
                 evidence_catalog=brief_catalog(context.evidence_library),

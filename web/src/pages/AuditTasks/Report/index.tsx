@@ -225,8 +225,8 @@ function ReportFile({
     </Link>
   );
   const finalizedAt =
-    data?.file.file_id === fileId && data.result?.report_format_version === 2
-      ? data.result.report_context?.finalized_at
+    data?.file.file_id === fileId && [2, 3].includes(data.result?.report_format_version ?? 1)
+      ? data.result?.report_context?.finalized_at
       : null;
   const heading = (
     <PageHeading
@@ -354,7 +354,7 @@ function ReportFile({
             <span className="audit-muted">仅使用本次审核固定的规则快照</span>
           </div>
           {view === 'overview' && data.counts && <Charts data={data} />}
-          {view === 'overview' && data.result.report_format_version === 2 && (
+          {view === 'overview' && [2, 3].includes(data.result.report_format_version ?? 1) && (
             <section
               className="audit-highlights"
               aria-label="重点问题与处理建议"
@@ -593,7 +593,7 @@ function ReportFile({
                         )}
                         <section className="audit-report-section audit-finding-explanation">
                           <h4>
-                            {data.result.report_format_version === 2
+                            {[2, 3].includes(data.result.report_format_version ?? 1)
                               ? '判断说明'
                               : '审核说明'}
                           </h4>
@@ -692,7 +692,7 @@ function ReportFile({
               </div>
             </>
           )}
-          {data.result.report_format_version !== 2 &&
+          {![2, 3].includes(data.result.report_format_version ?? 1) &&
             !!data.result.suggestions.length && (
               <Card className="section-gap" title="历史建议">
                 {[...new Set(data.result.suggestions)].map((s, i) => (

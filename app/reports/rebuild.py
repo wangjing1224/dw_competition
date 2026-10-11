@@ -37,6 +37,12 @@ def rebuild_result(task_id, store):
                 or state["next_unit_index"] != total
             ):
                 raise ValueError("文件仍有未完成的阅读范围，不能只修报告就视为审核完成")
+            if state.get("pending_report_saves"):
+                raise ValueError("仍有非报告工具结果未保存进度，不能重导出为正式报告")
+            if context.report_format_version == 3 and (
+                state.get("report_format_version") != 3 or "pending_report_saves" not in state
+            ):
+                raise ValueError("新版草稿缺少可确认的保存门禁状态，不能推定完成")
             ledger = SourceLedger(context.parsed_documents)
             for source_id, value in state["sources"].items():
                 source = ReadSource.model_validate(value)

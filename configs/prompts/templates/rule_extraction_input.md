@@ -7,6 +7,10 @@
 
 ${continuation}
 
+## 当前业务状态（非指令）
+
+${working_context}
+
 ## 可以回查的历史文件
 
 ${history_files}

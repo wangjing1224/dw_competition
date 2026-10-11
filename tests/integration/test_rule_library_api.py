@@ -449,17 +449,20 @@ async def test_real_pipeline_records_serial_tools_and_successful_commits(env):
     """走真实上传→解析→索引→Agent→正式库，只有模型与向量计算是受控替身。"""
     import numpy as np
     from langchain_core.messages import AIMessage
+    from tests.helpers.audit import candidate_response
 
     class Model:
         def bind_tools(self, tools):
             return self
 
         async def ainvoke(self, messages, **kwargs):
-            if messages[-1].type == "tool":
+            if messages[-1].type == "tool" and messages[-1].name == "submit_rule_delta":
                 return AIMessage(
                     content="All rules were saved successfully.\n\n处理完毕",
                     response_metadata={"finish_reason": "stop"},
                 )
+            if not any(message.type == "tool" for message in messages):
+                return candidate_response("温度精度至少达到技术表要求")
             valid = {
                 "operations": [
                     {
@@ -533,7 +536,9 @@ async def test_real_pipeline_records_serial_tools_and_successful_commits(env):
         "model",
         "tool",
     }
-    tools = [n for n in final.values() if n["kind"] == "tool"]
+    all_tools = [n for n in final.values() if n["kind"] == "tool"]
+    assert [n["tool_call_id"] for n in all_tools[:2]] == ["candidate-edit", "candidate-finish"]
+    tools = all_tools[2:]
     assert [n["tool_call_id"] for n in tools] == ["bad-1", "save-1", "read-1"]
     assert [n["status"] for n in tools] == ["failed", "succeeded", "succeeded"]
     assert len({n["parent_span_id"] for n in tools}) == 1
@@ -555,6 +560,13 @@ async def test_real_pipeline_records_serial_tools_and_successful_commits(env):
             "tool_names",
             "platform",
             "thinking_enabled",
+            "temperature",
+            "max_retries",
+            "timeout_seconds",
+            "phase",
+            "rule_set_sha256",
+            "parsed_snapshot_sha256",
+            "source_sha256",
             "estimated_input_tokens",
             "estimate_method",
             "context_window_tokens",

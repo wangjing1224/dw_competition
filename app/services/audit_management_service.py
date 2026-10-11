@@ -157,7 +157,7 @@ class AuditManagementService:
                 key: value.model_dump(mode="json") for key, value in parsed.items()
             },
             "report_template": load_prompt("audit_report_template"),
-            "report_format_version": 2,
+            "report_format_version": 3,
         }
 
     def receive(self, uploads, name, request_id, assignments):
@@ -557,7 +557,7 @@ class AuditManagementService:
                     "report_format_version", 1
                 ):
                     raise ValueError("报告格式与受理快照不一致")
-                if value.report_format_version == 2:
+                if value.report_format_version in (2, 3):
                     context = value.report_context
                     if (
                         not context
@@ -605,7 +605,7 @@ class AuditManagementService:
             )
             if (
                 result
-                and result.get("report_format_version") == 2
+                and result.get("report_format_version") in (2, 3)
                 and row["payload"].get("md_path")
             ):
                 display_markdown = self.store.resolve_relative(

@@ -36,7 +36,7 @@ def report_groups(rule_set):
 
 def skeleton(rule_set, version=1):
     parts = [f"# {TITLE_PLACEHOLDER}", "## 总体总结", PENDING]
-    if version == 2:
+    if version in (2, 3):
         parts.extend(["## 重点问题", PENDING])
     for category, ids in report_groups(rule_set).items():
         parts.append(f"## {category_label(category)}（{category}）")
@@ -51,11 +51,11 @@ def parse_report(
     text, rule_set, ledger, *, final=False, version=1, report_context=None
 ):
     """只解析冻结模板契约；草稿保留未填块，已填块完整校验。"""
-    if version == 2:
+    if version in (2, 3):
         from app.reports.report_parser_v2 import parse_v2
 
         return parse_v2(
-            text, rule_set, ledger, final=final, report_context=report_context
+            text, rule_set, ledger, final=final, report_context=report_context, progress=version == 3
         )
     if version != 1:
         raise ValueError("不支持的报告格式版本")
@@ -197,6 +197,8 @@ class ReportDocument:
         self.receipts = {}
         self.batch_key = 0
         self.write_error = None
+        self.after_save = None
+        self.pending_status = None
         # 新审核不偷偷复用另一轮的草稿；恢复只由显式文件会话负责。
         if path.exists():
             raise ValueError(f"审核草稿已存在，不覆盖：{path}")
@@ -229,6 +231,19 @@ class ReportDocument:
         )
 
     def progress(self):
+        if self.version == 3:
+            from app.reports.report_parser_v2 import draft_rule_states
+
+            states = draft_rule_states(self.read(), self.rule_set, self.ledger)
+            complete = [key for key, (status, _) in states.items() if status == "已完成"]
+            incomplete = [key for key, (status, _) in states.items() if status == "未完成"]
+            invalid = [key for key, (status, _) in states.items() if status is None]
+            return (
+                (self.pending_status() if self.pending_status else "待保存规则：无")
+                + f"\n已完成 {len(complete)}/{len(states)} 条；已记录未完成：{'、'.join(incomplete) or '无'}"
+                + f"\n未填写或格式待修：{'、'.join(invalid) or '无'}\n报告缺项：{'、'.join(self.missing()) or '无'}"
+                + "\n进度不代表结论已经人工核实；内部字段不进入正式报告。"
+            )
         try:
             _, missing = self.check_draft()
         except ValueError as exc:
@@ -254,6 +269,13 @@ class ReportDocument:
                 if previous != payload:
                     raise ValueError(
                         "同一工具调用 ID 不能用于不同的写入，请使用新的调用"
+                    )
+                if self.version == 3:
+                    # 重放不再次写入、不解除新待保存；头部仍须反映此刻状态。
+                    return (
+                        "## 当前草稿状态\n" + self.progress()
+                        + "\n\n## 本次操作\n" + receipt.split("\n\n## 本次操作\n", 1)[-1]
+                        + "\n此调用已执行，本次未再次写入。"
                     )
                 return receipt
             if action == "read":
@@ -291,7 +313,7 @@ class ReportDocument:
                         )
                     candidate = candidate.replace(edit.old_text, edit.new_text, 1)
                 restored = []
-                if self.version == 2:
+                if self.version in (2, 3):
                     from app.reports.report_parser_v2 import restore_category_headings
 
                     candidate, restored = restore_category_headings(
@@ -299,6 +321,8 @@ class ReportDocument:
                     )
                 atomic_write(self.path, candidate.encode("utf-8"))
                 self.write_error = None
+                if self.after_save:
+                    self.after_save()
                 result = "草稿已保存。" + (f"完成{len(edits)}处替换。" if edits else "")
                 if restored:
                     result += "\n已按冻结规则补齐固定分类标题：" + "、".join(restored)
