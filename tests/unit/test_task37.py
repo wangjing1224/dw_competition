@@ -312,6 +312,71 @@ def test_candidate_duplicate_number_has_specific_feedback():
         validate_candidates(duplicate)
 
 
+@pytest.mark.parametrize("field,original", [
+    ("候选简介", "期限要求。"), ("要求", "90日。"), ("候选说明", "本文件期限条款。"),
+])
+@pytest.mark.parametrize("value", [
+    "投标人响应栏为空白待填写。", "按〈提交材料说明〉填写。", "原文保留模板变量&term&，实值未给出。",
+])
+def test_candidate_business_text_is_not_an_unfilled_template(field, original, value):
+    draft = CANDIDATES.replace(f"{field}：{original}", f"{field}：{value}")
+    # 这里只验证结构，不把通过解释为原文变量已能用作正式规则阈值。
+    assert validate_candidates(draft) == 1
+
+
+@pytest.mark.parametrize("field,original", [
+    ("候选简介", "期限要求。"), ("要求", "90日。"), ("候选说明", "本文件期限条款。"),
+])
+@pytest.mark.parametrize("value", ["待填写", "待填写。", "待填写.", " \n 待填写。 \t", "", " \n \t"])
+def test_candidate_empty_or_placeholder_feedback_identifies_the_field(field, original, value):
+    draft = CANDIDATES.replace(f"{field}：{original}", f"{field}：{value}")
+    location = field if field == "候选简介" else f"### 候选 1的{field}"
+    with pytest.raises(ValueError) as error:
+        validate_candidates(draft)
+    message = str(error.value)
+    assert message.startswith(location)
+    assert ("仍为模板占位" if value.strip() else "不能为空") in message
+    assert "正确条目结构" not in message
+
+
+@pytest.mark.parametrize("extra", ["要求：重复条件。", "候选说明：重复说明。", "来源文件：file-1"])
+def test_candidate_duplicate_or_extra_fields_still_fail_structure_check(extra):
+    with pytest.raises(ValueError, match="正确条目结构"):
+        validate_candidates(CANDIDATES + extra)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_reason", ["投标人响应栏为空白待填写。", "待填写。"])
+async def test_candidate_finish_accepts_business_phrase_but_requires_filling_template(
+    temp_settings, initial_reason,
+):
+    session = candidate_session(temp_settings)
+    tool = next(t for t in build_rule_tools(session) if t.name == "rule_candidates")
+    draft = CANDIDATES.replace("本文件期限条款。", initial_reason)
+    result = await tool.ainvoke({
+        "action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": draft}],
+    })
+    assert session.candidate_draft == draft
+    if initial_reason == "待填写。":
+        assert "### 候选 1的候选说明仍为模板占位“待填写。”" in result
+        with pytest.raises(ValueError, match="候选说明仍为模板占位"):
+            await tool.ainvoke({"action": "finish"})
+        assert session.phase == "extract"
+        result = await tool.ainvoke({
+            "action": "edit", "edits": [{
+                "old_text": "候选说明：待填写。",
+                "new_text": "候选说明：投标人响应栏为空白待填写。",
+            }],
+        })
+    assert "结构校验通过，候选1项" in result
+    result = await tool.ainvoke({"action": "finish"})
+    assert session.phase == "merge"
+    assert "候选说明：投标人响应栏为空白待填写。" in result
+    assert session.candidate_draft == CANDIDATES.replace(
+        "本文件期限条款。", "投标人响应栏为空白待填写。",
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("replacements,index,count", [
     ([("90日", "80日"), ("90日", "70日")], 1, 0),

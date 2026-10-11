@@ -38,12 +38,18 @@ def validate_candidates(text):
         raise ValueError("保留唯一的当前文件候选草稿、候选清单标题")
     bodies = [text[m.end():matches[i + 1].start() if i + 1 < len(matches) else len(text)].strip() for i, m in enumerate(matches)]
 
-    def filled(value):
-        return bool(value.strip()) and "待填写" not in value and "〈" not in value
+    def check_value(value, location):
+        value = value.strip()
+        if not value:
+            raise ValueError(f"{location}不能为空；填写实际内容")
+        # 只识别候选模板的整字段占位，不把原文空栏描述或书名括号当成未填。
+        if value.rstrip("。.").strip() == "待填写":
+            raise ValueError(f"{location}仍为模板占位“{value}”；请替换为实际内容")
 
-    intro = re.fullmatch(r"候选简介：(.+)", bodies[0], re.DOTALL)
-    if not intro or not filled(intro[1]) or re.search(r"^候选简介：", intro[1], re.MULTILINE):
-        raise ValueError("候选简介须唯一且已填写，概括条件；无候选时说明实际原因")
+    intro = re.fullmatch(r"候选简介：(.*)", bodies[0], re.DOTALL)
+    if not intro or re.search(r"^候选简介：", intro[1], re.MULTILINE):
+        raise ValueError("候选简介须唯一，概括条件；无候选时说明实际原因")
+    check_value(intro[1], "候选简介")
     if len(headers) == 2:
         if bodies[1] != "无候选。":
             raise ValueError("候选清单尚未填写；确无候选时写无候选。")
@@ -63,8 +69,8 @@ def validate_candidates(text):
         if match[1] in numbers:
             raise ValueError(f"候选编号重复：{header}；每项使用不同的正整数编号")
         numbers.add(match[1])
-        fields = re.fullmatch(r"要求：(.+?)\n+候选说明：(.+)", body, re.DOTALL)
-        if not fields or not all(filled(v) for v in fields.groups()) or any(
+        fields = re.fullmatch(r"要求：(.*?)\n+候选说明：(.*)", body, re.DOTALL)
+        if not fields or any(
             re.search(r"^(要求|候选说明|来源文件)：", v, re.MULTILINE) for v in fields.groups()
         ):
             example = CANDIDATE_ITEM_TEMPLATE.replace("### 候选 1", header, 1)
@@ -74,6 +80,8 @@ def validate_candidates(text):
                 "保留已提取正文，只修正不合要求的结构。"
                 f"正确条目结构如下（待填写须替换为实际内容）：\n```markdown\n{example}\n```"
             )
+        for label, value in zip(("要求", "候选说明"), fields.groups(), strict=True):
+            check_value(value, f"{header}的{label}")
     return len(numbers)
 
 

@@ -97,6 +97,47 @@ def test_rule_candidate_start_reuses_visible_draft_and_keeps_read_for_recovery()
     assert "不为补回显而固定read" in system
 
 
+def test_rule_candidate_preserves_table_fields_and_tiered_terms():
+    # 只验装载与策略边界；不以字符串存在声称模型已完整提取条件。
+    system = render_prompt(
+        "rule_extraction", stage_instructions=load_prompt("rule_candidate_stage")
+    )
+    for text in (
+        "#### 条件提取与首稿", "原文要求填报的业务字段、单位和时间口径",
+        "证明附件及关联方式", "有效期、出具主体、覆盖对象", "不把所有表头一律判为必填",
+        "也不按每个单元格拆成候选", "示例填值不是招标门槛",
+        "逐档保留触发范围及边界", "各分量对应的阶段，包括零比例项",
+        "起算事件、前置手续、延期或例外", "按原文明示的效力保留现行条件",
+        "表与报告中的编号一致", "不把编号一致只放进候选说明",
+    ):
+        assert text in system
+    assert "${" not in system
+
+
+def test_rule_candidate_deduplicates_only_after_preserving_unique_conditions():
+    stage = load_prompt("rule_candidate_stage")
+    system = render_prompt("rule_extraction", stage_instructions=stage)
+    for text in (
+        "不按原文重复出现次数建条", "只补有用出处",
+        "措辞相同但适用对象或前提不同，不算重复",
+        "先补入保留条目，再删除重复条目",
+        "同一次edit的顺序替换中，不必分成两轮",
+        "必要出处及适用线索也一并保留", "语义关系未确认时保留差异交接",
+        "提交制造商授权文件", "承担连带责任", "不算覆盖责任义务",
+        "不是额外的read、检索或逐项输出检查表步骤",
+    ):
+        assert text in system
+    # 本轮候选策略不移进工具契约，也不再次注入合并阶段System。
+    for text in ("先补入保留条目，再删除重复条目", "示例填值不是招标门槛"):
+        assert text not in load_tool_description("rule_candidates")
+        assert text not in render_prompt("rule_extraction", stage_instructions=load_prompt("rule_merge_stage"))
+    assert "本阶段不提供旧规则视图" in system
+    assert "本阶段不开放search_documents" in system
+    assert "当前候选，不是未提供的旧规则库" in system
+    assert "编号只需唯一，可以不连续" in system
+    assert "finish成功返回全稿及已有规则，下轮才提供" in system
+
+
 def test_rule_candidate_receipt_contract_leaves_formal_submit_unchanged():
     from app.models.rules import RuleCandidatesInput, SubmitRuleDeltaInput
 
@@ -148,6 +189,40 @@ def test_rule_merge_search_targets_unseen_information_not_repeated_self_search()
     assert "用chunklist在其所属授权file_id内定向读取" in system
     assert "不为重复确认相同事实继续换同义词自搜" in system
     assert "不在当前文件反复检索另一文件的正文" in system
+
+
+def test_rule_admission_distinguishes_bid_response_from_future_performance():
+    # 保护提示词装载与边界，不把字符串验收当成真实模型的语义通过率。
+    for stage in ("rule_candidate_stage", "rule_merge_stage"):
+        system = render_prompt("rule_extraction", stage_instructions=load_prompt(stage))
+        assert "准入按以下两步判断" in system
+        assert "这是内容判断，不要求额外调用工具" in system
+        assert "合同、交付、质保、服务等条件被投标响应要求或偏差表明确承接时" in system
+        assert "审核的是投标时是否接受或响应这些条件，不是未来是否已经履行" in system
+        assert "不自行造出一项承诺书要求" in system
+        assert "不因暂时缺证删规则" in system
+        assert "未确定" in system and "requirement仍须包含全部可执行条件、范围与例外" in system
+
+
+def test_rule_merge_compares_saved_conditions_scope_and_real_template_values():
+    stage = load_prompt("rule_merge_stage")
+    system = render_prompt("rule_extraction", stage_instructions=stage)
+    for text in (
+        "读候选的要求与候选说明", "只有所有必要条件均有正文落点",
+        "解释性边界补入它限定的规则", "局部演示不能替代整体方案",
+        "文件标题相似或属于同类产品不足以证明适用于全部采购对象",
+        "与清单行的对应尚未确认", "授权材料未给出的映射不靠推测补齐",
+        "不用空模板覆盖已有有效值", "原文明确定义的公式变量不是空模板",
+        "依据实际保存回执", "不因提交成功等同于语义完整",
+        "无需额外输出逐候选处置表", "不为检查固定追加一次全库read",
+    ):
+        assert text in system
+    # 合并判断留在该阶段System，没有给工具加处置协议或给候选阶段加旧库比较。
+    candidate_stage = load_prompt("rule_candidate_stage")
+    description = load_tool_description("submit_rule_delta")
+    for text in ("只有所有必要条件均有正文落点", "与清单行的对应尚未确认"):
+        assert text not in candidate_stage and text not in description
+    assert "${" not in system
 
 
 def test_missing_prompt_variable_fails_fast():
