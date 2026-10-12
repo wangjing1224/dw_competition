@@ -315,6 +315,60 @@ def _check_batch_completion(final, session):
         raise RuntimeError("模型未返回非空处理结果")
 
 
+def rule_restart_state(progress, project_id, parsed_documents):
+    """验证并取文件起点，绝不在失败文件的增量上直接重新抽取。"""
+    ids = [item.document.file_id for item in parsed_documents]
+    versions = {
+        item.document.file_id: item.markdown_path or item.parser_version or ""
+        for item in parsed_documents
+    }
+    sources = [RuleSourceFile.from_document(item.document) for item in parsed_documents]
+    completed = progress.completed_file_ids
+    if (
+        progress.project_id != project_id
+        or progress.rule_set.project_id != project_id
+        or progress.document_count != len(ids)
+        or not 1 <= progress.document_index <= len(ids)
+        or progress.current_file_id != ids[progress.document_index - 1]
+        or completed != ids[:len(completed)]
+        or len(completed) not in {progress.document_index - 1, progress.document_index}
+        or progress.parser_versions != versions
+        or progress.rule_set.source_files != sources
+    ):
+        raise ValueError("进度与当前文件顺序、归属或解析版本不一致，不能续跑")
+    if progress.current_file_id in completed:
+        # 文件已经保存完成；可能只剩下一文件或正式结果落盘。
+        return progress.rule_set.model_copy(deep=True), list(progress.commits)
+    if progress.file_start_rule_set is not None:
+        count = progress.file_start_commit_count
+        if count is None or count > len(progress.commits):
+            raise ValueError("文件起点的提交记录不完整，不能续跑")
+        rules = progress.file_start_rule_set
+        commits = progress.commits[:count]
+    elif (
+        progress.phase == "extract"
+        and progress.batch_index <= 1
+        and progress.next_unit_index == 0
+    ):
+        # 旧快照的首批候选阶段尚不开放正式提交，现有规则就是文件起点。
+        # 旧合并阶段不猜测如何回滚简介/增量。
+        rules, commits = progress.rule_set, progress.commits
+    else:
+        raise ValueError("此旧进度没有文件起点快照，不能安全撤销失败文件的增量")
+    saved_rules = [*rules.rules, *(r for c in commits for r in [*c.before, *c.after])]
+    if (
+        rules.project_id != project_id
+        or rules.source_files != sources
+        or any(
+            source.file_id not in completed
+            for rule in saved_rules
+            for source in rule.sources
+        )
+    ):
+        raise ValueError("文件起点混入未完成文件的规则，不能续跑")
+    return rules.model_copy(deep=True), list(commits)
+
+
 async def extract_rule_set(
     project_id: str,
     parsed_documents: list[ParsedDocument],
@@ -323,6 +377,7 @@ async def extract_rule_set(
     retrieval_service: RetrievalService,
     settings: AppSettings | None = None,
     progress_callback: RuleProgressCallback | None = None,
+    resume: RuleExtractionProgress | None = None,
 ) -> RuleSet:
     """逐文件、逐完整结构批次处理；同批超限交接续跑，不重放已保存提交。"""
     resolved = settings or get_settings()
@@ -350,8 +405,19 @@ async def extract_rule_set(
         item.document.file_id: item.markdown_path or item.parser_version or ""
         for item in parsed_documents
     }
+    if resume is not None:
+        rule_set, commits = rule_restart_state(resume, project_id, parsed_documents)
+        history = {
+            item.document.file_id: item
+            for item in parsed_documents
+            if item.document.file_id in resume.completed_file_ids
+        }
 
     for index, parsed in enumerate(parsed_documents, 1):
+        if parsed.document.file_id in history:
+            continue
+        file_start_rule_set = rule_set.model_copy(deep=True)
+        file_start_commit_count = len(commits)
 
         async def persist(candidate, records, error=None, completed=None):
             progress = RuleExtractionProgress(
@@ -374,6 +440,8 @@ async def extract_rule_set(
                 phase=session.phase,
                 rule_set=candidate,
                 commits=records,
+                file_start_rule_set=file_start_rule_set,
+                file_start_commit_count=file_start_commit_count,
                 error=error or session.candidate_error or session.unresolved_write_error,
             )
             if progress_callback:

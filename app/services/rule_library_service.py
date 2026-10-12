@@ -497,6 +497,13 @@ class RuleLibraryService:
             "completed_file_ids": completed,
             "saved_rule_count": len(by_id),
             "snapshot_kind": kind,
+            "can_resume": bool(
+                project.status == "rule_failed"
+                and meta.get("failed_phase") in {"extracting", "saving"}
+                and saved is not None
+                and saved.project_id == project_id
+                and warning is None
+            ),
             "files": files,
             "recent_rules": recent,
             # 只读展示索引，来自完整快照；不改变真实规则 ID 或持久化结构。
@@ -512,6 +519,54 @@ class RuleLibraryService:
             if project.error_code
             else warning,
         }
+
+    def claim_resume(self, project_id):
+        """校验后原子占用失败任务，防止重复点击/并发启动。"""
+        from app.services.project_service import ProjectService
+
+        project = self.projects.require(project_id)
+        meta = management(project_id)
+        if project.status != "rule_failed":
+            raise BusinessError(
+                "rule_resume_conflict",
+                "仅失败的规则库可以续跑；任务可能已经启动",
+                http_status=409,
+            )
+        if meta.get("failed_phase") not in {"extracting", "saving"}:
+            raise BusinessError(
+                "rule_resume_unavailable",
+                "尚未完成解析和索引，没有可续跑的规则进度",
+                http_status=409,
+            )
+        try:
+            ProjectService(self.settings).load_resume(project_id)
+            self.check_index(project_id)
+        except (OSError, ValueError, RuntimeError, KeyError, BusinessError) as exc:
+            raise BusinessError(
+                "rule_resume_unavailable",
+                "无法安全续跑：进度或原解析/索引快照缺失、不一致，或旧进度没有失败文件的起点快照；已保存成果未改动",
+                http_status=409,
+            ) from exc
+        with open_db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            changed = db.execute(
+                "UPDATE projects SET status='processing_rules',error_code=NULL,"
+                "error_message=NULL,updated_at=? WHERE project_id=? AND status='rule_failed'",
+                (utc_now(), project_id),
+            ).rowcount
+            if changed != 1:
+                raise BusinessError(
+                    "rule_resume_conflict", "任务已被启动，请刷新进度", http_status=409
+                )
+            meta.update(
+                phase="extracting", failed_phase=None, trace_status="recording",
+                resumed_at=utc_now(), updated_at=utc_now(),
+            )
+            db.execute(
+                "UPDATE project_management SET payload=? WHERE project_id=?",
+                (json.dumps(meta, ensure_ascii=False), project_id),
+            )
+        return {"project_id": project_id, "status": "processing_rules"}
 
     def trace_page(self, project_id, status, after_seq, limit):
         try:

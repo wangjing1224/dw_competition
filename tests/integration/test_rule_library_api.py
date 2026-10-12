@@ -86,6 +86,105 @@ def upload(
     return response, request_id
 
 
+def failed_extraction(env):
+    response, _ = upload(env)
+    pid = response.json()["project_id"]
+    record = FileRepository().list_by_scope(project_id=pid, data_role="rule_source")[0]
+    parsed = persist_parse_result(ParsedDocument(
+        document=document_ref_from_record(record), schema_version=2,
+        source_sha256=record.sha256, parse_status="parsed",
+        sections=[ParsedSection(section_id="s1", title="规范", blocks=[
+            ParsedBlock(kind="text", content="测试要求", source_block_index=0),
+        ])],
+    ))
+    rules = RuleSet(project_id=pid, source_files=[RuleSourceFile.from_document(parsed.document)])
+    saved = RuleExtractionProgress(
+        project_id=pid, document_index=1, document_count=1, current_file_id=record.file_id,
+        parser_versions={record.file_id: parsed.markdown_path}, rule_set=rules,
+        batch_index=1, model_calls=1, error="TimeoutError",
+    )
+    ProjectService(env.settings)._write_rule_progress(saved)
+    ProjectRepository().update_status(pid, "rule_failed", error_code="APITimeoutError", error_message="timeout")
+    update_management(pid, phase="failed", failed_phase="extracting", trace_status="failed", started_at="2026-10-12T00:00:00Z")
+    env.queued.clear()
+    return pid, record, saved
+
+
+def test_resume_admission_only_queues_once_and_preserves_failed_snapshot(env, monkeypatch):
+    pid, _, _ = failed_extraction(env)
+    monkeypatch.setattr(RuleLibraryService, "check_index", lambda *args: None)
+    path = ProjectService(env.settings)._rule_progress_path(pid)
+    before = path.read_bytes()
+    assert env.client.get(f"/api/projects/{pid}/progress").json()["can_resume"]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: env.client.post(f"/api/projects/{pid}/resume"), range(2)))
+    assert sorted(r.status_code for r in responses) == [202, 409]
+    assert len(env.queued) == 1 and path.read_bytes() == before
+    assert ProjectRepository().require(pid).error_code is None
+    assert not env.client.get(f"/api/projects/{pid}/progress").json()["can_resume"]
+
+
+@pytest.mark.parametrize("problem", ["progress_missing", "parse_changed", "index_missing", "legacy_merge"])
+def test_resume_rejects_unsafe_state_without_mutation(env, monkeypatch, problem):
+    pid, record, saved = failed_extraction(env)
+    monkeypatch.setattr(RuleLibraryService, "check_index", lambda *args: None)
+    service = ProjectService(env.settings)
+    if problem == "progress_missing":
+        service._rule_progress_path(pid).unlink()
+    elif problem == "legacy_merge":
+        saved.phase = "merge"
+        service._write_rule_progress(saved)
+    elif problem == "parse_changed":
+        path = env.settings.storage.data_root / "parsed" / f"{record.file_id}.json"
+        parsed = ParsedDocument.model_validate_json(path.read_bytes())
+        parsed.sections[0].blocks[0].content = "新版本"
+        persist_parse_result(parsed)
+    else:
+        def missing(*args):
+            raise FileNotFoundError("index missing")
+        monkeypatch.setattr(RuleLibraryService, "check_index", missing)
+    result = env.client.post(f"/api/projects/{pid}/resume")
+    assert result.status_code == 409
+    assert not env.queued
+    assert ProjectRepository().require(pid).status == "rule_failed"
+    assert ProjectRepository().require(pid).error_code == "APITimeoutError"
+
+
+@pytest.mark.asyncio
+async def test_queued_resume_skips_preprocessing_and_finishes(env, monkeypatch):
+    from app.storage.project_management import management
+    pid, _, saved = failed_extraction(env)
+    monkeypatch.setattr(RuleLibraryService, "check_index", lambda *args: None)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("恢复不应重跑解析或索引")
+    monkeypatch.setattr("app.services.project_service.prepare_document", forbidden)
+    monkeypatch.setattr("app.services.project_service.build_document_index", forbidden)
+    async def extract(project_id, parsed, model, **kwargs):
+        assert kwargs["resume"] == saved
+        return saved.rule_set
+    monkeypatch.setattr("app.services.project_service.extract_rule_set", extract)
+    monkeypatch.setattr("app.services.project_service.build_model_registry", lambda _: SimpleNamespace(rule_extraction=object(), embedding=object(), rerank=object()))
+    assert env.client.post(f"/api/projects/{pid}/resume").status_code == 202
+    fn, args = env.queued[-1]
+    await fn(*args)
+    assert ProjectRepository().require(pid).status == "rule_ready"
+    assert management(pid)["phase"] == "completed"
+    assert management(pid)["trace_status"] == "completed"
+    assert management(pid)["started_at"] == "2026-10-12T00:00:00Z"
+
+
+def test_resume_queue_failure_returns_to_failed(env, monkeypatch):
+    pid, _, _ = failed_extraction(env)
+    monkeypatch.setattr(RuleLibraryService, "check_index", lambda *args: None)
+    def unavailable(*args):
+        raise RuntimeError("runner unavailable")
+    monkeypatch.setattr("app.api.projects.background_runner.submit", unavailable)
+    with pytest.raises(RuntimeError, match="runner unavailable"):
+        env.client.post(f"/api/projects/{pid}/resume")
+    assert ProjectRepository().require(pid).status == "rule_failed"
+    assert env.client.get(f"/api/projects/{pid}/progress").json()["can_resume"]
+
+
 def ready(env, empty=False, *, display_name="测试规则库"):
     response, _ = upload(env, display_name=display_name)
     assert response.status_code == 202, response.text

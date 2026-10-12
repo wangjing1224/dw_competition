@@ -79,6 +79,73 @@ function reply(body: unknown, status = 200) {
 }
 
 describe('投标方资料库', () => {
+  it.each([
+    true,
+    false,
+  ])('资料重试仅确认后提交，受理后重新查询进度（成功=%s）', async (success) => {
+    let resumed = false;
+    const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
+      if (input.endsWith('/resume')) {
+        expect(init?.method).toBe('POST');
+        resumed = success;
+        return reply(
+          success
+            ? { status: 'processing_evidence' }
+            : { error: { message: '恢复进度缺失，摘要保留' } },
+          success ? 202 : 409,
+        );
+      }
+      return reply({
+        bidder_id: 'bidder-1',
+        display_name: '资料重试测试',
+        status: resumed ? 'evidence_ready' : 'evidence_failed',
+        phase: resumed ? 'completed' : 'failed',
+        failed_phase: 'ingesting',
+        can_resume: !resumed,
+        completed_file_ids: ['file-1'],
+        document_count: 2,
+        saved_material_count: 1,
+        files: [],
+        recent_materials: [],
+        trace: null,
+        error: resumed
+          ? null
+          : { code: 'process_interrupted', message: '入库中断' },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    render(
+      <App>
+        <Progress />
+      </App>,
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: '重试失败文件' }),
+    );
+    expect(
+      fetcher.mock.calls.filter(([url]) => url.endsWith('/resume')),
+    ).toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: '确认重试' }));
+    if (success) {
+      await screen.findByText('处理结果已保存');
+      expect(
+        screen.queryByRole('button', { name: '重试失败文件' }),
+      ).not.toBeInTheDocument();
+      expect(
+        fetcher.mock.calls.filter(([url]) => url.includes('/progress')).length,
+      ).toBeGreaterThan(1);
+    } else {
+      await screen.findByText('恢复进度缺失，摘要保留');
+      expect(screen.getByText('入库中断')).toBeInTheDocument();
+      expect(
+        await screen.findByRole('button', { name: '重试失败文件' }),
+      ).toBeInTheDocument();
+    }
+    expect(
+      fetcher.mock.calls.filter(([url]) => url.endsWith('/resume')),
+    ).toHaveLength(1);
+  });
+
   it('资料目录按直接关系双向显示，不推断传递关系', () => {
     const records: Material[] = [
       material,

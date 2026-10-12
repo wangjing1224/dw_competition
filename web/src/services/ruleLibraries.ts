@@ -131,6 +131,7 @@ export type NodeDetail = {
   truncated: boolean;
 };
 export type ProgressData = {
+  can_resume?: boolean;
   project_id: string;
   display_name: string;
   status: string;

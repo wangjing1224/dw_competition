@@ -212,6 +212,9 @@ class RuleExtractionProgress(StrictModel):
     phase: Literal["extract", "merge"] = "extract"
     rule_set: RuleSet
     commits: list[RuleCommitRecord] = Field(default_factory=list)
+    # 文件级重试的起点；只保留当前文件开始前的成果，不保存聊天历史。
+    file_start_rule_set: RuleSet | None = None
+    file_start_commit_count: int | None = Field(default=None, ge=0)
     error: str | None = None
 
 

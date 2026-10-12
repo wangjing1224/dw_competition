@@ -1,6 +1,7 @@
 """管理接口使用临时 SQLite 和解析资产；不连接真实模型或云端检索。"""
 
 import fcntl
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from types import SimpleNamespace
@@ -17,7 +18,7 @@ from app.audit.context import brief_catalog, evidence_view
 from app.core.errors import register_exception_handlers
 from app.evidence.context import render_material
 from app.evidence.local_trace import EvidenceTrace, current_trace, observe_tool_result
-from app.evidence.storage import library_path, load_library, write_library
+from app.evidence.storage import library_path, load_library, progress_path, write_library
 from app.models.documents import (
     ParsedBlock,
     ParsedDocument,
@@ -29,12 +30,14 @@ from app.models.evidence import (
     EvidenceMaterial,
     EvidenceMaterialInput,
     EvidenceSourceFile,
+    EvidenceIngestionProgress,
 )
 from app.parsers.assets import AssetStore, file_asset_root
 from app.parsers.service import persist_parse_result
 from app.storage.bidder_management import mark_interrupted_bidders, update_management
 from app.storage.database import initialize_database
 from app.storage.repositories import BidderRepository, FileRepository
+from app.services.evidence_library_service import EvidenceLibraryService
 
 
 @pytest.fixture
@@ -81,6 +84,120 @@ def upload(
         files=[("files", ("sample.md", content, "text/markdown"))],
     )
     return result, request_id
+
+
+def failed_ingestion(env):
+    response, _ = upload(env)
+    bid = response.json()["bidder_id"]
+    record = FileRepository().list_by_scope(bidder_id=bid, data_role="evidence_material")[0]
+    parsed = persist_parse_result(ParsedDocument(
+        document=document_ref_from_record(record), schema_version=2,
+        source_sha256=record.sha256, parse_status="parsed",
+        sections=[ParsedSection(section_id="s1", title="资料", blocks=[
+            ParsedBlock(kind="text", content="合同内容", source_block_index=0),
+        ])],
+    ))
+    library = EvidenceLibrary(bidder_id=bid, source_files=[EvidenceSourceFile(
+        file_id=record.file_id, file_name=record.file_name, source_path=record.source_path,
+    )])
+    write_library(library, env.settings)
+    saved = EvidenceIngestionProgress(
+        bidder_id=bid, file_ids=[record.file_id], current_file_id=record.file_id,
+        parser_versions={record.file_id: hashlib.sha256(parsed.model_dump_json().encode()).hexdigest()},
+    )
+    progress_path(bid, env.settings).write_text(saved.model_dump_json())
+    BidderRepository().update_status(bid, "evidence_failed", error_code="process_interrupted", error_message="中断")
+    update_management(bid, phase="failed", failed_phase="ingesting", trace_status="interrupted")
+    env.queued.clear()
+    return bid, record, saved
+
+
+def test_resume_queues_once_without_touching_saved_materials(env, monkeypatch):
+    bid, _, _ = failed_ingestion(env)
+    monkeypatch.setattr(EvidenceLibraryService, "check_index", lambda *args: None)
+    before = library_path(bid, env.settings).read_bytes()
+    assert env.client.get(f"/api/bidders/{bid}/progress").json()["can_resume"]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: env.client.post(f"/api/bidders/{bid}/resume"), range(2)))
+    assert sorted(r.status_code for r in results) == [202, 409]
+    assert len(env.queued) == 1
+    assert library_path(bid, env.settings).read_bytes() == before
+    assert not env.client.get(f"/api/bidders/{bid}/progress").json()["can_resume"]
+
+
+@pytest.mark.parametrize("problem", ["parse_changed", "progress_missing", "index_missing", "upload_incomplete", "ready"])
+def test_unsafe_resume_does_not_queue_or_change_status(env, monkeypatch, problem):
+    bid, record, _ = failed_ingestion(env)
+    monkeypatch.setattr(EvidenceLibraryService, "check_index", lambda *args: None)
+    if problem == "parse_changed":
+        path = env.settings.storage.data_root / "parsed" / f"{record.file_id}.json"
+        parsed = ParsedDocument.model_validate_json(path.read_bytes())
+        parsed.sections[0].blocks[0].content = "已变化"
+        persist_parse_result(parsed)
+    elif problem == "progress_missing":
+        progress_path(bid, env.settings).unlink()
+    elif problem == "index_missing":
+        def missing(*args):
+            raise FileNotFoundError("index missing")
+        monkeypatch.setattr(EvidenceLibraryService, "check_index", missing)
+    elif problem == "upload_incomplete":
+        BidderRepository().update_status(bid, "evidence_failed", error_code="upload_incomplete")
+    else:
+        BidderRepository().update_status(bid, "evidence_ready")
+    previous = BidderRepository().require(bid)
+    assert env.client.post(f"/api/bidders/{bid}/resume").status_code == 409
+    assert not env.queued and BidderRepository().require(bid) == previous
+
+
+@pytest.mark.asyncio
+async def test_queued_resume_updates_trace_and_status_without_preprocessing(env, monkeypatch):
+    from app.services.bidder_service import BidderService
+    from app.storage.bidder_management import management
+    bid, record, _ = failed_ingestion(env)
+    monkeypatch.setattr(EvidenceLibraryService, "check_index", lambda *args: None)
+    service = BidderService(env.settings, SimpleNamespace())
+    monkeypatch.setattr("app.api.bidders.build_bidder_service", lambda: service)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("恢复不应重新解析或索引")
+    monkeypatch.setattr("app.services.bidder_service.prepare_document", forbidden)
+    monkeypatch.setattr(service, "_build_index", forbidden)
+    async def ingest(bidder_id, parsed, *, resume=False):
+        assert resume and bidder_id == bid and parsed[0].document.file_id == record.file_id
+        assert current_trace.get().bidder_id == bid
+        return BidderRepository().update_status(bid, "evidence_ready")
+    monkeypatch.setattr(service, "_ingest", ingest)
+    assert env.client.post(f"/api/bidders/{bid}/resume").status_code == 202
+    fn, args = env.queued[-1]
+    await fn(*args)
+    assert BidderRepository().require(bid).status == "evidence_ready"
+    assert management(bid)["phase"] == management(bid)["trace_status"] == "completed"
+    assert current_trace.get() is None
+
+
+@pytest.mark.asyncio
+async def test_resume_factory_failure_is_retryable(env, monkeypatch):
+    bid, _, _ = failed_ingestion(env)
+    monkeypatch.setattr(EvidenceLibraryService, "check_index", lambda *args: None)
+    def unavailable():
+        raise RuntimeError("factory unavailable")
+    monkeypatch.setattr("app.api.bidders.build_bidder_service", unavailable)
+    assert env.client.post(f"/api/bidders/{bid}/resume").status_code == 202
+    fn, args = env.queued[-1]
+    with pytest.raises(RuntimeError, match="factory unavailable"):
+        await fn(*args)
+    assert BidderRepository().require(bid).status == "evidence_failed"
+    assert env.client.get(f"/api/bidders/{bid}/progress").json()["can_resume"]
+
+
+def test_resume_queue_failure_is_retryable(env, monkeypatch):
+    bid, _, _ = failed_ingestion(env)
+    monkeypatch.setattr(EvidenceLibraryService, "check_index", lambda *args: None)
+    def unavailable(*args):
+        raise RuntimeError("runner unavailable")
+    monkeypatch.setattr("app.api.bidders.background_runner.submit", unavailable)
+    assert env.client.post(f"/api/bidders/{bid}/resume").status_code == 500
+    assert BidderRepository().require(bid).status == "evidence_failed"
+    assert env.client.get(f"/api/bidders/{bid}/progress").json()["can_resume"]
 
 
 def ready(env, *, name="资料测试"):

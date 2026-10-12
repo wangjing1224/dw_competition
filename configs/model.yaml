@@ -63,7 +63,7 @@ rule_extraction_model:
   # 百炼阿里云直供模型 ID，不使用 DS 官方的 deepseek-flash 别名。
   model: deepseek-v4.1-flash
   temperature: 0.1
-  timeout_seconds: 120
+  timeout_seconds: 360
   max_retries: 2
   # 每次模型调用前由输入控制器计算真实请求预算。
   context_window_tokens: 1000000

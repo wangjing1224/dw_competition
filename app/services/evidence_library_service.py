@@ -23,6 +23,7 @@ from app.models.evidence import (
     EvidenceIngestionProgress,
     EvidenceLibrary,
     EvidenceMaterial,
+    EvidenceSourceFile,
 )
 from app.retrieval.index import embedding_config_fingerprint
 from app.retrieval.store import CorruptedIndex, IndexRebuildRequired
@@ -36,7 +37,7 @@ from app.storage.library_names import (
     ensure_library_name_available,
     lock_library_names,
 )
-from app.storage.repositories import BidderRepository, FileRepository
+from app.storage.repositories import BidderRepository, FileRepository, utc_now
 
 logger = logging.getLogger(__name__)
 PROCESSING = {"uploading_evidence", "processing_evidence"}
@@ -534,6 +535,14 @@ class EvidenceLibraryService:
             if include_trace
             else None,
             "warning": warning or progress_warning,
+            "can_resume": bool(
+                bidder.status == "evidence_failed"
+                and bidder.error_code != "upload_incomplete"
+                and meta.get("failed_phase") == "ingesting"
+                and saved is not None
+                and library is not None
+                and not (warning or progress_warning)
+            ),
             "error": {
                 "code": bidder.error_code,
                 "message": display_value(bidder.error_message)[0],
@@ -541,6 +550,85 @@ class EvidenceLibraryService:
             if bidder.error_code
             else None,
         }
+
+    def claim_resume(self, bidder_id):
+        """只读检查恢复依据，再原子占用任务；不接收新文件、不调用模型。"""
+        bidder = self.bidders.require(bidder_id)
+        if bidder.status != "evidence_failed":
+            raise BusinessError(
+                "evidence_resume_conflict",
+                "仅失败的资料库可重试，请刷新状态",
+                http_status=409,
+            )
+        meta = management(bidder_id)
+        if (
+            bidder.error_code == "upload_incomplete"
+            or meta.get("failed_phase") != "ingesting"
+        ):
+            raise BusinessError(
+                "evidence_resume_unavailable",
+                "尚无可恢复的资料整理进度，请重新上传",
+                http_status=409,
+            )
+        try:
+            saved, warning = self.saved_progress(bidder_id)
+            library = load_library(bidder_id, self.settings)
+            if saved is None or warning or library is None:
+                raise ValueError("资料或进度缺失")
+            records = self.records(bidder_id)
+            sources, versions = [], {}
+            for record in records:
+                _, parsed = self.sources.parsed(record)
+                if parsed.source_sha256 != record.sha256:
+                    raise ValueError("原文件与解析版本不一致")
+                sources.append(
+                    EvidenceSourceFile(
+                        file_id=record.file_id,
+                        file_name=record.file_name,
+                        source_path=record.source_path,
+                    )
+                )
+                versions[record.file_id] = hashlib.sha256(
+                    parsed.model_dump_json().encode()
+                ).hexdigest()
+            if (
+                library.source_files != sources
+                or saved.parser_versions != versions
+                or saved.completed_file_ids
+                != saved.file_ids[: len(saved.completed_file_ids)]
+                or not set(saved.completed_file_ids)
+                <= {m.file_id for m in library.materials}
+            ):
+                raise ValueError("资料清单、解析版本或完成进度不一致")
+            self.check_index(library)
+        except (OSError, ValueError, RuntimeError, KeyError, BusinessError) as exc:
+            raise BusinessError(
+                "evidence_resume_unavailable",
+                "恢复所需资料、进度或索引不完整或已变化，不能安全重试；已保存资料保留",
+                http_status=409,
+            ) from exc
+        with open_db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            changed = db.execute(
+                "UPDATE bidders SET status='processing_evidence', error_code=NULL, "
+                "error_message=NULL, updated_at=? WHERE bidder_id=? AND status='evidence_failed'",
+                (utc_now(), bidder_id),
+            ).rowcount
+            if changed != 1:
+                raise BusinessError(
+                    "evidence_resume_conflict",
+                    "资料库已在处理，请勿重复重试",
+                    http_status=409,
+                )
+            meta.update(
+                phase="ingesting", failed_phase=None, trace_status="recording",
+                resumed_at=utc_now(), updated_at=utc_now(),
+            )
+            db.execute(
+                "UPDATE bidder_management SET payload=? WHERE bidder_id=?",
+                (json.dumps(meta, ensure_ascii=False), bidder_id),
+            )
+        return {"bidder_id": bidder_id, "status": "processing_evidence"}
 
     def trace_page(self, bidder_id, after_seq, limit):
         try:

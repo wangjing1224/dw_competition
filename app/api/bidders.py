@@ -1,4 +1,4 @@
-"""独立资料库管理入口；仅 GET / POST，不开放追加、重跑或删除。"""
+"""独立资料库管理入口；支持失败恢复，不开放追加、整库重跑或删除。"""
 
 import asyncio
 from typing import Annotated, Literal
@@ -39,6 +39,44 @@ async def process_received_bidder(bidder_id):
                 trace_status="unavailable",
             )
         raise
+
+
+async def resume_received_bidder(bidder_id):
+    try:
+        await build_bidder_service().resume_bidder(bidder_id, claimed=True)
+    except BaseException:
+        if BidderRepository().require(bidder_id).status == "processing_evidence":
+            BidderRepository().update_status(
+                bidder_id,
+                "evidence_failed",
+                error_code="initialization_failed",
+                error_message="后台恢复初始化失败，请查看服务日志；已保存资料保留",
+            )
+            update_management(
+                bidder_id, phase="failed", failed_phase="ingesting",
+                trace_status="partial",
+            )
+        raise
+
+
+@router.post("/{bidder_id}/resume", status_code=202)
+async def resume_bidder(bidder_id: str):
+    result = await asyncio.to_thread(EvidenceLibraryService().claim_resume, bidder_id)
+    try:
+        background_runner.submit(resume_received_bidder, bidder_id)
+    except Exception:
+        BidderRepository().update_status(
+            bidder_id,
+            "evidence_failed",
+            error_code="resume_start_failed",
+            error_message="重试任务未能启动，请稍后重试；已保存资料保留",
+        )
+        update_management(
+            bidder_id, phase="failed", failed_phase="ingesting",
+            trace_status="partial",
+        )
+        raise
+    return result
 
 
 @router.post("")

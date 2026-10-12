@@ -14,6 +14,7 @@ from app.core.errors import BusinessError
 from app.services.background_runner import background_runner
 from app.services.container import build_project_service
 from app.services.rule_library_service import RuleLibraryService
+from app.storage.project_management import update_management
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -98,6 +99,27 @@ def project_progress(
 def trace_detail(project_id: str, span_id: str, response: Response):
     response.headers["Cache-Control"] = "no-store"
     return RuleLibraryService().trace_detail(project_id, span_id)
+
+
+@router.post("/{project_id}/resume", status_code=202)
+async def resume_project(project_id: str):
+    service = build_project_service()
+    result = await asyncio.to_thread(RuleLibraryService().claim_resume, project_id)
+    try:
+        background_runner.submit(service.resume_project, project_id)
+    except Exception:
+        service.repository.update_status(
+            project_id,
+            "rule_failed",
+            error_code="resume_start_failed",
+            error_message="续跑未能启动，已保存成果保留，可再次尝试",
+        )
+        update_management(
+            project_id, phase="failed", failed_phase="extracting",
+            trace_status="partial",
+        )
+        raise
+    return result
 
 
 @router.post("/{project_id}/edit")

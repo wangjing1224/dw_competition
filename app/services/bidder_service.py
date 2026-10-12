@@ -73,10 +73,11 @@ class BidderService:
             )
             raise
 
-    async def resume_bidder(self, bidder_id: str) -> BidderRecord:
-        """恢复本次已上传文件，不接受新上传、不重跑已完成文件；管理接口暂不开放。"""
+    async def resume_bidder(self, bidder_id: str, *, claimed=False) -> BidderRecord:
+        """恢复固定上传批次；HTTP 入口已原子占用状态，不重跑已完成文件。"""
         bidder = self.bidder_repository.require(bidder_id)
-        if bidder.status != "evidence_failed":
+        expected = "processing_evidence" if claimed else "evidence_failed"
+        if bidder.status != expected:
             raise ValueError("仅允许恢复失败的本批入库，不能重跑已完成资料库")
         if bidder.error_code == "upload_incomplete":
             raise ValueError(
@@ -89,8 +90,13 @@ class BidderService:
         if not documents:
             raise ValueError("没有可恢复的上传文件")
         has_progress = progress_path(bidder_id, self.settings).exists()
+        trace = EvidenceTrace(bidder_id)
+        token = current_trace.set(trace)
+        failure = None
+        phase = "ingesting" if has_progress else "parsing"
         try:
             self.bidder_repository.update_status(bidder_id, "processing_evidence")
+            update_management(bidder_id, phase=phase, trace_status="recording")
             parsed = []
             for document in documents:
                 try:
@@ -102,15 +108,26 @@ class BidderService:
                         )
                     parsed.append(await prepare_document(document))
             if not has_progress:
+                phase = "indexing"
+                update_management(bidder_id, phase=phase)
                 await self._build_index(bidder_id, documents)
-            return await self._ingest(
+            phase = "ingesting"
+            update_management(bidder_id, phase=phase)
+            result = await self._ingest(
                 bidder_id,
                 parsed,
                 resume=has_progress or library_path(bidder_id, self.settings).exists(),
             )
-        except Exception as exc:
+            update_management(bidder_id, phase="completed", current_file_id=None)
+            return result
+        except BaseException as exc:
+            failure = exc
             self._failed(bidder_id, exc)
+            update_management(bidder_id, phase="failed", failed_phase=phase)
             raise
+        finally:
+            trace.close(failure)
+            current_trace.reset(token)
 
     async def process_bidder(self, bidder_id: str) -> BidderRecord:
         """新管理接口已固定上传清单；从登记 ID 重开文件执行，不再读取请求流。"""

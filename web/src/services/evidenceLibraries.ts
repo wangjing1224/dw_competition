@@ -83,6 +83,7 @@ export type Creation = {
   reused: boolean;
 };
 export type ProgressData = {
+  can_resume?: boolean;
   bidder_id: string;
   display_name: string;
   status: string;

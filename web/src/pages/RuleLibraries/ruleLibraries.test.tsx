@@ -42,6 +42,84 @@ afterEach(() => {
 });
 
 describe('规则库工作台', () => {
+  it.each([
+    true,
+    false,
+  ])('失败文件重试需确认，成功恢复轮询，失败保留现场（成功=%s）', async (success) => {
+    let resumed = false;
+    const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
+      if (input.endsWith('/resume')) {
+        expect(init?.method).toBe('POST');
+        resumed = success;
+        return {
+          ok: success,
+          status: success ? 202 : 409,
+          json: async () =>
+            success
+              ? { status: 'processing_rules' }
+              : { error: { message: '进度不完整，已保存成果保留' } },
+        };
+      }
+      return {
+        ok: true,
+        json: async () =>
+          input.includes('/progress')
+            ? {
+                project_id: 'project-1',
+                display_name: '重试测试',
+                status: resumed ? 'rule_ready' : 'rule_failed',
+                phase: resumed ? 'completed' : 'failed',
+                failed_phase: 'extracting',
+                can_resume: !resumed,
+                completed_file_ids: ['file-1'],
+                document_count: 2,
+                saved_rule_count: 3,
+                files: [],
+                recent_rules: [],
+                rule_order: [],
+                error: resumed
+                  ? null
+                  : { code: 'timeout', message: '调用超时' },
+                trace: null,
+              }
+            : { project: { project_id: 'project-1' }, rule_set: { rules: [] } },
+      };
+    });
+    vi.stubGlobal('fetch', fetcher);
+    render(
+      <App>
+        <ProgressPage />
+      </App>,
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: '重试失败文件' }),
+    );
+    expect(
+      fetcher.mock.calls.filter(([url]) => url.endsWith('/resume')),
+    ).toHaveLength(0);
+    fireEvent.click(await screen.findByRole('button', { name: '确认重试' }));
+    if (success) {
+      await waitFor(() =>
+        expect(
+          screen.queryByRole('button', { name: '重试失败文件' }),
+        ).not.toBeInTheDocument(),
+      );
+      await screen.findByText('处理完成，但未提取到规则');
+      expect(
+        fetcher.mock.calls.filter(([url]) => url.includes('/progress')).length,
+      ).toBeGreaterThan(1);
+    } else {
+      await screen.findByText('进度不完整，已保存成果保留');
+      expect(screen.getByText('调用超时')).toBeInTheDocument();
+      expect(
+        await screen.findByRole('button', { name: '重试失败文件' }),
+      ).toBeInTheDocument();
+    }
+    expect(
+      fetcher.mock.calls.filter(([url]) => url.endsWith('/resume')),
+    ).toHaveLength(1);
+  });
+
   it('规则按完整库编号，搜索/编辑只换展示，不改提交的真实 ID', async () => {
     const source = {
       file_id: 'file-38',
@@ -156,9 +234,13 @@ describe('规则库工作台', () => {
       <>
         <style>{readFileSync('src/global.less', 'utf8')}</style>
         <div className="category-chips">
-          {Object.entries(categories).slice(0, count).map(([key, label], i) => (
-            <Tag key={key}>{label} {i + 1}</Tag>
-          ))}
+          {Object.entries(categories)
+            .slice(0, count)
+            .map(([key, label], i) => (
+              <Tag key={key}>
+                {label} {i + 1}
+              </Tag>
+            ))}
         </div>
       </>,
     );

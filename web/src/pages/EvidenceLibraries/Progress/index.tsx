@@ -1,7 +1,7 @@
 import EntityLabel from '@/components/EntityLabel';
 import { fileLabel } from '@/utils/displayLabels';
 import { Link, useParams } from '@umijs/max';
-import { Alert, Button, Card, Drawer, Empty, Steps } from 'antd';
+import { Alert, Button, Card, Drawer, Empty, Popconfirm, Steps } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   mergeChanges,
@@ -32,6 +32,35 @@ export default function Progress() {
   const [error, setError] = useState('');
   const [detailError, setDetailError] = useState('');
   const [reload, setReload] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState('');
+  const retryLock = useRef(false);
+  async function resume() {
+    if (retryLock.current) return;
+    retryLock.current = true;
+    setRetrying(true);
+    setRetryError('');
+    try {
+      await api(`/${bidderId}/resume`, { method: 'POST' });
+      setData(
+        (old) =>
+          old && {
+            ...old,
+            can_resume: false,
+            error: null,
+            status: 'processing_evidence',
+          },
+      );
+      setReload((n) => n + 1);
+    } catch (e) {
+      setRetryError((e as Error).message);
+      // 受理响应丢失也可能已经启动，重新查询而不是重复提交。
+      setReload((n) => n + 1);
+    } finally {
+      retryLock.current = false;
+      setRetrying(false);
+    }
+  }
   const [previewFile, setPreviewFile] = useState<string>();
   const read = useCallback(
     <T,>(path: string, init?: RequestInit) =>
@@ -120,12 +149,37 @@ export default function Progress() {
         }
       />
       {error && <Failure error={error} retry={() => setReload((n) => n + 1)} />}
+      {retryError && (
+        <Alert
+          className="section-gap"
+          type="error"
+          showIcon
+          title="重试未能启动"
+          description={retryError}
+        />
+      )}
       {data?.error && (
         <Alert
           className="section-gap"
           type="error"
           title={data.error.message}
           description={`失败阶段：${phases[data.failed_phase || ''] || '未知'}；已保存资料与原件保留，不自动重跑。`}
+          action={
+            data.can_resume && (
+              <Popconfirm
+                title="从失败文件继续整理？"
+                description="保留已保存资料，跳过已完成文件，恢复当前文件未完成的阅读批次并继续剩余文件。"
+                okText="确认重试"
+                cancelText="取消"
+                onConfirm={resume}
+                disabled={retrying}
+              >
+                <Button type="primary" loading={retrying} aria-label="重试失败文件">
+                  重试失败文件
+                </Button>
+              </Popconfirm>
+            )
+          }
         />
       )}
       {data?.warning && (

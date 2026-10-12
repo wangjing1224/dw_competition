@@ -14,10 +14,11 @@ from app.parsers.service import prepare_document
 from app.retrieval.index import build_document_index
 from app.retrieval.models import IndexScope
 from app.retrieval.service import RetrievalService
-from app.rules.extractor import extract_rule_set
+from app.rules.extractor import extract_rule_set, rule_restart_state
 from app.rules.local_trace import LocalTrace, current_trace
+from app.services.source_preview import SourcePreviewService
 from app.storage.file_store import FileOwner, FileStore
-from app.storage.project_management import update_management
+from app.storage.project_management import management, update_management
 from app.storage.repositories import (
     FileRepository,
     ProjectRecord,
@@ -66,43 +67,80 @@ class ProjectService:
             raise
         return await self.process_project(project.project_id)
 
-    async def process_project(self, project_id: str) -> ProjectRecord:
+    def load_resume(self, project_id: str):
+        """只读校验旧进度与原解析快照；不重新解析、不调用模型。"""
+        progress = RuleExtractionProgress.model_validate_json(
+            self._rule_progress_path(project_id).read_bytes()
+        )
+        records = FileRepository().list_by_scope(
+            project_id=project_id, data_role="rule_source"
+        )
+        preview = SourcePreviewService(self.settings, self.file_store)
+        parsed = []
+        for record in records:
+            _, document = preview.parsed(record)
+            if (
+                document.source_sha256 != record.sha256
+                or document.document.file_name != record.file_name
+                or document.document.source_path != record.source_path
+                or document.parse_status not in {"parsed", "partial", "ocr_required"}
+            ):
+                raise ValueError("原文件与解析快照不一致，不能续跑")
+            parsed.append(document)
+        rule_restart_state(progress, project_id, parsed)
+        return progress, parsed
+
+    async def resume_project(self, project_id: str) -> ProjectRecord:
+        return await self.process_project(project_id, resume=True)
+
+    async def process_project(
+        self, project_id: str, *, resume: bool = False
+    ) -> ProjectRecord:
         project = self.repository.require(project_id)
+        if resume and project.status != "processing_rules":
+            raise ValueError("规则库未受理重试或已经结束，请刷新状态")
         trace = LocalTrace(project_id)
         token = current_trace.set(trace)
         failure = None
-        phase = "received"
+        phase = "extracting" if resume else "received"
         try:
             update_management(
-                project_id, phase=phase, started_at=utc_now(), trace_status="recording"
+                project_id,
+                phase=phase,
+                started_at=management(project_id).get("started_at") or utc_now(),
+                trace_status="recording",
             )
             # 在后台才构造模型，配置错误也能通过进度接口查看，而非丢失上传结果。
             models = self.models or build_model_registry(self.settings)
-            records = FileRepository().list_by_scope(
-                project_id=project_id, data_role="rule_source"
-            )
-            documents = [document_ref_from_record(record) for record in records]
-            parsed = []
-            phase = "parsing"
-            for document in documents:
-                update_management(
-                    project_id, phase=phase, current_file_id=document.file_id
+            checkpoint = None
+            if resume:
+                checkpoint, parsed = self.load_resume(project_id)
+            else:
+                records = FileRepository().list_by_scope(
+                    project_id=project_id, data_role="rule_source"
                 )
-                parsed.append(await prepare_document(document))
-            if not parsed:
-                raise ValueError("没有待处理招标文件")
-            phase = "indexing"
-            update_management(project_id, phase=phase, current_file_id=None)
-            await build_document_index(
-                IndexScope(
-                    scope_id=f"rules-{project.project_id}",
-                    data_role="rule_source",
-                    project_id=project.project_id,
-                ),
-                documents,
-                models.embedding,
-                self.settings,
-            )
+                documents = [document_ref_from_record(record) for record in records]
+                parsed = []
+                phase = "parsing"
+                for document in documents:
+                    update_management(
+                        project_id, phase=phase, current_file_id=document.file_id
+                    )
+                    parsed.append(await prepare_document(document))
+                if not parsed:
+                    raise ValueError("没有待处理招标文件")
+                phase = "indexing"
+                update_management(project_id, phase=phase, current_file_id=None)
+                await build_document_index(
+                    IndexScope(
+                        scope_id=f"rules-{project.project_id}",
+                        data_role="rule_source",
+                        project_id=project.project_id,
+                    ),
+                    documents,
+                    models.embedding,
+                    self.settings,
+                )
             phase = "extracting"
             update_management(project_id, phase=phase)
             extracted = await extract_rule_set(
@@ -114,6 +152,7 @@ class ProjectService:
                     models.embedding, models.rerank, self.settings
                 ),
                 progress_callback=self._write_rule_progress,
+                **({"resume": checkpoint} if resume else {}),
             )
             phase = "saving"
             update_management(project_id, phase=phase, current_file_id=None)

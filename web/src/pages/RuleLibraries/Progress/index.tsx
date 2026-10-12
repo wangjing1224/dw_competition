@@ -1,6 +1,15 @@
 import { NodeIndexOutlined } from '@ant-design/icons';
 import { Link, useParams } from '@umijs/max';
-import { Alert, Button, Card, Drawer, Empty, Space, Steps } from 'antd';
+import {
+  Alert,
+  Button,
+  Card,
+  Drawer,
+  Empty,
+  Popconfirm,
+  Space,
+  Steps,
+} from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import {
   mergeChanges,
@@ -34,6 +43,35 @@ export default function ProgressPage() {
   const [detailError, setDetailError] = useState('');
   const [reload, setReload] = useState(0);
   const [final, setFinal] = useState<Detail>();
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState('');
+  const retryLock = useRef(false);
+  async function resume() {
+    if (retryLock.current) return;
+    retryLock.current = true;
+    setRetrying(true);
+    setRetryError('');
+    try {
+      await api(`/${projectId}/resume`, { method: 'POST' });
+      setData(
+        (old) =>
+          old && {
+            ...old,
+            can_resume: false,
+            error: null,
+            status: 'processing_rules',
+          },
+      );
+      setReload((n) => n + 1);
+    } catch (e) {
+      setRetryError((e as Error).message);
+      // 请求超时或另一页面已受理时，以服务端状态为准，避免停留在旧失败页。
+      setReload((n) => n + 1);
+    } finally {
+      retryLock.current = false;
+      setRetrying(false);
+    }
+  }
   const cursor = useRef(0);
   useEffect(() => {
     const controller = new AbortController();
@@ -52,6 +90,7 @@ export default function ProgressPage() {
             `/${projectId}/progress?include_trace=true&after_seq=${cursor.current}&limit=100`,
             { signal: controller.signal },
           );
+          if (controller.signal.aborted) return;
           setData(result);
           setError('');
           setNodes((old) => mergeChanges(old, result.trace?.changes || []));
@@ -124,6 +163,15 @@ export default function ProgressPage() {
         }
       />
       {error && <Failure error={error} retry={() => setReload((n) => n + 1)} />}
+      {retryError && (
+        <Alert
+          className="section-gap"
+          type="error"
+          showIcon
+          title="重试未能启动"
+          description={retryError}
+        />
+      )}
       {data?.error && (
         <Alert
           className="section-gap"
@@ -131,6 +179,22 @@ export default function ProgressPage() {
           showIcon
           title={data.error.message}
           description={`失败阶段：${phases[data.failed_phase || ''] || '未知'}。已保存的规则和原文件保留，不自动重跑。`}
+          action={
+            data.can_resume && (
+              <Popconfirm
+                title="从失败文件重新开始？"
+                description="已完成文件的规则保留；失败文件的候选和本次增量撤回后重新抽取，随后继续剩余文件。"
+                okText="确认重试"
+                cancelText="取消"
+                onConfirm={resume}
+                disabled={retrying}
+              >
+                <Button type="primary" loading={retrying} aria-label="重试失败文件">
+                  重试失败文件
+                </Button>
+              </Popconfirm>
+            )
+          }
         />
       )}
       <Card className="section-gap">
