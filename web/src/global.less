@@ -349,7 +349,13 @@ body {
   min-height: 44px;
   display: flex;
   flex-wrap: wrap;
+  /* 保留分类区高度，但不把单行标签拉伸成高色块。 */
+  align-items: flex-start;
+  align-content: flex-start;
   gap: 6px;
+}
+.category-chips > .ant-tag {
+  margin: 0;
 }
 .library-footer {
   display: flex;

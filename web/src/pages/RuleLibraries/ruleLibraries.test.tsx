@@ -8,13 +8,14 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import { App } from 'antd';
+import { App, Tag } from 'antd';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { layout } from '@/app';
 import {
   ApiError,
   api,
+  categories,
   download,
   type TraceNode,
 } from '@/services/ruleLibraries';
@@ -149,6 +150,29 @@ describe('规则库工作台', () => {
     expect(screen.getByText('审')).toBeInTheDocument();
     rerender(sidebar(false));
     expect(screen.getByText(/智能整理 · 依据可查/)).toBeInTheDocument();
+  });
+  it.each([0, 1, 3, 6])('分类区有 %i 个标签时保留换行且不纵向拉伸', (count) => {
+    const { container } = render(
+      <>
+        <style>{readFileSync('src/global.less', 'utf8')}</style>
+        <div className="category-chips">
+          {Object.entries(categories).slice(0, count).map(([key, label], i) => (
+            <Tag key={key}>{label} {i + 1}</Tag>
+          ))}
+        </div>
+      </>,
+    );
+    const chips = container.querySelector('.category-chips') as HTMLElement;
+    // jsdom不计算真实换行位置；检查防拉伸及统一间距的样式契约。
+    const styles = getComputedStyle(chips);
+    expect(styles.display).toBe('flex');
+    expect(styles.flexWrap).toBe('wrap');
+    expect(styles.alignItems).toBe('flex-start');
+    expect(styles.alignContent).toBe('flex-start');
+    expect(styles.gap).toBe('6px');
+    const tags = chips.querySelectorAll('.ant-tag');
+    expect(tags).toHaveLength(count);
+    tags.forEach((tag) => expect(getComputedStyle(tag).margin).toBe('0px'));
   });
   it('切换有数据和空状态时保持相同的满宽容器，空提示在列表内部', async () => {
     const styles = readFileSync('src/global.less', 'utf8');
