@@ -11,7 +11,7 @@ from app.models.rules import RuleCandidatesInput, RuleCommitRecord, RuleSet, Sub
 from app.prompts.loader import load_tool_description
 from app.retrieval.models import IndexFilter
 from app.retrieval.service import RetrievalService
-from app.rules.context import CANDIDATE_TEMPLATE, build_rule_view, candidate_status, rule_working_context, validate_candidates
+from app.rules.context import build_rule_view, candidate_status, rule_working_context, validate_candidates
 from app.rules.merger import apply_rule_delta_operations
 from app.rules.policies import handle_rule_limit_exceeded
 from app.tools.common_tools import apply_text_edits
@@ -50,7 +50,7 @@ class RuleSession:
     compaction_calls: int = 0
     compaction_records: list[dict] = field(default_factory=list)
     last_budget: dict = field(default_factory=dict)
-    candidate_draft: str = CANDIDATE_TEMPLATE
+    candidate_draft: str = ""
     phase: str = "extract"
     candidate_error: str | None = None
     merge_tool_round_seen: bool = False

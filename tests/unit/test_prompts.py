@@ -90,6 +90,9 @@ def test_rule_candidate_start_reuses_visible_draft_and_keeps_read_for_recovery()
     assert "#### 本批起步" in system
     assert "首轮直接edit" in system
     assert "old_text逐字取自Human中的当前稿" in system
+    assert "新文件的候选稿是空字符串" in system
+    assert "空稿时old_text填空字符串" in system
+    assert "不使用write或额外content参数" in system
     assert "无需先read获取模板或确认草稿初始化" in system
     assert "只有无法确定当前待修改文本时才read" in system
     assert "不要求首轮强行保存尚未确认的条件" in system
@@ -121,8 +124,8 @@ def test_rule_candidate_deduplicates_only_after_preserving_unique_conditions():
         "不按原文重复出现次数建条", "只补有用出处",
         "措辞相同但适用对象或前提不同，不算重复",
         "先补入保留条目，再删除重复条目",
-        "同一次edit的顺序替换中，不必分成两轮",
-        "必要出处及适用线索也一并保留", "语义关系未确认时保留差异交接",
+        "同一次edit的顺序替换中完成，不必分成两轮",
+        "必要出处及适用线索也一并保留", "独有条件尚未迁入保留条目时，先保留原候选",
         "提交制造商授权文件", "承担连带责任", "不算覆盖责任义务",
         "不是额外的read、检索或逐项输出检查表步骤",
     ):
@@ -154,6 +157,17 @@ def test_rule_candidate_receipt_contract_leaves_formal_submit_unchanged():
     assert "changed 返回整批最终新增或修改" in load_tool_description("submit_rule_delta")
 
 
+def test_audit_save_progress_is_advisory_without_hard_gate():
+    system = load_prompt("bid_agent")
+    description = load_tool_description("report_document")
+    assert "待保存列表仅作提醒" in system
+    assert "只提供report_document" not in system
+    assert "提醒不阻止继续使用其他授权工具或结束会话" in system
+    assert "不限制其他授权工具" in description
+    assert "write/edit的简短保存回执；不返回变更正文" in description
+    assert "不是独立定稿条件" in load_prompt("audit_report_template")
+
+
 def test_rule_phases_separate_extraction_from_condition_level_merging():
     extract = render_prompt("rule_extraction", stage_instructions=load_prompt("rule_candidate_stage"))
     merge = render_prompt("rule_extraction", stage_instructions=load_prompt("rule_merge_stage"))
@@ -170,7 +184,7 @@ def test_rule_phases_separate_extraction_from_condition_level_merging():
         assert "原文只要求响应或承诺时用 bid_only" in text
         assert "必须以实际材料证明的条件用 evidence_check" in text
     description = load_tool_description("rule_candidates")
-    assert "可以不连续" in description and "前项也不落盘" in description
+    assert "可以不连续" in extract and "前项也不落盘" in description
     assert "出具机构资质、报告覆盖的型号和有效期" not in description
     assert "空值兼容" in load_tool_description("submit_rule_delta")
 
@@ -442,7 +456,8 @@ def test_tool_norms_only_list_role_tools_once(name, variables, tool_names):
 
     system = render_prompt(name, **variables)
     assert system.count("## 工具使用规范") == 1
-    assert re.findall(r"^### (.+)$", system, re.M) == ["通用规则", *tool_names]
+    prose = re.sub(r"```[^\n]*\n.*?\n```", "", system, flags=re.S)
+    assert re.findall(r"^### (.+)$", prose, re.M) == ["通用规则", *tool_names]
     assert "同名工具多次调用" in system and "系统顺序执行" in system
     assert "不以打印预设答案冒充验证" in system
     assert "不同调用不共享变量" in system
@@ -545,7 +560,7 @@ def test_every_documented_call_uses_the_exposed_tool_schema(
 @pytest.mark.parametrize("name,variables,headings", [
     ("rule_extraction", {"stage_instructions"}, ["准入与粒度", "分类和等级", "工具使用规范", "依据与项目简介", "阅读与结束"]),
     ("bid_agent", {"rule_view", "report_markdown_contract"}, [
-        "职责与边界", "工具使用规范", "事实采用与核验边界", "负面理由与适用性",
+        "职责与边界", "工具使用规范", "事实采用与核验边界", "逐项判定顺序",
         "资料核验交接", "依据与来源保存", "成果与收尾", "本次完整规则（业务数据）",
     ]),
     ("evidence_subagent", set(), ["工具使用规范", "事实与支持范围", "核验返回"]),
@@ -600,7 +615,7 @@ def test_task36_main_child_handoff_and_evidence_boundaries_are_synchronized():
     assert "子返回的“未取得支持”不是“已反证”" in main
     assert "存在明确反证时也一并返回" in child
     assert "未受影响的充分事实仍可采用" in main
-    assert "相关核验尚未进行或仅因工具失败未完成，则保留待填写" in main
+    assert "相关核验尚未进行或仅因工具失败未完成，则记录未完成及进度说明" in main
     assert "未完成的读取或工具失败另说明执行缺口" in child
     assert "不能用“人工复核”填满尚未核验的块" in main
     assert "整条规则由主审判断" in child
@@ -608,6 +623,98 @@ def test_task36_main_child_handoff_and_evidence_boundaries_are_synchronized():
     assert "无法证明不等于已证明违反，也不等于已符合" in template
     assert "未受这些限制影响的明确反证仍按规则判断" in template
     assert "互换依据类型仍按事实判断" in template
+
+
+def test_task38_candidate_keeps_differences_without_whole_draft_cleanup():
+    prompt = render_prompt(
+        "rule_extraction", stage_instructions=load_prompt("rule_candidate_stage")
+    )
+    for text in (
+        "先确定适用对象、动作与响应或材料承接依据",
+        "不因格式整理重写无变化条目",
+        "不以缩稿作为finish的前提",
+        "只有对象、范围及全部必要条件确实等价才清理冗余",
+        "独有条件尚未迁入保留条目时，先保留原候选",
+        "格式修复只改结构，不顺便重写要求或连续重编号",
+        "本阶段不开放search_documents",
+    ):
+        assert text in prompt
+
+
+def test_task38_merge_preserves_candidate_terms_and_project_identity():
+    prompt = render_prompt(
+        "rule_extraction", stage_instructions=load_prompt("rule_merge_stage")
+    )
+    for text in (
+        "优先直接沿用候选要求正文", "不为文字更短重新归纳",
+        "未明关系保持未明", "无需统一到一条的独立义务保持分开",
+        "本批真正新增、删除、更正的条件及受影响的requirement/reason",
+        "不以手写编号清单或沙箱打印“全部保存”证明覆盖",
+        "只有这些信息新增或纠正时", "否则填null",
+        "不覆盖项目简介", "不做全库数字或短语替换",
+    ):
+        assert text in prompt
+    description = load_tool_description("submit_rule_delta")
+    assert "project_profile是用于相关性路由的完整项目简介" in description
+    assert "不是本批执行进度或抽取统计" in description
+    assert "没有简介更新时填null" in description
+    assert "优先直接沿用候选要求正文" not in description
+
+
+def test_task38_acceptance_materials_and_performance_are_distinct_across_prompts():
+    rule = render_prompt(
+        "rule_extraction", stage_instructions=load_prompt("rule_merge_stage")
+    )
+    main = render_prompt("bid_agent", rule_view="规则", report_markdown_contract="契约")
+    contract = render_prompt("audit_report_template")
+    assert "一般接受或无偏差机制时，把该承接方式一并写入要求" in rule
+    assert "独立报价表仍是实际内容要求，不能被统一接受覆盖" in rule
+    assert "只规定未来实际履约管理、没有当前响应承接要求的" in rule
+    for prompt in (rule, main, contract):
+        assert "一般接受" in prompt and "独立材料" in prompt
+    assert "招标原文明示允许一般接受或无偏差机制、当前投标确已承接且范围一致" in main
+    assert "不把无命中或沉默自动当作接受" in main
+    assert "不额外索要尚未发生的维修单" in main
+    assert "不证明已经履约，不替代独立材料、报价、签章或具体数值" in contract
+
+
+def test_task38_audit_orders_decision_boundaries_without_new_output_fields():
+    # 保护提示词顺序与契约；不能据字符串测试宣称模型已正确核审。
+    prompt = render_prompt("bid_agent", rule_view="规则", report_markdown_contract="契约")
+    section = prompt.split("## 逐项判定顺序\n", 1)[1].split("## 资料核验交接", 1)[0]
+    steps = (
+        "1. 确认对象、版本、触发条件及判断层",
+        "2. 先看明确反例", "3. 无明确反例时，核对接受机制",
+        "4. 以缺项为理由前，确认相关提交范围",
+        "5. 比较时保留列名、对象、比较符和单位",
+        "6. 按规则原有且/或、前提和例外综合",
+    )
+    assert [section.index(step) for step in steps] == sorted(section.index(step) for step in steps)
+    for text in (
+        "局部义务范围已完整可核时，不要求先确认所有无关文件",
+        "不能消除该独立反证", "不新增“不适用”枚举", "不机械输出整套检查步骤",
+        "文件名称也不证明提交范围完整", "不自动证明真实主体不具资格",
+        "不能把测试/展示副本的处理归责于投标人",
+        "采用成功沙箱结果或同输入同口径的成功结果",
+    ):
+        assert text in section
+    assert "## 负面理由与适用性" not in prompt  # 合并替换，不叠一套旧原则。
+
+
+def test_task38_child_keeps_fact_adjacent_keys_without_a_source_inventory():
+    prompt = render_prompt("evidence_subagent")
+    for text in (
+        "详细摘要、实际检索、实际看图或成功代码结果",
+        "未回读原件不冒称已验证原件",
+        "存在明确反证时也一并返回",
+        "完整来源键紧邻该事实", "不在结尾再复制整份读取清单",
+        "已登记的键只说明读取过", "整条规则由主审判断",
+        "不为取得chunk_id而额外回读", "不要输出 JSON、content 外壳、状态枚举或来源数组",
+    ):
+        assert text in prompt
+    description = load_tool_description("request_evidence_review")
+    assert "系统标题包含check序号及关联rule_ids，随后为子核验正文" in description
+    assert "读取清单" not in description
 
 
 @pytest.mark.parametrize("example_index", [0, 1])

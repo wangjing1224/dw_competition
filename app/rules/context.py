@@ -23,14 +23,12 @@ PRIORITY_LABELS = {"critical": "关键", "important": "重要", "normal": "普�
 VERIFICATION_LABELS = {"bid_only": "投标文件内核验", "evidence_check": "投标方资料核验"}
 
 CANDIDATE_ITEM_TEMPLATE = "### 候选 1\n\n要求：待填写。\n\n候选说明：待填写。"
-CANDIDATE_TEMPLATE = (
-    "# 当前文件候选草稿\n\n候选简介：待填写。\n\n## 候选清单\n\n"
-    f"{CANDIDATE_ITEM_TEMPLATE}\n"
-)
 
 
 def validate_candidates(text):
     """只验证单稿结构，不推断是否遗漏条件或已经合并。"""
+    if not text.strip():
+        raise ValueError("候选稿为空，尚未建立首稿；按System格式使用edit保存后再finish")
     pattern = re.compile(r"^#{1,6} .+$", re.MULTILINE)
     matches = list(pattern.finditer(text))
     headers = [m[0] for m in matches]
@@ -87,8 +85,11 @@ def validate_candidates(text):
 
 def candidate_status(session):
     try:
-        count = validate_candidates(session.candidate_draft)
-        check = f"结构校验通过，候选{count}项（不代表条件已全部提取）"
+        if session.candidate_draft == "":
+            check = "当前候选稿为空；首稿用edit，old_text填空字符串，格式见System。"
+        else:
+            count = validate_candidates(session.candidate_draft)
+            check = f"结构校验通过，候选{count}项（不代表条件已全部提取）"
     except ValueError as exc:
         check = f"结构待修正：{exc}"
     return f"当前阶段：{session.phase}\n{check}\n未解决编辑错误：{session.candidate_error or '无'}\n正式提交错误：{session.unresolved_write_error or '无'}"

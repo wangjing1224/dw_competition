@@ -149,8 +149,6 @@ def filled_report(
 
 def candidate_response(requirement, explanation="本批原文明示的要求。"):
     """脚本模型同轮编辑候选并finish，仍经过真实阶段和文本校验。"""
-    from app.rules.context import CANDIDATE_TEMPLATE
-
     draft = (
         "# 当前文件候选草稿\n\n候选简介：" + requirement
         + "\n\n## 候选清单\n\n### 候选 1\n\n要求：" + requirement
@@ -158,7 +156,7 @@ def candidate_response(requirement, explanation="本批原文明示的要求。"
     )
     return AIMessage(content="", tool_calls=[
         {"name": "rule_candidates", "id": "candidate-edit", "args": {
-            "action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": draft}]}},
+            "action": "edit", "edits": [{"old_text": "", "new_text": draft}]}},
         {"name": "rule_candidates", "id": "candidate-finish", "args": {"action": "finish"}},
     ])
 

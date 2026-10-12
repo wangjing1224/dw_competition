@@ -216,7 +216,9 @@ class RuleExtractionProgress(StrictModel):
 
 
 class CandidateEdit(StrictModel):
-    old_text: str = Field(min_length=1, description="当前候选稿中唯一匹配的原文，按列表顺序替换。")
+    old_text: str = Field(
+        description="当前候选稿中唯一匹配的原文，按列表顺序替换。仅当前稿为空时填空字符串建立首稿；已有正文时须精确匹配，不能用空字符串覆盖或追加。"
+    )
     new_text: str = Field(description="替换文本；空字符串表示删除。")
 
 

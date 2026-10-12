@@ -21,9 +21,9 @@ from app.reports.markdown_report import ReportDocument, parse_report
 from app.retrieval.models import IndexChunk, IndexManifest
 from app.retrieval.service import RetrievalService
 from app.retrieval.store import LoadedIndex
-from app.rules.context import CANDIDATE_ITEM_TEMPLATE, CANDIDATE_TEMPLATE, candidate_status, rule_working_context, validate_candidates
+from app.rules.context import CANDIDATE_ITEM_TEMPLATE, candidate_status, rule_working_context, validate_candidates
 from app.tools.common_tools import CommonTool, SearchDocumentsInput
-from app.tools.report_tools import ReportEdit, ReportSavePolicy, report_tool
+from app.tools.report_tools import ReportEdit, ReportInput, ReportSavePolicy, report_tool
 from app.tools.rule_tools import RuleSession, active_rule_tools, build_rule_tools
 from tests.helpers.audit import SequenceModel, audit_context, candidate_response, filled_report, parsed_file, tool_response
 
@@ -56,7 +56,7 @@ async def test_candidates_atomic_edit_finish_and_phase(temp_settings):
     assert "submit_rule_delta" not in [t.name for t in active_rule_tools(tools, s.phase)]
     tool = next(t for t in tools if t.name == "rule_candidates")
     assert set(convert_to_openai_tool(tool)["function"]["parameters"]["properties"]) == {"action", "edits"}
-    await tool.ainvoke({"action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": CANDIDATES}]})
+    await tool.ainvoke({"action": "edit", "edits": [{"old_text": "", "new_text": CANDIDATES}]})
     assert s.phase == "extract" and validate_candidates(s.candidate_draft) == 1
     with pytest.raises(ValueError, match="匹配0处"):
         await tool.ainvoke({"action": "edit", "edits": [
@@ -77,6 +77,33 @@ async def test_candidates_atomic_edit_finish_and_phase(temp_settings):
 
 
 @pytest.mark.asyncio
+async def test_empty_candidate_edit_initializes_once_and_keeps_batch_atomic(temp_settings):
+    session = candidate_session(temp_settings)
+    tool = next(t for t in build_rule_tools(session) if t.name == "rule_candidates")
+    assert session.candidate_draft == ""
+    with pytest.raises(ValueError, match="候选稿为空"):
+        await tool.ainvoke({"action": "finish"})
+    with pytest.raises(ValueError, match="匹配0处"):
+        await tool.ainvoke({"action": "edit", "edits": [
+            {"old_text": "", "new_text": CANDIDATES},
+            {"old_text": "不存在的候选占位", "new_text": "x"},
+        ]})
+    assert session.candidate_draft == ""
+    session.persist.assert_not_awaited()
+    await tool.ainvoke({"action": "edit", "edits": [{"old_text": "", "new_text": CANDIDATES}]})
+    # 已有正文不能把空串当write/append；失败不覆盖当前稿。
+    with pytest.raises(ValueError, match="不能唯一定位"):
+        await tool.ainvoke({"action": "edit", "edits": [{"old_text": "", "new_text": "另一首稿"}]})
+    assert session.candidate_draft == CANDIDATES
+    await tool.ainvoke({"action": "edit", "edits": [{"old_text": "90日", "new_text": "80日"}]})
+    assert not session.candidate_error
+    assert "80日" in session.candidate_draft
+    await tool.ainvoke({"action": "finish"})
+    assert session.phase == "merge"
+    assert candidate_session(temp_settings).candidate_draft == ""
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("view", ["changed", "all", None])
 async def test_candidate_return_view_disabled_in_real_tool_schema(temp_settings, view):
     session = candidate_session(temp_settings)
@@ -84,9 +111,9 @@ async def test_candidate_return_view_disabled_in_real_tool_schema(temp_settings,
     with pytest.raises(ValidationError, match="return_view"):
         await tool.ainvoke({
             "action": "edit", "return_view": view,
-            "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": CANDIDATES}],
+            "edits": [{"old_text": "", "new_text": CANDIDATES}],
         })
-    assert session.candidate_draft == CANDIDATE_TEMPLATE
+    assert session.candidate_draft == ""
     session.persist.assert_not_awaited()
 
 
@@ -97,7 +124,7 @@ async def test_candidate_edit_returns_receipt_read_and_finish_keep_full_draft(te
     long_requirement = "业务正文不应重复回显。" * 600
     draft = CANDIDATES.replace("90日。", long_requirement)
     result = await tool.ainvoke({
-        "action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": draft}],
+        "action": "edit", "edits": [{"old_text": "", "new_text": draft}],
     })
     assert session.candidate_draft == draft
     assert result == "候选稿已保存，尚未交接。\n" + candidate_status(session)
@@ -125,16 +152,16 @@ async def test_candidate_edit_persist_error_keeps_original_error_and_draft(temp_
     session.persist.side_effect = OSError("候选稿写入失败")
     with pytest.raises(OSError, match="候选稿写入失败"):
         await tool.ainvoke({
-            "action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": CANDIDATES}],
+            "action": "edit", "edits": [{"old_text": "", "new_text": CANDIDATES}],
         })
-    assert session.candidate_draft == CANDIDATE_TEMPLATE and session.phase == "extract"
+    assert session.candidate_draft == "" and session.phase == "extract"
     assert session.candidate_error == "候选稿写入失败"
 
 
 @pytest.mark.asyncio
 async def test_candidate_invalid_saved_and_zero_candidates(temp_settings):
     s = candidate_session(temp_settings)
-    result = await s.candidates("edit", [CandidateEdit(old_text=CANDIDATE_TEMPLATE, new_text="还未整理")])
+    result = await s.candidates("edit", [CandidateEdit(old_text="", new_text="还未整理")])
     assert "结构待修正" in result and s.candidate_draft == "还未整理"
     assert result == "候选稿已保存，尚未交接。\n" + candidate_status(s)
     assert "还未整理" not in result
@@ -147,39 +174,36 @@ async def test_candidate_invalid_saved_and_zero_candidates(temp_settings):
 
 
 @pytest.mark.asyncio
-async def test_candidate_initial_input_and_tool_example_match_validator(temp_settings):
+async def test_candidate_blank_initial_input_and_system_template_match_validator(temp_settings):
     from app.rules.extractor import _batch_context, build_document_units
 
     session = candidate_session(temp_settings)
     session.batch_index = 1
     tools = build_rule_tools(session)
     candidate_tool = next(t for t in tools if t.name == "rule_candidates")
-    example = re.search(r"```markdown\n(.*?)\n```", candidate_tool.description, re.S)[1]
-    assert example == CANDIDATE_ITEM_TEMPLATE
     context = _batch_context(
         session=session, units=build_document_units(session.current), start=0, end=1,
         tools=tools, settings=temp_settings,
     )
-    assert CANDIDATE_TEMPLATE in context.messages[1].content
-    assert example in context.messages[1].content
-    # 从真实Human提取完整草稿，直接edit；无需先read或预先知道隐藏格式。
-    visible_draft = re.search(
-        r"^# 当前文件候选草稿\n.*?(?=\n\n## 已完成历史文件目录)",
-        context.messages[1].content, re.M | re.S,
-    )[0]
-    assert visible_draft == CANDIDATE_TEMPLATE
-    filled = visible_draft.replace("候选简介：待填写。", "候选简介：期限要求。")
+    example = re.search(r"```markdown\n(.*?)\n```", context.messages[0].content, re.S)[1]
+    assert CANDIDATE_ITEM_TEMPLATE in example
+    assert "```markdown" not in candidate_tool.description
+    assert session.candidate_draft == ""
+    assert "当前候选稿为空" in context.messages[1].content
+    assert "# 当前文件候选草稿" not in context.messages[1].content
+    # 格式只来自System，Human没有伪造的条目占位；直接edit空稿即可。
+    filled = example.replace("候选简介：待填写。", "候选简介：期限要求。")
     filled = filled.replace("要求：待填写。", "要求：90日。")
     filled = filled.replace("候选说明：待填写。", "候选说明：本文件期限条款。")
     assert validate_candidates(filled) == 1
     result = await candidate_tool.ainvoke({
-        "action": "edit", "edits": [{"old_text": visible_draft, "new_text": filled}],
+        "action": "edit", "edits": [{"old_text": "", "new_text": filled}],
     })
     assert "结构校验通过，候选1项" in result
     assert session.candidate_draft == filled and session.phase == "extract"
     session.persist.assert_awaited_once()
     with pytest.raises(ValueError):
-        validate_candidates(CANDIDATE_TEMPLATE)
+        validate_candidates("")
     # 候选只读取本批输入，检索补查交给合并阶段。
     assert "search_documents" not in [t.name for t in active_rule_tools(tools, "extract")]
 
@@ -191,6 +215,7 @@ def test_rule_phase_search_binding_matches_system_and_human(temp_settings, phase
 
     session = candidate_session(temp_settings)
     session.phase, session.batch_index = phase, 1
+    session.candidate_draft = CANDIDATES
     tools = [
         *build_rule_tools(session),
         *CommonTool(parsed_documents={session.current.document.file_id: session.current}, settings=temp_settings).tools(),
@@ -286,7 +311,7 @@ async def test_candidate_format_feedback_repairs_observed_variants_in_one_edit(
     tool = next(t for t in build_rule_tools(session) if t.name == "rule_candidates")
     invalid = CANDIDATES.replace("### 候选 1", bad_heading)
     feedback = await tool.ainvoke({
-        "action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": invalid}],
+        "action": "edit", "edits": [{"old_text": "", "new_text": invalid}],
     })
     assert "结构待修正" in feedback and session.candidate_draft == invalid
     assert "不另起名称行" in feedback or "不能另起名称行" in feedback
@@ -354,7 +379,7 @@ async def test_candidate_finish_accepts_business_phrase_but_requires_filling_tem
     tool = next(t for t in build_rule_tools(session) if t.name == "rule_candidates")
     draft = CANDIDATES.replace("本文件期限条款。", initial_reason)
     result = await tool.ainvoke({
-        "action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": draft}],
+        "action": "edit", "edits": [{"old_text": "", "new_text": draft}],
     })
     assert session.candidate_draft == draft
     if initial_reason == "待填写。":
@@ -440,7 +465,7 @@ def progress_block(key, status="未完成"):
 
 
 @pytest.mark.asyncio
-async def test_save_gate_partial_incomplete_read_failure_and_old_legal_block(tmp_path):
+async def test_save_progress_partial_incomplete_read_failure_and_old_legal_block(tmp_path):
     ctx, report = make_report(tmp_path, 2)
     saves = []
     policy = ReportSavePolicy(report, lambda: saves.append(list(policy.pending)))
@@ -469,6 +494,10 @@ async def test_save_gate_partial_incomplete_read_failure_and_old_legal_block(tmp
     policy.begin_batch(3)
     await report.apply("write", valid, None, "same-text")
     assert not policy.pending
+    # 有合法完整报告时，新的待保存提醒也不再作为独立的定稿拦截。
+    policy.pending = [{"batch_index": 1, "tool_round": 3, "tool_call_id": "q3", "rule_ids": ["rule-1"]}]
+    policy.check_exit()
+    assert policy.pending and report.finish()
 
 
 @pytest.mark.asyncio
@@ -489,6 +518,48 @@ async def test_pending_release_checkpoint_failure_and_invalid_source(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_report_schema_has_no_return_view_and_write_receipt_has_no_body(tmp_path):
+    ctx, report = make_report(tmp_path)
+    tool = report_tool(report)
+    parameters = convert_to_openai_tool(tool)["function"]["parameters"]
+    assert set(parameters["properties"]) == {"action", "content", "edits"}
+    assert set(parameters["required"]) == {"action", "content", "edits"}
+    text = filled_report(ctx.rule_set, version=3)
+    for field in ("return_view", "viewchanged", "view_changed"):
+        with pytest.raises(ValidationError, match=field):
+            ReportInput.model_validate({
+                "action": "write", "content": text, "edits": None,
+                "tool_call_id": "bad", field: "changed",
+            })
+    receipt = await tool.ainvoke({"type": "tool_call", "name": "report_document", "id": "save", "args": {
+        "action": "write", "content": text, "edits": None,
+    }})
+    assert "当前草稿状态" in receipt.content and "草稿已保存" in receipt.content
+    assert text not in receipt.content and "### rule-1" not in receipt.content
+    assert report.finish()
+
+
+@pytest.mark.parametrize("model_calls", [0, 12, 13, 14])
+def test_pending_never_hides_tools_including_last_two_tool_rounds(tmp_path, temp_settings, model_calls):
+    ctx, report = make_report(tmp_path)
+    policy = ReportSavePolicy(report, lambda: None, pending=[{
+        "batch_index": 1, "tool_round": 1, "tool_call_id": "query", "rule_ids": ["rule-1"],
+    }])
+    def search_documents(query: str):
+        return query
+    tools = [StructuredTool.from_function(func=search_documents, description="test"), report_tool(report)]
+    prepared = prepare_request(
+        {"messages": [SystemMessage(content="test"), HumanMessage(content=report.read())], "model_calls": model_calls},
+        tools=tools, max_steps=15, settings=temp_settings.bid_chat_model, role="bid_agent", policy=policy,
+    )
+    expected = ["search_documents", "report_document"] if model_calls < 14 else []
+    assert [item["function"]["name"] for item in prepared.bindings.get("tools", [])] == expected
+    policy.check_exit()  # 进度提醒不单独否定会话结束；空报告仍不能定稿。
+    with pytest.raises(ValueError, match="报告未完成"):
+        report.finish()
+
+
+@pytest.mark.asyncio
 async def test_main_policy_multiple_same_tool_binding_and_adapter_isolation(tmp_path, temp_settings):
     ctx, report = make_report(tmp_path)
     called, snapshots = [], []
@@ -504,10 +575,10 @@ async def test_main_policy_multiple_same_tool_binding_and_adapter_isolation(tmp_
     assert "rule_ids" in convert_to_openai_tool(tools[0])["function"]["parameters"]["required"]
     text = filled_report(ctx.rule_set, version=3)
     calls = [tool_response("run_python", {"code": value, "rule_ids": ["rule-1"]}, f"q{i}").tool_calls[0] for i, value in enumerate(["ok", "error"])]
-    # 同轮先保存+两次非报告调用仍建立新待保存；下轮未授权工具被拒绝但read正常返回。
+    # 同轮先保存+两次非报告调用仍建立新待保存；下轮仍可补查，read保留进度提醒。
     model = SequenceModel([
         AIMessage(content="", tool_calls=[tool_response("report_document", {"action": "write", "content": text, "edits": None}, "pre").tool_calls[0], *calls]),
-        AIMessage(content="", tool_calls=[tool_response("run_python", {"code": "hidden", "rule_ids": ["rule-1"]}, "denied").tool_calls[0], tool_response("report_document", {"action": "read", "content": None, "edits": None}, "read").tool_calls[0]]),
+        AIMessage(content="", tool_calls=[tool_response("run_python", {"code": "follow-up", "rule_ids": ["rule-1"]}, "follow-up").tool_calls[0], tool_response("report_document", {"action": "read", "content": None, "edits": None}, "read").tool_calls[0]]),
         tool_response("report_document", {"action": "write", "content": text, "edits": None}, "saved"),
         "处理结束",
     ])
@@ -515,12 +586,12 @@ async def test_main_policy_multiple_same_tool_binding_and_adapter_isolation(tmp_
                       role="bid_agent", limiter=asyncio.Semaphore(1), trace_context={"enabled": False},
                       build_messages=lambda _: [SystemMessage(content="test"), HumanMessage(content=report.read())],
                       report=report, policy=policy)
-    assert called == ["ok", "error"]
-    assert model.bindings[1:3] == [["report_document"], ["report_document"]]
+    assert called == ["ok", "error", "follow-up"]
+    assert model.bindings[1:3] == [["run_python", "report_document"], ["run_python", "report_document"]]
     assert "run_python" in model.bindings[3] and not policy.pending
     assert len(snapshots[1]) == 2
     returns = [m for m in model.calls[2][0] if m.type == "tool"]
-    assert next(m for m in returns if m.tool_call_id == "denied").status == "error"
+    assert next(m for m in returns if m.tool_call_id == "follow-up").status == "success"
     assert "待保存规则：rule-1" in next(m for m in returns if m.tool_call_id == "read").content
 
 
@@ -654,7 +725,7 @@ async def test_r_graph_phase_snapshot_and_next_file_reset(temp_settings, monkeyp
     replies = []
     for file in range(2):
         replies.extend([
-            AIMessage(content="", tool_calls=[tool_call("rule_candidates", "edit", {"action": "edit", "edits": [{"old_text": CANDIDATE_TEMPLATE, "new_text": CANDIDATES}]}), tool_call("rule_candidates", "finish", {"action": "finish"}), tool_call("submit_rule_delta", "hidden", submit_args([add_operation()], view="all"))]),
+            AIMessage(content="", tool_calls=[tool_call("rule_candidates", "edit", {"action": "edit", "edits": [{"old_text": "", "new_text": CANDIDATES}]}), tool_call("rule_candidates", "finish", {"action": "finish"}), tool_call("submit_rule_delta", "hidden", submit_args([add_operation()], view="all"))]),
             tool_response("submit_rule_delta", submit_args([add_operation()], view="all"), "merge"),
             "已合并",
         ])
@@ -666,7 +737,7 @@ async def test_r_graph_phase_snapshot_and_next_file_reset(temp_settings, monkeyp
     assert "rule_candidates" in model.bindings[3]
     assert "search_documents" not in model.bindings[0] and "search_documents" not in model.bindings[3]
     assert "search_documents" in model.bindings[1]
-    assert all(p.candidate_draft == CANDIDATE_TEMPLATE for p in progress if p.batch_index == 0)
+    assert all(p.candidate_draft == "" for p in progress if p.batch_index == 0)
     tools = [m for m in model.calls[1][0] if m.type == "tool"]
     assert next(m for m in tools if m.tool_call_id == "hidden").status == "error"
     # 第二个文件提取输入不泄露已存rule-1；finish返回才交接旧规则。
@@ -853,7 +924,7 @@ async def test_r_same_file_batches_and_rebuild_preserve_candidate(temp_settings,
 @pytest.mark.asyncio
 async def test_r_concurrent_current_drafts_are_isolated(temp_settings):
     sessions = [candidate_session(temp_settings) for _ in range(2)]
-    await asyncio.gather(*(s.candidates("edit", [CandidateEdit(old_text=CANDIDATE_TEMPLATE, new_text=CANDIDATES.replace("90日", f"{i}日"))]) for i, s in enumerate(sessions, 1)))
+    await asyncio.gather(*(s.candidates("edit", [CandidateEdit(old_text="", new_text=CANDIDATES.replace("90日", f"{i}日"))]) for i, s in enumerate(sessions, 1)))
     assert "1日" in sessions[0].candidate_draft and "2日" in sessions[1].candidate_draft
     await sessions[0].candidates("finish")
     assert sessions[1].phase == "extract"
@@ -894,7 +965,7 @@ async def test_h_structure_and_receipt_replay_do_not_clear_pending(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_h_last_tool_result_is_not_silently_discarded(tmp_path, temp_settings):
+async def test_h_pending_reminder_survives_exit_and_rebuild_without_locking_tools(tmp_path, temp_settings):
     _, report = make_report(tmp_path)
     checkpoints = []
     async def search_documents(query: str):
@@ -906,16 +977,19 @@ async def test_h_last_tool_result_is_not_silently_discarded(tmp_path, temp_setti
         tool_response("search_documents", {"query": "具体事实", "rule_ids": ["rule-1"]}, "last-query"),
         "结束",
     ])
-    with pytest.raises(ValueError, match="未保存进度"):
-        await run_session(model=model, tools=tools, settings=temp_settings.bid_chat_model, max_steps=3,
-                          role="bid_agent", limiter=asyncio.Semaphore(1), trace_context={"enabled": False},
-                          build_messages=lambda _: [SystemMessage(content="test"), HumanMessage(content=report.read())], report=report, policy=policy)
+    await run_session(model=model, tools=tools, settings=temp_settings.bid_chat_model, max_steps=3,
+                      role="bid_agent", limiter=asyncio.Semaphore(1), trace_context={"enabled": False},
+                      build_messages=lambda _: [SystemMessage(content="test"), HumanMessage(content=report.read())], report=report, policy=policy)
     assert len(model.calls) == 3 and checkpoints[-1][0]["tool_call_id"] == "last-query"
-    # 重建消息/策略不丢门禁；不靠新增Human重放业务结果。
+    assert len(model.bindings) == 2  # 最后一轮不调用bind_tools，不增加工具轮数。
+    assert "待保存规则：rule-1" in report.progress()
+    with pytest.raises(ValueError, match="报告未完成"):
+        report.finish()
+    # 重建/压缩继续保留提醒，但不再隐藏任何已授权工具。
     restored = ReportSavePolicy(report, lambda: None, pending=checkpoints[-1])
     rebuilt = prepare_request({"messages": [SystemMessage(content="test"), HumanMessage(content=report.read())], "model_calls": 1},
                               tools=tools, max_steps=15, settings=temp_settings.bid_chat_model, role="bid_agent", policy=restored)
-    assert [item["function"]["name"] for item in rebuilt.bindings["tools"]] == ["report_document"]
+    assert [item["function"]["name"] for item in rebuilt.bindings["tools"]] == ["search_documents", "report_document"]
 
 
 @pytest.mark.parametrize("before", [1.5, "1"])

@@ -10,7 +10,7 @@ from app.prompts.loader import load_tool_description
 
 
 class ReportSavePolicy:
-    """主审专用适配；共享会话只认识选择工具和批次钩子，不认识规则。"""
+    """主审草稿进度跟踪；待保存仅作提醒，不限制工具或阻止会话退出。"""
 
     def __init__(self, report, checkpoint, *, pending=None, preflight=None):
         self.report, self.checkpoint = report, checkpoint
@@ -29,7 +29,7 @@ class ReportSavePolicy:
         return "待保存规则：" + ("、".join(r.rule_id for r in self.report.rule_set.rules if r.rule_id in ids) or "无")
 
     def select_tools(self, tools):
-        return [t for t in tools if not self.pending or t.name == "report_document"]
+        return tools
 
     def begin_batch(self, step):
         self.step, self.executed = step, []
@@ -41,8 +41,9 @@ class ReportSavePolicy:
         self.checkpoint()
 
     def check_exit(self):
-        if self.pending:
-            raise ValueError("仍有非报告工具结果未保存进度：" + self.status())
+        # 保留通用会话钩子；能否定稿由报告的实际完整性与来源校验决定。
+        # pending是保存提醒，不再作为独立的退出门禁。
+        return None
 
     def saved(self):
         from app.reports.report_parser_v2 import draft_rule_states
