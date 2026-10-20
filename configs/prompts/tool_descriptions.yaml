@@ -53,11 +53,13 @@ rule_candidates: |-
 submit_rule_delta: |-
   用途：原子保存当前文件有依据的规则增量及项目简介，或只读查看当前规则库。
   契约：三个参数必须显式填写；只读时全部为 null，写入须至少更新规则或简介之一，并指定 changed/all。操作字段含义以参数 Schema 为准；ID 及来源合并由系统维护。
-  project_profile是用于相关性路由的完整项目简介，包含有依据的项目身份和采购范围，不是本批执行进度或抽取统计；没有简介更新时填null，更新时保留仍成立的项目信息。
+  project_profile是用于相关性路由的完整项目简介，包含有依据的项目身份和采购范围，不是本批执行进度或抽取统计；没有简介更新时填null，即不加引号的JSON空值，表示保留已有简介，不会清空。更新时传完整新简介文本，整体替换旧简介而非追加，保留仍成立的项目信息。字符串"null"不是空值，含大小写或首尾空白变体也会校验失败；空字符串同样不允许。
   add提交新主题；merge的requirement只写新增内容，由系统追加，仅补来源时可省略，merged_rule_ids用于吸收已有规则。add/merge不填来源列表；replace提交更正后完整字段和完整source_file_ids。每次写规则的reason均为更新后完整说明，直接覆盖而非追加，无额外说明可显式填空字符串，不可省略或为null。
   空值兼容：add的rule_id、merged_rule_ids、source_file_ids为null时等同省略；merge的merged_rule_ids为null时等同空列表、source_file_ids为null时等同省略；replace的merged_rule_ids为null时等同省略。其他必填值、真实ID和来源列表仍按原契约校验，不丢弃非空非法字段。
   只读示例：{"operations":null,"project_profile":null,"return_view":null}。
   只更新简介并查看全库：{"operations":null,"project_profile":"更新后的完整简介","return_view":"all"}。
+  只写规则、保留已有简介：{"operations":[{"action":"add","category":"format","priority":"important","verification":"bid_only","requirement":"投标文件须包含技术响应表。","reason":"当前文件明确要求提交技术响应表。"}],"project_profile":null,"return_view":"changed"}。
+  以上仅演示参数格式，不是本次采购事实。project_profile误传字符串"null"时，本次提交的规则与简介均不写入；错误返回具体修正方式，不把错误文本当作已保存简介。
   all 是真实写入后的返回范围，不是查看命令。
   返回：成功时仅返回渲染后的 Markdown 规则视图，不是 JSON。
   changed 返回整批最终新增或修改的全部存续规则及已更新简介，all 返回当前完整规则库。

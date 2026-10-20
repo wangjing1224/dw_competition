@@ -329,7 +329,14 @@ export default function CreateLibrary() {
                   okText: '确认重试',
                   onOk: submit,
                 })
-              : submit()
+              : modal.confirm({
+                  title: '确认创建规则库并开始整理？',
+                  content: `将创建规则库“${name.trim()}”，上传 ${files.length} 份文件并立即启动 AI 整理。取消不会上传文件或启动任务。`,
+                  okText: '确认并开始整理',
+                  cancelText: '取消',
+                  focusable: { autoFocusButton: 'cancel' },
+                  onOk: submit,
+                })
           }
         >
           {busy

@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import { App, Tag } from 'antd';
+import { App, ConfigProvider, Tag } from 'antd';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { layout } from '@/app';
@@ -20,7 +20,7 @@ import {
   type TraceNode,
 } from '@/services/ruleLibraries';
 import Workbench from '../Workbench';
-import { validateFiles } from './Create';
+import Create, { validateFiles } from './Create';
 import LibraryDetail from './Detail';
 import { safeMarkdown } from './Detail/SourcePreview';
 import Libraries from './List';
@@ -39,9 +39,72 @@ vi.mock('@umijs/max', () => ({
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  sessionStorage.clear();
 });
 
 describe('规则库工作台', () => {
+  it('创建先确认，取消不提交且保留表单，确认后才上传一次', async () => {
+    const fetcher = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        project_id: 'project-1',
+        status: 'processing_rules',
+      }),
+    });
+    vi.stubGlobal('fetch', fetcher);
+    render(
+      <ConfigProvider theme={{ token: { motion: false } }}>
+        <App>
+          <Create />
+        </App>
+      </ConfigProvider>,
+    );
+    const name = screen.getByLabelText(/规则库名称/);
+    fireEvent.change(name, { target: { value: '演示规则库' } });
+    fireEvent.change(
+      document.querySelector('input[type=file]') as HTMLInputElement,
+      {
+        target: {
+          files: [new File(['招标要求'], '招标.md', { type: 'text/markdown' })],
+        },
+      },
+    );
+    fireEvent.click(screen.getByRole('button', { name: '创建并开始整理' }));
+    let dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveAccessibleName('确认创建规则库并开始整理？');
+    expect(
+      within(dialog).getByText(/演示规则库.*上传 1 份文件/),
+    ).toBeInTheDocument();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(
+      sessionStorage.getItem('rule-library-pending-submission'),
+    ).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: /取\s*消/ }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(
+      sessionStorage.getItem('rule-library-pending-submission'),
+    ).toBeNull();
+    expect(name).toHaveValue('演示规则库');
+    expect(screen.getByText('已选择 1 份文件')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '创建并开始整理' }));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: '确认并开始整理' }),
+    );
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe('/api/projects');
+    expect(init.method).toBe('POST');
+    expect(init.body.get('display_name')).toBe('演示规则库');
+    expect(init.body.getAll('files')).toHaveLength(1);
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+    );
+  });
+
   it.each([
     true,
     false,

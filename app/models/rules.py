@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, StringConstraints, field_validator, model_validator
 
 from app.models.common import (
     RuleCategory,
@@ -147,7 +147,11 @@ class SubmitRuleDeltaInput(StrictModel):
         min_length=1, description="非空操作列表；没有规则操作时显式填 null。"
     )
     project_profile: NonBlank | None = Field(
-        description="完整新项目简介；不修改时显式填 null。"
+        description=(
+            '不修改简介时显式传 JSON null（不加引号），保留已有简介；'
+            '更新时传完整的新简介文本，将整体替换旧简介，不是追加。'
+            '字符串 "null" 不是空值，不允许作为简介；空字符串也不允许。'
+        )
     )
     return_view: Literal["changed", "all"] | None = Field(
         description=(
@@ -156,6 +160,17 @@ class SubmitRuleDeltaInput(StrictModel):
             '{"operations":null,"project_profile":null,"return_view":null}。'
         )
     )
+
+    @field_validator("project_profile")
+    @classmethod
+    def reject_null_profile_text(cls, value: str | None) -> str | None:
+        # 只拦截误写的空值文本，不把普通正文中的 null 或其他词语改写为空值。
+        if value is not None and value.strip().casefold() == "null":
+            raise ValueError(
+                'project_profile 不能是字符串 "null"；不修改简介请传 JSON null'
+                '（不加引号），更新请传完整简介文本。本次提交未写入，已有简介和规则保留。'
+            )
+        return value
 
     @model_validator(mode="after")
     def validate_mode(self):

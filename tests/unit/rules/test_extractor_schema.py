@@ -30,6 +30,33 @@ def test_read_view_requires_all_three_explicit_nulls():
             SubmitRuleDeltaInput.model_validate(payload)
 
 
+@pytest.mark.parametrize("profile", ["null", "NULL", "Null", " \nnull\t "])
+def test_profile_rejects_null_text_instead_of_silently_coercing(profile):
+    with pytest.raises(ValidationError) as error:
+        SubmitRuleDeltaInput(
+            operations=None, project_profile=profile, return_view="changed",
+        )
+    assert error.value.errors()[0]["loc"] == ("project_profile",)
+    assert "不修改简介请传 JSON null" in str(error.value)
+    assert "本次提交未写入" in str(error.value)
+
+
+@pytest.mark.parametrize("profile", ["", " \n\t ", {}, [], 0, False])
+def test_profile_still_rejects_blank_or_non_text_values(profile):
+    with pytest.raises(ValidationError):
+        SubmitRuleDeltaInput(
+            operations=None, project_profile=profile, return_view="changed",
+        )
+
+
+@pytest.mark.parametrize("profile", ["完整新项目简介。", '项目涉及接口字段 null 的处理。'])
+def test_profile_keeps_valid_text_verbatim(profile):
+    request = SubmitRuleDeltaInput(
+        operations=None, project_profile=profile, return_view="changed",
+    )
+    assert request.project_profile == profile
+
+
 @pytest.mark.parametrize(
     "payload",
     [

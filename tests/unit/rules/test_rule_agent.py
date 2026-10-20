@@ -392,6 +392,61 @@ async def test_tool_validation_error_is_closed_and_can_be_corrected(env):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("corrected", [True, False])
+async def test_null_profile_text_preserves_saved_data_and_returns_fixable_error(env, corrected):
+    """回放先存简介、后误传字符串null；拒绝整批且不在工具报错时直接终止。"""
+    original_profile = "项目为数字化加工服务，范围与版本以当前招标文件为准。"
+    new_operation = {**add_operation(), "requirement": "交付物须附目录。"}
+    replies = [
+        AIMessage(content="", tool_calls=[
+            tool_call("submit_rule_delta", "initial", submit_args(
+                [add_operation()], profile=original_profile, view="changed",
+            )),
+        ]),
+        AIMessage(content="", tool_calls=[
+            tool_call("submit_rule_delta", "bad-profile", submit_args(
+                [new_operation], profile="null", view="changed",
+            )),
+        ]),
+    ]
+    if corrected:
+        replies.append(AIMessage(content="", tool_calls=[
+            tool_call("submit_rule_delta", "fixed-profile", submit_args(
+                [new_operation], profile=None, view="changed",
+            )),
+        ]))
+    replies.append(AIMessage(content="当前范围处理完毕"))
+    settings = env.model_copy(update={"rule_agent_max_steps": len(replies)})
+    model = ScriptModel(replies)
+    if corrected:
+        result = await extract(settings, model, [parsed_file(1)])
+        assert result.project_profile == original_profile
+        assert len(result.rules) == 2
+    else:
+        # 用尽本来配置的轮次仍未修正时沿用原失败语义，保留有效数据。
+        with pytest.raises(RuntimeError, match="规则提交尚未成功"):
+            await extract(settings, model, [parsed_file(1)])
+    feedback = next(
+        m for m in model.calls[2][0]
+        if isinstance(m, ToolMessage) and m.tool_call_id == "bad-profile"
+    )
+    assert feedback.status == "error"
+    assert 'project_profile 不能是字符串 "null"' in feedback.content
+    assert "不修改简介请传 JSON null" in feedback.content
+    assert "本次提交未写入" in feedback.content
+    progress = RuleExtractionProgress.model_validate_json(
+        (settings.storage.data_root / "parsed/rules/project-1.progress.json").read_text()
+    )
+    assert progress.rule_set.project_profile == original_profile
+    assert len(progress.rule_set.rules) == (2 if corrected else 1)
+    assert len(progress.commits) == (2 if corrected else 1)
+    assert [r.rule_id for r in progress.rule_set.rules] == (
+        ["rule-1", "rule-2"] if corrected else ["rule-1"]
+    )
+    assert bool(progress.error) is not corrected
+
+
+@pytest.mark.asyncio
 async def test_failed_last_tool_call_is_not_success_and_progress_retained(env):
     model = ScriptModel(
         [

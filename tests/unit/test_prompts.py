@@ -661,6 +661,27 @@ def test_task38_merge_preserves_candidate_terms_and_project_identity():
     assert "优先直接沿用候选要求正文" not in description
 
 
+def test_rule_profile_contract_explains_null_and_all_examples_validate():
+    from app.models.rules import SubmitRuleDeltaInput
+
+    description = load_tool_description("submit_rule_delta")
+    field = SubmitRuleDeltaInput.model_json_schema()["properties"]["project_profile"]
+    assert "不加引号" in field["description"]
+    assert "整体替换旧简介" in field["description"]
+    assert '字符串 "null" 不是空值' in field["description"]
+    assert "表示保留已有简介，不会清空" in description
+    assert "本次提交的规则与简介均不写入" in description
+    prefixes = ("只读示例：", "只更新简介并查看全库：", "只写规则、保留已有简介：")
+    examples = [
+        SubmitRuleDeltaInput.model_validate(json.loads(line.split("：", 1)[1].removesuffix("。")))
+        for line in description.splitlines() if line.startswith(prefixes)
+    ]
+    assert len(examples) == 3
+    assert examples[0].return_view is None and examples[0].project_profile is None
+    assert examples[1].operations is None and examples[1].project_profile
+    assert examples[2].operations and examples[2].project_profile is None
+
+
 def test_task38_acceptance_materials_and_performance_are_distinct_across_prompts():
     rule = render_prompt(
         "rule_extraction", stage_instructions=load_prompt("rule_merge_stage")
